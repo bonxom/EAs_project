@@ -1,0 +1,18 @@
+seed: 42
+output_dir: outputs
+outer:
+  iterations: 2
+  population_size: 2
+inner:
+  iterations: 2
+  population_size: 3
+tasks:
+  sizes: [10, 20]
+instances_per_task: 3
+llm:
+  provider: fake
+execution:
+  timeout_seconds: 5.0
+  source_bytes: 65536
+  result_bytes: 1048576
+  output_bytes: 65536
