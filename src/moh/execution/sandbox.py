@@ -41,7 +41,11 @@ def _cleanup(process):
 
 
 def run_worker(request, limits):
-    if len(request["source"].encode("utf-8")) > limits.source_bytes:
+    try:
+        source_bytes = request["source"].encode("utf-8")
+    except UnicodeEncodeError:
+        return WorkerResult("failed", None, "syntax")
+    if len(source_bytes) > limits.source_bytes:
         return WorkerResult("failed", None, "source_limit")
     payload = json.dumps(request, allow_nan=False).encode()
     _subreaper()

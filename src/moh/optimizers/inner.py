@@ -34,6 +34,10 @@ def generate_child(parents, spec, llm, candidate_id):
     source = strip_code_fence(
         llm.generate(heuristic_prompt(spec.generation_operator, parents, idea))
     )
+    try:
+        source.encode("utf-8")
+    except UnicodeEncodeError:
+        raise GenerationError("invalid_heuristic_encoding") from None
     return Heuristic(candidate_id, source, idea)
 
 

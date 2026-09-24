@@ -123,3 +123,21 @@ def test_descendant_reaped(tmp_path):
                 os.kill(int(marker.read_text()), 9)
             except ProcessLookupError:
                 pass
+
+
+def test_malformed_failure_envelope_does_not_escape_runner():
+    source = (
+        "import os,sys\n"
+        'os.write(int(sys.argv[1]), b\'{"id":"h1","status":"failed","tour":null,"error":{}}\')\n'
+        "os._exit(0)"
+    )
+    result = evaluate(source)
+    assert result.status == "failed"
+    assert result.error == "protocol"
+
+
+def test_invalid_unicode_source_is_candidate_failure():
+    result = evaluate("\ud800")
+    assert result.status == "failed"
+    assert result.utility is None
+    assert result.error == "syntax"

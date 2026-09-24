@@ -53,6 +53,8 @@ class EvaluationContext:
     repetition: int = 0
 
     def __post_init__(self):
+        object.__setattr__(self, "instance_seeds", tuple(self.instance_seeds))
+        object.__setattr__(self, "worker_seeds", tuple(self.worker_seeds))
         _nonnegative(self.repetition)
         if not self.instance_seeds or len(self.instance_seeds) != len(
             self.worker_seeds
@@ -75,6 +77,7 @@ class EvaluationResult:
     instances_attempted: int
 
     def __post_init__(self):
+        object.__setattr__(self, "lengths", tuple(self.lengths))
         _outcome(self.status, self.utility, self.error)
         _nonnegative(self.instances_attempted)
         if (
@@ -138,6 +141,9 @@ class InnerResult:
     population: tuple[ScoredHeuristic, ...]
     counts: WorkCounts
 
+    def __post_init__(self):
+        object.__setattr__(self, "population", tuple(self.population))
+
 
 @dataclass(frozen=True)
 class TaskResult:
@@ -163,6 +169,7 @@ class OptimizerEvaluation:
     error: str | None
 
     def __post_init__(self):
+        object.__setattr__(self, "task_results", tuple(self.task_results))
         _outcome(self.status, self.utility, self.error)
         if self.status == "success" and (
             not self.task_results or any(x.best is None for x in self.task_results)
@@ -187,6 +194,7 @@ class RunResult:
     population: tuple[ScoredOptimizer, ...]
 
     def __post_init__(self):
+        object.__setattr__(self, "population", tuple(self.population))
         if self.status == "success":
             if (
                 self.winner is None

@@ -124,3 +124,14 @@ def test_failed_code_preserves_parents(base_spec):
     assert any(
         k == "heuristic_evaluated" and x["status"] == "failed" for k, x in events
     )
+
+
+def test_invalid_unicode_generation_consumes_iteration(base_spec):
+    result, events = run(
+        OptimizerSpec(**base_spec),
+        iterations=1,
+        fake=FakeLLM(42, {"mutate": ("\ud800",)}),
+    )
+    assert result.counts.heuristic_evaluations == 3
+    assert result.counts.llm_calls == 1
+    assert any(k == "generation_failed" for k, _ in events)

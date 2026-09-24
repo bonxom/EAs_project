@@ -79,6 +79,7 @@ def decode_result(data, identity, size):
     if (
         result["status"] != "failed"
         or result["tour"] is not None
+        or not isinstance(result["error"], str)
         or result["error"]
         not in {"syntax", "missing_function", "invalid_return", "exception"}
     ):

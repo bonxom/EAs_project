@@ -48,3 +48,13 @@ def test_records_and_prompts():
         "source_code",
     ]:
         assert value in prompt
+
+
+def test_invalid_unicode_source_is_generation_failure(base_spec):
+    from moh.core.specs import OptimizerSpec
+    from moh.optimizers.inner import generate_child
+
+    with pytest.raises(GenerationError):
+        generate_child(
+            (), OptimizerSpec(**base_spec), FakeLLM(42, {"mutate": ("\ud800",)}), "h1"
+        )

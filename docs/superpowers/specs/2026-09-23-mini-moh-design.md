@@ -1,6 +1,6 @@
 # Mini-MoH v0 specification
 
-Status: Draft for review before detailed implementation planning.
+Status: Implemented v0 on 2026-09-24; see [implementation and validation record](../2026-09-24-mini-moh-implementation.md).
 Source: `docs/moh_codex_project_plan.md`; project rules: `AGENTS.md`.
 
 ## Purpose and success

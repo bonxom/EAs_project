@@ -30,3 +30,14 @@ def test_invalid_protocol(data):
 def test_invalid_limits(kwargs):
     with pytest.raises(ValueError):
         ExecutionLimits(**kwargs)
+
+
+@pytest.mark.parametrize("error", [{}, [], True, 123])
+def test_wrong_type_failure_code_is_protocol_error(error):
+    import json
+
+    payload = json.dumps(
+        {"id": "x", "status": "failed", "tour": None, "error": error}
+    ).encode()
+    with pytest.raises(ValueError):
+        decode_result(payload, "x", 2)
