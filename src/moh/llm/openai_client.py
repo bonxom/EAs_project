@@ -39,21 +39,67 @@ class OpenAILLMClient:
             sleep,
         )
         self.owns_transport = transport is None
-        self.transport = (
-            transport
-            if transport is not None
-            else openai.OpenAI(
-                api_key=os.environ["OPENAI_API_KEY"],
-                timeout=timeout_seconds,
-                max_retries=0,
-            )
+        if transport is not None:
+            self.transport = transport
+        else:
+            base_url = os.environ.get("OPENAI_BASE_URL", "").strip() or None
+            kwargs = {
+                "api_key": os.environ["OPENAI_API_KEY"],
+                "timeout": timeout_seconds,
+                "max_retries": 0,
+            }
+            if base_url:
+                kwargs["base_url"] = base_url
+            self.transport = openai.OpenAI(**kwargs)
+
+    def _fetch_chat_completion(self, prompt):
+        response = self.transport.chat.completions.create(
+            model=self.model,
+            messages=[{"role": "user", "content": prompt}],
+            timeout=self.timeout,
         )
+        text = (
+            response.choices[0].message.content
+            if getattr(response, "choices", None)
+            else None
+        )
+        usage = getattr(response, "usage", None)
+        input_tokens = getattr(usage, "prompt_tokens", None)
+        output_tokens = getattr(usage, "completion_tokens", None)
+        model = getattr(response, "model", self.model)
+        return text, input_tokens, output_tokens, model, True
+
+    def _fetch_completion(self, prompt):
+        if hasattr(self.transport, "responses"):
+            try:
+                response = self.transport.responses.create(
+                    model=self.model, input=prompt, timeout=self.timeout, store=False
+                )
+                try:
+                    text = getattr(response, "output_text", None)
+                except TypeError:
+                    text = None
+                    if hasattr(self.transport, "chat"):
+                        return self._fetch_chat_completion(prompt)
+                usage = getattr(response, "usage", None)
+                input_tokens = getattr(usage, "input_tokens", None)
+                output_tokens = getattr(usage, "output_tokens", None)
+                model = getattr(response, "model", self.model)
+                status = getattr(response, "status", None)
+                return text, input_tokens, output_tokens, model, status == "completed"
+            except (openai.NotFoundError, AttributeError):
+                pass
+            except openai.APIStatusError as exc:
+                if exc.status_code != 404:
+                    raise
+
+        return self._fetch_chat_completion(prompt)
 
     def generate(self, prompt):
         for attempt in range(1, 4):
             try:
-                response = self.transport.responses.create(
-                    model=self.model, input=prompt, timeout=self.timeout, store=False
+                text, input_tokens, output_tokens, model, is_completed = (
+                    self._fetch_completion(prompt)
                 )
             except openai.APIError as exc:
                 transient = isinstance(
@@ -71,16 +117,7 @@ class OpenAILLMClient:
                     raise GenerationError(error) from None
                 self.sleep(0.25 * attempt)
                 continue
-            text = getattr(response, "output_text", None)
-            usage = getattr(response, "usage", None)
-            input_tokens = getattr(usage, "input_tokens", None)
-            output_tokens = getattr(usage, "output_tokens", None)
-            model = getattr(response, "model", self.model)
-            valid = (
-                isinstance(text, str)
-                and bool(text.strip())
-                and getattr(response, "status", None) == "completed"
-            )
+            valid = isinstance(text, str) and bool(text.strip()) and is_completed
             valid = (
                 valid
                 and isinstance(model, str)

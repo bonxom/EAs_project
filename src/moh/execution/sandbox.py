@@ -1,43 +1,50 @@
-"""Linux crash/timeout containment, not a hostile-code security sandbox."""
+"""Crash/timeout containment for worker processes across platforms."""
 
 import ctypes
 import json
 import os
-import selectors
 import signal
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 from dataclasses import replace
 from pathlib import Path
 
 from moh.execution.protocol import WorkerResult, decode_result
 
+if sys.platform == "win32":
+    import msvcrt
+
 
 def _subreaper():
     if not sys.platform.startswith("linux"):
-        raise RuntimeError("worker containment currently requires Linux")
+        return
     # Adopt orphaned grandchildren so killing a group does not leave zombies.
-    libc = ctypes.CDLL(None, use_errno=True)
-    if libc.prctl(36, 1, 0, 0, 0) != 0:  # PR_SET_CHILD_SUBREAPER
-        raise OSError(ctypes.get_errno(), "cannot enable descendant reaping")
+    try:
+        libc = ctypes.CDLL(None, use_errno=True)
+        libc.prctl(36, 1, 0, 0, 0)  # PR_SET_CHILD_SUBREAPER
+    except (AttributeError, OSError):
+        pass
 
 
 def _cleanup(process):
-    try:
-        os.killpg(process.pid, signal.SIGKILL)
-    except ProcessLookupError:
-        pass
-    process.wait()
-    # Only reap adopted children in this worker's process group.
-    while True:
+    if process is None:
+        return
+    if hasattr(os, "killpg") and os.name != "nt":
         try:
-            os.waitpid(-process.pid, 0)
-        except ChildProcessError:
-            break
-        except InterruptedError:
-            continue
+            os.killpg(process.pid, signal.SIGKILL)
+        except (ProcessLookupError, OSError):
+            pass
+    try:
+        process.kill()
+    except (ProcessLookupError, OSError):
+        pass
+    try:
+        process.wait(timeout=1)
+    except (subprocess.TimeoutExpired, OSError):
+        pass
 
 
 def run_worker(request, limits):
@@ -61,77 +68,128 @@ def run_worker(request, limits):
     output = bytearray()
     result = bytearray()
     try:
-        with (
-            tempfile.TemporaryDirectory(prefix="moh-worker-") as cwd,
-            selectors.DefaultSelector() as selector,
-        ):
+        with tempfile.TemporaryDirectory(
+            prefix="moh-worker-", ignore_cleanup_errors=True
+        ) as cwd:
             deadline = time.monotonic() + limits.timeout_seconds
+            if sys.platform == "win32":
+                w_handle = msvcrt.get_osfhandle(write_fd)
+                os.set_handle_inheritable(w_handle, True)
+                child_arg = str(w_handle)
+                popen_kwargs = {"close_fds": False}
+            else:
+                child_arg = str(write_fd)
+                popen_kwargs = {"pass_fds": (write_fd,), "start_new_session": True}
+
             process = subprocess.Popen(
-                [sys.executable, "-m", "moh.execution.worker", str(write_fd)],
+                [sys.executable, "-m", "moh.execution.worker", child_arg],
                 stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 cwd=cwd,
                 env=env,
-                pass_fds=(write_fd,),
-                start_new_session=True,
+                **popen_kwargs,
             )
             os.close(write_fd)
             write_fd = None
-            streams = [
-                (process.stdin, selectors.EVENT_WRITE, "input"),
-                (process.stdout, selectors.EVENT_READ, "output"),
-                (process.stderr, selectors.EVENT_READ, "output"),
-                (read_fd, selectors.EVENT_READ, "result"),
-            ]
-            for stream, event, kind in streams:
-                os.set_blocking(
-                    stream if isinstance(stream, int) else stream.fileno(), False
-                )
-                selector.register(stream, event, kind)
-            offset = 0
-            error = None
-            while selector.get_map():
+
+            try:
+                process.stdin.write(payload)
+                process.stdin.flush()
+            except BrokenPipeError:
+                pass
+            finally:
+                process.stdin.close()
+
+            output_lock = threading.Lock()
+            output_limit_exceeded = threading.Event()
+
+            def read_stream(stream):
+                while True:
+                    try:
+                        chunk = stream.read(8192)
+                    except (OSError, ValueError):
+                        break
+                    if not chunk:
+                        break
+                    with output_lock:
+                        output.extend(chunk)
+                        if len(output) > limits.output_bytes:
+                            output_limit_exceeded.set()
+                            break
+
+            stdout_thread = threading.Thread(target=read_stream, args=(process.stdout,))
+            stderr_thread = threading.Thread(target=read_stream, args=(process.stderr,))
+            stdout_thread.start()
+            stderr_thread.start()
+
+            result_limit_exceeded = False
+
+            def read_result_fd():
+                nonlocal result_limit_exceeded
+                while True:
+                    try:
+                        chunk = os.read(
+                            read_fd, min(8192, max(1, limits.result_bytes + 1 - len(result)))
+                        )
+                        if not chunk:
+                            break
+                        result.extend(chunk)
+                        if len(result) > limits.result_bytes:
+                            result_limit_exceeded = True
+                            break
+                    except (OSError, ValueError):
+                        break
+
+            result_thread = threading.Thread(target=read_result_fd)
+            result_thread.start()
+
+            timed_out = False
+            while True:
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
-                    error = "timeout"
+                    timed_out = True
                     break
-                for key, _ in selector.select(remaining):
-                    if key.data == "input":
-                        try:
-                            offset += os.write(key.fd, payload[offset : offset + 8192])
-                        except BrokenPipeError:
-                            offset = len(payload)
-                        if offset == len(payload):
-                            selector.unregister(key.fileobj)
-                            process.stdin.close()
-                        continue
-                    target = result if key.data == "result" else output
-                    limit = (
-                        limits.result_bytes
-                        if key.data == "result"
-                        else limits.output_bytes
-                    )
-                    chunk = os.read(key.fd, min(8192, max(1, limit + 1 - len(target))))
-                    if not chunk:
-                        selector.unregister(key.fileobj)
-                        continue
-                    target.extend(chunk)
-                    if len(target) > limit:
-                        error = (
-                            "result_limit" if key.data == "result" else "output_limit"
-                        )
-                        break
-                if error:
+                if output_limit_exceeded.is_set() or result_limit_exceeded:
                     break
-            if not error:
                 try:
-                    process.wait(timeout=max(0, deadline - time.monotonic()))
+                    process.wait(timeout=min(0.05, max(0.001, remaining)))
+                    break
+                except subprocess.TimeoutExpired:
+                    continue
+
+            error = None
+            if output_limit_exceeded.is_set():
+                error = "output_limit"
+            elif result_limit_exceeded:
+                error = "result_limit"
+            elif timed_out or time.monotonic() >= deadline:
+                error = "timeout"
+            elif process.returncode is None:
+                try:
+                    process.wait(timeout=max(0.0, deadline - time.monotonic()))
                 except subprocess.TimeoutExpired:
                     error = "timeout"
                 else:
-                    if process.returncode:
+                    if process.returncode != 0 and not result:
                         error = "process_exit"
+            elif process.returncode != 0 and not result:
+                error = "process_exit"
+
+            if error:
+                _cleanup(process)
+
+            result_thread.join(timeout=1.0)
+            stdout_thread.join(timeout=1.0)
+            stderr_thread.join(timeout=1.0)
+
+            for stream in (process.stdout, process.stderr):
+                if stream:
+                    try:
+                        stream.close()
+                    except OSError:
+                        pass
+
             captured = bytes(output[: limits.output_bytes]).decode(
                 "utf-8", errors="replace"
             )
@@ -148,7 +206,18 @@ def run_worker(request, limits):
         if process is not None:
             _cleanup(process)
             for stream in (process.stdin, process.stdout, process.stderr):
-                stream.close()
-        os.close(read_fd)
+                if stream:
+                    try:
+                        stream.close()
+                    except OSError:
+                        pass
+        if read_fd is not None:
+            try:
+                os.close(read_fd)
+            except OSError:
+                pass
         if write_fd is not None:
-            os.close(write_fd)
+            try:
+                os.close(write_fd)
+            except OSError:
+                pass

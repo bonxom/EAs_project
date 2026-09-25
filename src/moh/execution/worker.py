@@ -13,7 +13,13 @@ class InvalidCandidate(Exception):
 
 
 def main():
-    result_fd = int(sys.argv[1])
+    if sys.platform == "win32":
+        import msvcrt
+
+        result_fd = msvcrt.open_osfhandle(int(sys.argv[1]), os.O_WRONLY)
+        sys.argv[1] = str(result_fd)
+    else:
+        result_fd = int(sys.argv[1])
     request = json.loads(sys.stdin.buffer.read())
     result = {
         "id": request["id"],
