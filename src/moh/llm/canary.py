@@ -343,7 +343,7 @@ def main():
             return
         transport = None
     else:
-        os.environ.setdefault("OPENAI_API_KEY", "fake-offline-key")
+        os.environ.setdefault("OPENAI_COMPAT_API_KEY", "fake-offline-key")
 
         class FakeChoice:
             def __init__(self, content="OK"):

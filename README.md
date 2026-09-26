@@ -308,7 +308,7 @@ key is recorded.
 ## Real provider
 
 Replace `YOUR_MODEL_NAME` in `configs/real_llm.yaml` with a model available to your
-account, set `OPENAI_API_KEY` in your environment, then run:
+account, set `OPENAI_COMPAT_API_KEY` in your environment, then run:
 
 ```bash
 uv run python -m moh.main --config configs/real_llm.yaml

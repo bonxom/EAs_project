@@ -30,8 +30,6 @@ def load_dotenv(path=".env"):
             value = value.strip().strip("'\"")
             if key and key not in os.environ:
                 os.environ[key] = value
-    if "OPENAI_COMPAT_API_KEY" in os.environ and "OPENAI_API_KEY" not in os.environ:
-        os.environ["OPENAI_API_KEY"] = os.environ["OPENAI_COMPAT_API_KEY"]
     if "OPENAI_COMPAT_BASE_URL" in os.environ and "OPENAI_BASE_URL" not in os.environ:
         os.environ["OPENAI_BASE_URL"] = os.environ["OPENAI_COMPAT_BASE_URL"]
 

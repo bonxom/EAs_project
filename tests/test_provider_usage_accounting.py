@@ -70,9 +70,9 @@ class FakeTransport:
 
 @pytest.fixture(autouse=True)
 def setup_env():
-    os.environ["OPENAI_API_KEY"] = "sk-test-key-12345"
+    os.environ["OPENAI_COMPAT_API_KEY"] = "sk-test-key-12345"
     yield
-    os.environ.pop("OPENAI_API_KEY", None)
+    os.environ.pop("OPENAI_COMPAT_API_KEY", None)
 
 
 def noop_observer(metadata: CallMetadata):

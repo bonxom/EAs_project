@@ -56,7 +56,7 @@ def non_transient():
 
 @pytest.fixture(autouse=True)
 def credentials(monkeypatch):
-    monkeypatch.setenv("OPENAI_API_KEY", "offline-test-key")
+    monkeypatch.setenv("OPENAI_COMPAT_API_KEY", "offline-test-key")
 
 
 def test_valid_provider_attempt_limits():

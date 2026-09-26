@@ -17,16 +17,16 @@ def resolve_base_url() -> str | None:
     )
 
 
+OPENAI_COMPAT_API_KEY_ENV = "OPENAI_COMPAT_API_KEY"
+
+
 def resolve_api_key() -> str:
-    return (
-        os.environ.get("OPENAI_API_KEY", "").strip()
-        or os.environ.get("OPENAI_COMPAT_API_KEY", "").strip()
-    )
+    return os.environ.get(OPENAI_COMPAT_API_KEY_ENV, "").strip()
 
 
 def validate_environment():
     if not resolve_api_key():
-        raise ValueError("OPENAI_API_KEY must be configured")
+        raise ValueError("OPENAI_COMPAT_API_KEY must be configured")
 
 
 def redact_credentials(text):

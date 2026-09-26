@@ -93,7 +93,7 @@ class FakeTransport:
 @pytest.fixture(autouse=True)
 def setup_env_and_killswitch(monkeypatch):
     """Network kill switch fixture: traps any attempt to perform real socket I/O."""
-    monkeypatch.setenv("OPENAI_API_KEY", "sk-test-key-12345")
+    monkeypatch.setenv("OPENAI_COMPAT_API_KEY", "sk-test-key-12345")
 
     def forbidden_socket(*args, **kwargs):
         raise AssertionError("Accidental real network I/O in offline test!")
@@ -279,7 +279,7 @@ def test_offline_config_with_allow_flag_remains_offline():
 
 
 def test_real_mode_allow_flag_missing_credential_blocked(monkeypatch):
-    monkeypatch.setenv("OPENAI_API_KEY", "   ")  # Blank credential!
+    monkeypatch.setenv("OPENAI_COMPAT_API_KEY", "   ")  # Blank credential!
 
     cfg = make_valid_config(mode="real", max_output_tokens=8)
     accountant = ProviderUsageAccountant()
@@ -305,7 +305,7 @@ def test_real_mode_allow_flag_missing_credential_blocked(monkeypatch):
 
 
 def test_real_mode_allow_flag_dummy_credential_fake_transport_succeeds(monkeypatch):
-    monkeypatch.setenv("OPENAI_API_KEY", "sk-fake-armed-key")
+    monkeypatch.setenv("OPENAI_COMPAT_API_KEY", "sk-fake-armed-key")
 
     cfg = make_valid_config(mode="real", max_output_tokens=8)
     accountant = ProviderUsageAccountant()
@@ -377,7 +377,7 @@ def test_retry_blocked_before_sdk():
 
 
 def test_malformed_usage_fails_real_canary(monkeypatch):
-    monkeypatch.setenv("OPENAI_API_KEY", "sk-fake-armed-key")
+    monkeypatch.setenv("OPENAI_COMPAT_API_KEY", "sk-fake-armed-key")
 
     cfg = make_valid_config(mode="real", max_output_tokens=8)
     accountant = ProviderUsageAccountant()
@@ -412,7 +412,7 @@ def test_malformed_usage_fails_real_canary(monkeypatch):
 
 
 def test_missing_usage_fails_real_canary(monkeypatch):
-    monkeypatch.setenv("OPENAI_API_KEY", "sk-fake-armed-key")
+    monkeypatch.setenv("OPENAI_COMPAT_API_KEY", "sk-fake-armed-key")
 
     cfg = make_valid_config(mode="real", max_output_tokens=8)
     accountant = ProviderUsageAccountant()
@@ -451,7 +451,7 @@ def test_missing_usage_fails_real_canary(monkeypatch):
 # ---------------------------------------------------------
 def test_credential_sentinel_absent_from_result_repr(monkeypatch):
     secret = "TEST_SECRET_M2E2A_DO_NOT_LEAK"
-    monkeypatch.setenv("OPENAI_API_KEY", secret)
+    monkeypatch.setenv("OPENAI_COMPAT_API_KEY", secret)
 
     cfg = make_valid_config(mode="real", max_output_tokens=8)
     accountant = ProviderUsageAccountant()
@@ -607,7 +607,7 @@ def test_real_mode_construction_with_fake_openai_client(monkeypatch):
             return FakeSDKResponse(kwargs.get("model", "unknown"))
 
     monkeypatch.setattr("openai.OpenAI", FakeSDKTransport)
-    monkeypatch.setenv("OPENAI_API_KEY", "fake-local-proxy-key")
+    monkeypatch.setenv("OPENAI_COMPAT_API_KEY", "fake-local-proxy-key")
     monkeypatch.setenv("OPENAI_COMPAT_BASE_URL", "http://localhost:20128/v1")
     monkeypatch.setenv("OPENAI_COMPAT_MODEL", "ag/gemini-3.6-flash-low")
 
@@ -726,7 +726,7 @@ def test_double_opt_in_regression_cases(monkeypatch):
     assert len(called) == 0
 
     # Case B: Real mode with allow flag but missing credential
-    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.delenv("OPENAI_COMPAT_API_KEY", raising=False)
     monkeypatch.delenv("OPENAI_COMPAT_API_KEY", raising=False)
     res_b = run_llm_canary(
         config=cfg,
@@ -739,3 +739,110 @@ def test_double_opt_in_regression_cases(monkeypatch):
     assert res_b.status == "failed"
     assert res_b.error == "missing_provider_credential"
     assert len(called) == 0
+
+
+
+def test_real_canary_legacy_key_only_fails_closed(monkeypatch):
+    from moh.llm.budget import (
+        ProviderAttemptBudget,
+        ProviderAttemptLimits,
+        ProviderUsageAccountant,
+    )
+    from moh.llm.canary import CanaryLogicalGuard, _load_yaml_config, run_llm_canary
+
+    called = []
+
+    def fake_openai(*args, **kwargs):
+        called.append(kwargs)
+        raise RuntimeError("Fake SDK instantiated")
+
+    monkeypatch.setattr("openai.OpenAI", fake_openai)
+    monkeypatch.delenv("OPENAI_COMPAT_API_KEY", raising=False)
+    monkeypatch.setenv("OPENAI_API_KEY", "legacy-only-secret")
+
+    cfg = _load_yaml_config("configs/api_canary_real.yaml")
+    res = run_llm_canary(
+        config=cfg,
+        llm_client=None,
+        logical_guard=CanaryLogicalGuard(max_calls=1),
+        attempt_budget=ProviderAttemptBudget(ProviderAttemptLimits(max_attempts=1)),
+        usage_accountant=ProviderUsageAccountant(),
+        allow_real_api=True,
+    )
+
+    assert res.status == "failed"
+    assert res.error == "missing_provider_credential"
+    assert res.logical_generate_requests == 0
+    assert res.provider_attempts == 0
+    assert len(called) == 0
+
+
+def test_offline_mode_does_not_set_legacy_key(monkeypatch):
+    import os
+
+    from moh.llm.canary import main
+
+    monkeypatch.delenv("OPENAI_COMPAT_API_KEY", raising=False)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.setattr("sys.argv", ["canary", "--config", "configs/api_canary_offline.yaml"])
+
+    main()
+
+    assert "OPENAI_COMPAT_API_KEY" in os.environ
+    assert "OPENAI_API_KEY" not in os.environ
+
+
+def test_secret_redaction_with_compat_key(monkeypatch):
+    from unittest.mock import MagicMock
+
+    from moh.llm.budget import (
+        ProviderAttemptBudget,
+        ProviderAttemptLimits,
+        ProviderUsageAccountant,
+    )
+    from moh.llm.canary import CanaryLogicalGuard, _load_yaml_config, run_llm_canary
+    from moh.llm.openai_client import OpenAILLMClient, redact_credentials
+
+    compat_secret = "TEST_COMPAT_SECRET_MUST_NOT_LEAK"
+    legacy_secret = "LEGACY_SECRET_MUST_NOT_APPEAR"
+    monkeypatch.setenv("OPENAI_COMPAT_API_KEY", compat_secret)
+    monkeypatch.setenv("OPENAI_API_KEY", legacy_secret)
+
+    assert redact_credentials(f"Error with {compat_secret}") == "Error with [REDACTED]"
+
+    cfg = _load_yaml_config("configs/api_canary_real.yaml")
+
+    class FakeOfflineTransport:
+        def __init__(self):
+            self.chat = MagicMock()
+            resp = MagicMock()
+            resp.choices = [MagicMock(message=MagicMock(content=f"OK {compat_secret}"))]
+            resp.usage = MagicMock(prompt_tokens=5, completion_tokens=1, input_tokens=5, output_tokens=1, total_tokens=6, completion_tokens_details=MagicMock(reasoning_tokens=0))
+            resp.model = cfg.model
+            self.chat.completions.create.return_value = resp
+
+    client = OpenAILLMClient(
+        model=cfg.model,
+        timeout_seconds=5.0,
+        observer=lambda _: None,
+        transport=FakeOfflineTransport(),
+        attempt_budget=ProviderAttemptBudget(ProviderAttemptLimits(max_attempts=1)),
+        usage_accountant=ProviderUsageAccountant(),
+        max_output_tokens=cfg.max_output_tokens,
+    )
+
+    res = run_llm_canary(
+        config=cfg,
+        llm_client=client,
+        logical_guard=CanaryLogicalGuard(max_calls=1),
+        attempt_budget=ProviderAttemptBudget(ProviderAttemptLimits(max_attempts=1)),
+        usage_accountant=ProviderUsageAccountant(),
+        allow_real_api=True,
+    )
+
+    r_repr = repr(res)
+    r_dict = str(res.to_dict())
+    assert compat_secret not in r_repr
+    assert compat_secret not in r_dict
+    assert legacy_secret not in r_repr
+    assert legacy_secret not in r_dict

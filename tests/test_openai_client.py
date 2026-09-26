@@ -39,7 +39,7 @@ def transient():
 
 @pytest.fixture(autouse=True)
 def credentials(monkeypatch):
-    monkeypatch.setenv("OPENAI_API_KEY", "offline-test-key")
+    monkeypatch.setenv("OPENAI_COMPAT_API_KEY", "offline-test-key")
 
 
 @pytest.mark.parametrize("failures", [0, 1, 2, 3])
@@ -101,14 +101,47 @@ def test_observer_error_not_retried():
 
 def test_preconditions(monkeypatch):
     monkeypatch.delenv("OPENAI_COMPAT_API_KEY", raising=False)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+
     for key in ["", "  "]:
-        monkeypatch.setenv("OPENAI_API_KEY", key)
-        with pytest.raises(ValueError):
+        monkeypatch.setenv("OPENAI_COMPAT_API_KEY", key)
+        with pytest.raises(ValueError) as excinfo:
             validate_environment()
-    monkeypatch.delenv("OPENAI_API_KEY")
+        assert "OPENAI_COMPAT_API_KEY must be configured" in str(excinfo.value)
+
+    monkeypatch.delenv("OPENAI_COMPAT_API_KEY", raising=False)
+    with pytest.raises(ValueError) as excinfo:
+        validate_environment()
+    assert "OPENAI_COMPAT_API_KEY must be configured" in str(excinfo.value)
+
+    # Legacy key alone must fail validation
+    monkeypatch.setenv("OPENAI_API_KEY", "legacy-secret-only")
+    with pytest.raises(ValueError) as excinfo:
+        validate_environment()
+    assert "OPENAI_COMPAT_API_KEY must be configured" in str(excinfo.value)
+
+    # Legacy key does not rescue blank canonical key
+    monkeypatch.setenv("OPENAI_COMPAT_API_KEY", "   ")
     with pytest.raises(ValueError):
         validate_environment()
-    monkeypatch.setenv("OPENAI_API_KEY", "offline-test-key")
+
+    monkeypatch.setenv("OPENAI_COMPAT_API_KEY", "offline-test-key")
     for model, timeout in [("", 2.0), ("test", 0), ("test", float("inf"))]:
         with pytest.raises(ValueError):
             OpenAILLMClient(model, timeout, lambda _: None, transport=Transport([]))
+
+
+def test_both_keys_present_precedence(monkeypatch):
+    captured_kwargs = {}
+
+    class FakeTransport:
+        def __init__(self, **kwargs):
+            captured_kwargs.update(kwargs)
+
+    monkeypatch.setattr("openai.OpenAI", FakeTransport)
+    monkeypatch.setenv("OPENAI_COMPAT_API_KEY", "canonical-secret-value")
+    monkeypatch.setenv("OPENAI_API_KEY", "legacy-secret-value")
+
+    _ = OpenAILLMClient("test-model", 2.0, lambda _: None, transport=None)
+    assert captured_kwargs["api_key"] == "canonical-secret-value"
+    assert captured_kwargs["api_key"] != "legacy-secret-value"
