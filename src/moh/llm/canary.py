@@ -138,6 +138,10 @@ class CanaryResult:
     error: str | None = None
     last_provider_error: str | None = None
     malformed_response_reason: str | None = None
+    observed_input_tokens: int | None = None
+    observed_output_tokens: int | None = None
+    observed_reasoning_tokens: int | None = None
+    observed_total_tokens: int | None = None
 
     def to_dict(self) -> dict:
         d = asdict(self)
@@ -255,6 +259,10 @@ def run_llm_canary(
         code = getattr(exc, "code", str(exc))
         last_prov_err = getattr(exc, "last_provider_error", None)
         malformed_reason = getattr(exc, "malformed_response_reason", None)
+        obs_in = getattr(exc, "observed_input_tokens", None)
+        obs_out = getattr(exc, "observed_output_tokens", None)
+        obs_reas = getattr(exc, "observed_reasoning_tokens", None)
+        obs_tot = getattr(exc, "observed_total_tokens", None)
         u = usage_accountant.usage
         return CanaryResult(
             status="failed",
@@ -272,6 +280,10 @@ def run_llm_canary(
             error=code,
             last_provider_error=last_prov_err,
             malformed_response_reason=malformed_reason,
+            observed_input_tokens=obs_in,
+            observed_output_tokens=obs_out,
+            observed_reasoning_tokens=obs_reas,
+            observed_total_tokens=obs_tot,
         )
 
 

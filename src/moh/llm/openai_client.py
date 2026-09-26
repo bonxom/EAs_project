@@ -258,6 +258,10 @@ class OpenAILLMClient:
                     model,
                     is_completed,
                 ) = self._fetch_completion(prompt)
+                wire_input_tokens = input_tokens
+                wire_output_tokens = output_tokens
+                wire_reasoning_tokens = reasoning_tokens
+                wire_total_tokens = total_tokens
             except openai.APIError as exc:
                 transient = isinstance(
                     exc, (openai.APIConnectionError, openai.RateLimitError)
@@ -275,7 +279,14 @@ class OpenAILLMClient:
                     ) from None
                 self.sleep(0.25 * attempt)
                 continue
-            def raise_malformed(reason: str, current_attempt: int = attempt):
+            def raise_malformed(
+                reason: str,
+                current_attempt: int = attempt,
+                obs_in: int | None = None,
+                obs_out: int | None = None,
+                obs_reas: int | None = None,
+                obs_tot: int | None = None,
+            ):
                 self.observer(
                     CallMetadata(
                         "openai",
@@ -290,6 +301,10 @@ class OpenAILLMClient:
                 raise GenerationError(
                     "malformed_response",
                     malformed_response_reason=reason,
+                    observed_input_tokens=obs_in,
+                    observed_output_tokens=obs_out,
+                    observed_reasoning_tokens=obs_reas,
+                    observed_total_tokens=obs_tot,
                 )
 
             if text is None:
@@ -347,7 +362,13 @@ class OpenAILLMClient:
                 and reasoning_tokens is not None
                 and reasoning_tokens > output_tokens
             ):
-                raise_malformed("reasoning_exceeds_output")
+                raise_malformed(
+                    "reasoning_exceeds_output",
+                    obs_in=wire_input_tokens,
+                    obs_out=wire_output_tokens,
+                    obs_reas=wire_reasoning_tokens,
+                    obs_tot=wire_total_tokens,
+                )
 
             if (
                 input_tokens is not None
@@ -355,7 +376,13 @@ class OpenAILLMClient:
                 and total_tokens is not None
                 and total_tokens != input_tokens + output_tokens
             ):
-                raise_malformed("inconsistent_total_tokens")
+                raise_malformed(
+                    "inconsistent_total_tokens",
+                    obs_in=wire_input_tokens,
+                    obs_out=wire_output_tokens,
+                    obs_reas=wire_reasoning_tokens,
+                    obs_tot=wire_total_tokens,
+                )
 
             rec_input = input_tokens if input_tokens is not None else 0
             rec_output = output_tokens if output_tokens is not None else 0

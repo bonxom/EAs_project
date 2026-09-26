@@ -13,6 +13,10 @@ class GenerationError(Exception):
         message: str | None = None,
         last_provider_error: str | None = None,
         malformed_response_reason: str | None = None,
+        observed_input_tokens: int | None = None,
+        observed_output_tokens: int | None = None,
+        observed_reasoning_tokens: int | None = None,
+        observed_total_tokens: int | None = None,
     ):
         class_code = getattr(type(self), "code", None)
         resolved_code = (
@@ -24,6 +28,10 @@ class GenerationError(Exception):
         self.code = resolved_code
         self.last_provider_error = last_provider_error
         self.malformed_response_reason = malformed_response_reason
+        self.observed_input_tokens = observed_input_tokens
+        self.observed_output_tokens = observed_output_tokens
+        self.observed_reasoning_tokens = observed_reasoning_tokens
+        self.observed_total_tokens = observed_total_tokens
 
 
 class LLMClient(Protocol):

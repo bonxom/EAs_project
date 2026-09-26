@@ -1257,3 +1257,121 @@ def test_canary_native_openai_usage_remains_canonical():
     assert res.output_tokens == 8
     assert res.reasoning_tokens == 6
     assert res.total_tokens == 29
+
+
+
+
+def test_canary_success_has_no_observed_malformed_metadata():
+    from types import SimpleNamespace
+
+    class Transport:
+        def __init__(self, resp):
+            self.resp = resp
+            self.chat = SimpleNamespace(
+                completions=SimpleNamespace(create=lambda **kw: self.resp)
+            )
+
+    cfg = CanaryConfig(
+        mode="offline",
+        logical_generate_limit=1,
+        provider_attempt_limit=1,
+        evaluate_limit=0,
+        prompt="Return exactly the word OK.",
+        max_output_tokens=8,
+        model="test-model",
+        timeout_seconds=5.0,
+    )
+    resp = SimpleNamespace(
+        choices=[SimpleNamespace(message=SimpleNamespace(content="OK"))],
+        usage=SimpleNamespace(
+            prompt_tokens=21,
+            completion_tokens=8,
+            total_tokens=29,
+            completion_tokens_details=SimpleNamespace(reasoning_tokens=6),
+        ),
+        model="test-model",
+    )
+    b = ProviderAttemptBudget(ProviderAttemptLimits(max_attempts=1))
+    acc = ProviderUsageAccountant()
+    client = OpenAILLMClient(
+        model=cfg.model,
+        timeout_seconds=5.0,
+        observer=lambda _: None,
+        transport=Transport(resp),
+        attempt_budget=b,
+        usage_accountant=acc,
+    )
+
+    res = run_llm_canary(
+        config=cfg,
+        llm_client=client,
+        logical_guard=CanaryLogicalGuard(max_calls=1),
+        attempt_budget=b,
+        usage_accountant=acc,
+        allow_real_api=False,
+    )
+
+    assert res.status == "success"
+    assert res.observed_input_tokens is None
+    assert res.observed_output_tokens is None
+    assert res.observed_reasoning_tokens is None
+    assert res.observed_total_tokens is None
+
+
+def test_canary_observed_tokens_propagation_on_malformed():
+    from types import SimpleNamespace
+
+    class Transport:
+        def __init__(self, resp):
+            self.resp = resp
+            self.chat = SimpleNamespace(
+                completions=SimpleNamespace(create=lambda **kw: self.resp)
+            )
+
+    cfg = CanaryConfig(
+        mode="offline",
+        logical_generate_limit=1,
+        provider_attempt_limit=1,
+        evaluate_limit=0,
+        prompt="Return exactly the word OK.",
+        max_output_tokens=8,
+        model="test-model",
+        timeout_seconds=5.0,
+    )
+    resp = SimpleNamespace(
+        choices=[SimpleNamespace(message=SimpleNamespace(content="OK"))],
+        usage=SimpleNamespace(
+            prompt_tokens=10,
+            completion_tokens=2,
+            total_tokens=None,
+            completion_tokens_details=SimpleNamespace(reasoning_tokens=6),
+        ),
+        model="test-model",
+    )
+    b = ProviderAttemptBudget(ProviderAttemptLimits(max_attempts=1))
+    acc = ProviderUsageAccountant()
+    client = OpenAILLMClient(
+        model=cfg.model,
+        timeout_seconds=5.0,
+        observer=lambda _: None,
+        transport=Transport(resp),
+        attempt_budget=b,
+        usage_accountant=acc,
+    )
+
+    res = run_llm_canary(
+        config=cfg,
+        llm_client=client,
+        logical_guard=CanaryLogicalGuard(max_calls=1),
+        attempt_budget=b,
+        usage_accountant=acc,
+        allow_real_api=False,
+    )
+
+    assert res.status == "failed"
+    assert res.error == "malformed_response"
+    assert res.malformed_response_reason == "reasoning_exceeds_output"
+    assert res.observed_input_tokens == 10
+    assert res.observed_output_tokens == 2
+    assert res.observed_reasoning_tokens == 6
+    assert res.observed_total_tokens is None

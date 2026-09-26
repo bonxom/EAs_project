@@ -519,3 +519,52 @@ def test_openai_client_inconsistent_usage_stays_malformed():
         client.generate("prompt")
     assert exc_info.value.code == "malformed_response"
     assert exc_info.value.malformed_response_reason == "reasoning_exceeds_output"
+
+
+def test_generation_error_observed_tokens_defaults():
+    err = GenerationError("foo")
+    assert err.code == "foo"
+    assert err.last_provider_error is None
+    assert err.malformed_response_reason is None
+    assert err.observed_input_tokens is None
+    assert err.observed_output_tokens is None
+    assert err.observed_reasoning_tokens is None
+    assert err.observed_total_tokens is None
+
+def test_openai_client_reasoning_exceeds_output_observability():
+    resp = make_mock_response(
+        content="OK",
+        input_tokens=10,
+        output_tokens=2,
+        reasoning_tokens=6,
+        total_tokens=None,
+    )
+    client = OpenAILLMClient("test-model", 2.0, lambda _: None, transport=Transport([resp]))
+    with pytest.raises(GenerationError) as exc_info:
+        client.generate("prompt")
+    err = exc_info.value
+    assert err.code == "malformed_response"
+    assert err.malformed_response_reason == "reasoning_exceeds_output"
+    assert err.observed_input_tokens == 10
+    assert err.observed_output_tokens == 2
+    assert err.observed_reasoning_tokens == 6
+    assert err.observed_total_tokens is None
+
+def test_openai_client_inconsistent_total_tokens_observability():
+    resp = make_mock_response(
+        content="OK",
+        input_tokens=10,
+        output_tokens=8,
+        reasoning_tokens=3,
+        total_tokens=99,
+    )
+    client = OpenAILLMClient("test-model", 2.0, lambda _: None, transport=Transport([resp]))
+    with pytest.raises(GenerationError) as exc_info:
+        client.generate("prompt")
+    err = exc_info.value
+    assert err.code == "malformed_response"
+    assert err.malformed_response_reason == "inconsistent_total_tokens"
+    assert err.observed_input_tokens == 10
+    assert err.observed_output_tokens == 8
+    assert err.observed_reasoning_tokens == 3
+    assert err.observed_total_tokens == 99
