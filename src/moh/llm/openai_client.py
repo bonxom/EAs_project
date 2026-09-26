@@ -21,7 +21,14 @@ def redact_credentials(text):
 
 class OpenAILLMClient:
     def __init__(
-        self, model, timeout_seconds, observer, *, transport=None, sleep=time.sleep
+        self,
+        model,
+        timeout_seconds,
+        observer,
+        *,
+        transport=None,
+        sleep=time.sleep,
+        attempt_budget=None,
     ):
         validate_environment()
         if not isinstance(model, str) or not model.strip():
@@ -38,6 +45,7 @@ class OpenAILLMClient:
             observer,
             sleep,
         )
+        self.attempt_budget = attempt_budget
         self.owns_transport = transport is None
         if transport is not None:
             self.transport = transport
@@ -97,6 +105,8 @@ class OpenAILLMClient:
 
     def generate(self, prompt):
         for attempt in range(1, 4):
+            if self.attempt_budget is not None:
+                self.attempt_budget.reserve()
             try:
                 text, input_tokens, output_tokens, model, is_completed = (
                     self._fetch_completion(prompt)
