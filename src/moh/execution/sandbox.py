@@ -24,20 +24,36 @@ def _subreaper():
         raise OSError(ctypes.get_errno(), "cannot enable descendant reaping")
 
 
-def _cleanup(process):
-    try:
-        os.killpg(process.pid, signal.SIGKILL)
-    except ProcessLookupError:
-        pass
-    process.wait()
-    # Only reap adopted children in this worker's process group.
-    while True:
+def _cleanup(process, pgid=None):
+    target_pgid = pgid or (process.pid if process else None)
+    if target_pgid is not None:
         try:
-            os.waitpid(-process.pid, 0)
-        except ChildProcessError:
-            break
-        except InterruptedError:
-            continue
+            os.killpg(target_pgid, signal.SIGKILL)
+        except (ProcessLookupError, OSError):
+            pass
+        try:
+            os.kill(-target_pgid, signal.SIGKILL)
+        except (ProcessLookupError, OSError):
+            pass
+
+    if process is not None:
+        try:
+            process.wait(timeout=0.1)
+        except (subprocess.TimeoutExpired, OSError):
+            pass
+
+    if target_pgid is not None:
+        deadline = time.monotonic() + 1.0
+        while time.monotonic() < deadline:
+            try:
+                pid, _ = os.waitpid(-target_pgid, os.WNOHANG)
+                if pid == 0:
+                    time.sleep(0.01)
+                    continue
+            except (ChildProcessError, OSError):
+                break
+            except InterruptedError:
+                continue
 
 
 def run_worker(request, limits):
@@ -58,6 +74,7 @@ def run_worker(request, limits):
     }
     read_fd, write_fd = os.pipe()
     process = None
+    pgid = None
     output = bytearray()
     result = bytearray()
     try:
@@ -76,6 +93,7 @@ def run_worker(request, limits):
                 pass_fds=(write_fd,),
                 start_new_session=True,
             )
+            pgid = process.pid
             os.close(write_fd)
             write_fd = None
             streams = [
@@ -132,6 +150,9 @@ def run_worker(request, limits):
                 else:
                     if process.returncode:
                         error = "process_exit"
+
+            _cleanup(process, pgid)
+
             captured = bytes(output[: limits.output_bytes]).decode(
                 "utf-8", errors="replace"
             )
@@ -146,9 +167,18 @@ def run_worker(request, limits):
             return replace(decoded, output=captured)
     finally:
         if process is not None:
-            _cleanup(process)
+            _cleanup(process, pgid)
             for stream in (process.stdin, process.stdout, process.stderr):
-                stream.close()
-        os.close(read_fd)
+                try:
+                    stream.close()
+                except OSError:
+                    pass
+        try:
+            os.close(read_fd)
+        except OSError:
+            pass
         if write_fd is not None:
-            os.close(write_fd)
+            try:
+                os.close(write_fd)
+            except OSError:
+                pass
