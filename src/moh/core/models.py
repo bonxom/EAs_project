@@ -115,6 +115,13 @@ class OptimizerCandidate:
 
 
 @dataclass(frozen=True)
+class OptimizerProgram:
+    id: str
+    source_code: str
+    idea: str | None = None
+
+
+@dataclass(frozen=True)
 class WorkCounts:
     heuristic_evaluations: int = 0
     instance_attempts: int = 0

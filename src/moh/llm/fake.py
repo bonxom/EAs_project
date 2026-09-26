@@ -18,7 +18,7 @@ class FakeLLM:
         if not first.startswith("KIND: "):
             raise GenerationError("missing prompt kind")
         kind = first[6:]
-        if kind not in ("mutate", "crossover", "reflection", "optimizer_spec"):
+        if kind not in ("mutate", "crossover", "reflection", "optimizer_spec", "optimizer_program"):
             raise GenerationError("unknown prompt kind")
         cursor = self.cursors[kind]
         self.cursors[kind] += 1
@@ -48,6 +48,12 @@ class FakeLLM:
                 },
                 sort_keys=True,
             )
+        if kind == "optimizer_program":
+            return (
+                "def improve_algorithm(api):\n    return None\n",
+                "def improve_algorithm(api):\n    # deterministic option 2\n    return None\n",
+                "def improve_algorithm(api):\n    # deterministic option 3\n    return None\n",
+            )[index]
         return (
             NEAREST_NEIGHBOR_SOURCE,
             "def select_next_node(current_node, unvisited, coordinates):\n    return max(unvisited, key=lambda j: sum((coordinates[current_node]-coordinates[j])**2))\n",
