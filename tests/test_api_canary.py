@@ -1008,3 +1008,138 @@ def test_main_uses_configured_timeout(monkeypatch):
 
     main()
     assert captured_kwargs.get("timeout_seconds") == 5.0
+
+
+# ---------------------------------------------------------
+# M2E2B-MO: Canary Propagation Tests
+# ---------------------------------------------------------
+
+def test_canary_propagation_of_malformed_response_reason():
+    from types import SimpleNamespace
+
+    from moh.llm.budget import (
+        ProviderAttemptBudget,
+        ProviderAttemptLimits,
+        ProviderUsageAccountant,
+    )
+    from moh.llm.canary import CanaryLogicalGuard, _load_yaml_config, run_llm_canary
+    from moh.llm.openai_client import OpenAILLMClient
+
+    class Transport:
+        def __init__(self, resp):
+            self.resp = resp
+            self.responses = self
+        def create(self, **kwargs):
+            return self.resp
+
+    cfg = _load_yaml_config("configs/api_canary_offline.yaml")
+    resp = SimpleNamespace(
+        output_text="   ",  # empty_text
+        choices=[SimpleNamespace(message=SimpleNamespace(content="   "))],
+        model=cfg.model,
+        usage=SimpleNamespace(prompt_tokens=10, completion_tokens=2, total_tokens=12, reasoning_tokens=0),
+        status="completed",
+    )
+    attempt_budget = ProviderAttemptBudget(ProviderAttemptLimits(max_attempts=1))
+    client = OpenAILLMClient(
+        model=cfg.model,
+        timeout_seconds=5.0,
+        observer=lambda _: None,
+        transport=Transport(resp),
+        attempt_budget=attempt_budget,
+    )
+
+    res = run_llm_canary(
+        config=cfg,
+        llm_client=client,
+        logical_guard=CanaryLogicalGuard(max_calls=1),
+        attempt_budget=attempt_budget,
+        usage_accountant=ProviderUsageAccountant(),
+        allow_real_api=False,
+    )
+
+    assert res.status == "failed"
+    assert res.error == "malformed_response"
+    assert res.malformed_response_reason == "empty_text"
+    assert res.last_provider_error is None
+    assert res.logical_generate_requests == 1
+    assert res.provider_attempts == 1
+
+
+def test_canary_success_and_provider_failure_reasons_are_none():
+    from types import SimpleNamespace
+
+    import httpx2 as httpx
+    import openai
+
+    from moh.llm.budget import (
+        ProviderAttemptBudget,
+        ProviderAttemptLimits,
+        ProviderUsageAccountant,
+    )
+    from moh.llm.canary import CanaryLogicalGuard, _load_yaml_config, run_llm_canary
+    from moh.llm.openai_client import OpenAILLMClient
+
+    class Transport:
+        def __init__(self, value):
+            self.value = value
+            self.responses = self
+        def create(self, **kwargs):
+            if isinstance(self.value, Exception):
+                raise self.value
+            return self.value
+
+    cfg = _load_yaml_config("configs/api_canary_offline.yaml")
+    
+    # Success case
+    resp_success = SimpleNamespace(
+        output_text="OK",
+        choices=[SimpleNamespace(message=SimpleNamespace(content="OK"))],
+        model=cfg.model,
+        usage=SimpleNamespace(prompt_tokens=10, completion_tokens=2, total_tokens=12, reasoning_tokens=0),
+        status="completed",
+    )
+    b_ok = ProviderAttemptBudget(ProviderAttemptLimits(max_attempts=1))
+    client_ok = OpenAILLMClient(
+        model=cfg.model,
+        timeout_seconds=5.0,
+        observer=lambda _: None,
+        transport=Transport(resp_success),
+        attempt_budget=b_ok,
+    )
+    res_ok = run_llm_canary(
+        config=cfg,
+        llm_client=client_ok,
+        logical_guard=CanaryLogicalGuard(max_calls=1),
+        attempt_budget=b_ok,
+        usage_accountant=ProviderUsageAccountant(),
+        allow_real_api=False,
+    )
+    assert res_ok.status == "success"
+    assert res_ok.error is None
+    assert res_ok.last_provider_error is None
+    assert res_ok.malformed_response_reason is None
+
+    # Timeout case
+    err_timeout = openai.APITimeoutError(request=httpx.Request("POST", "https://example.invalid"))
+    b_tout = ProviderAttemptBudget(ProviderAttemptLimits(max_attempts=1))
+    client_timeout = OpenAILLMClient(
+        model=cfg.model,
+        timeout_seconds=5.0,
+        observer=lambda _: None,
+        transport=Transport(err_timeout),
+        attempt_budget=b_tout,
+    )
+    res_timeout = run_llm_canary(
+        config=cfg,
+        llm_client=client_timeout,
+        logical_guard=CanaryLogicalGuard(max_calls=1),
+        attempt_budget=b_tout,
+        usage_accountant=ProviderUsageAccountant(),
+        allow_real_api=False,
+    )
+    assert res_timeout.status == "failed"
+    assert res_timeout.error == "provider_attempt_budget_exhausted"
+    assert res_timeout.last_provider_error == "provider_timeout"
+    assert res_timeout.malformed_response_reason is None
+

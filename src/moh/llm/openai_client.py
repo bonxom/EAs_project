@@ -243,49 +243,78 @@ class OpenAILLMClient:
                     ) from None
                 self.sleep(0.25 * attempt)
                 continue
-            valid = isinstance(text, str) and bool(text.strip()) and is_completed
-            valid = (
-                valid
-                and isinstance(model, str)
-                and all(
-                    x is None or (type(x) is int and x >= 0)
-                    for x in (
-                        input_tokens,
-                        output_tokens,
-                        reasoning_tokens,
-                        total_tokens,
-                    )
-                )
-            )
-            if (
-                valid
-                and output_tokens is not None
-                and reasoning_tokens is not None
-                and reasoning_tokens > output_tokens
-            ):
-                valid = False
-            if (
-                valid
-                and input_tokens is not None
-                and output_tokens is not None
-                and total_tokens is not None
-                and total_tokens != input_tokens + output_tokens
-            ):
-                valid = False
-
-            if not valid:
+            def raise_malformed(reason: str, current_attempt: int = attempt):
                 self.observer(
                     CallMetadata(
                         "openai",
                         self.model,
-                        attempt,
+                        current_attempt,
                         "failed",
                         None,
                         None,
                         "malformed_response",
                     )
                 )
-                raise GenerationError("malformed_response")
+                raise GenerationError(
+                    "malformed_response",
+                    malformed_response_reason=reason,
+                )
+
+            if text is None:
+                raise_malformed("missing_text")
+            elif not isinstance(text, str):
+                raise_malformed("invalid_text_type")
+            elif not text.strip():
+                raise_malformed("empty_text")
+
+            if not isinstance(model, str):
+                raise_malformed("invalid_model")
+
+            if not is_completed:
+                raise_malformed("incomplete_response")
+
+            if type(input_tokens) is bool or (
+                input_tokens is not None and not isinstance(input_tokens, int)
+            ):
+                raise_malformed("invalid_input_tokens_type")
+            elif input_tokens is not None and input_tokens < 0:
+                raise_malformed("negative_input_tokens")
+
+            if type(output_tokens) is bool or (
+                output_tokens is not None and not isinstance(output_tokens, int)
+            ):
+                raise_malformed("invalid_output_tokens_type")
+            elif output_tokens is not None and output_tokens < 0:
+                raise_malformed("negative_output_tokens")
+
+            if type(reasoning_tokens) is bool or (
+                reasoning_tokens is not None and not isinstance(reasoning_tokens, int)
+            ):
+                raise_malformed("invalid_reasoning_tokens_type")
+            elif reasoning_tokens is not None and reasoning_tokens < 0:
+                raise_malformed("negative_reasoning_tokens")
+
+            if type(total_tokens) is bool or (
+                total_tokens is not None and not isinstance(total_tokens, int)
+            ):
+                raise_malformed("invalid_total_tokens_type")
+            elif total_tokens is not None and total_tokens < 0:
+                raise_malformed("negative_total_tokens")
+
+            if (
+                output_tokens is not None
+                and reasoning_tokens is not None
+                and reasoning_tokens > output_tokens
+            ):
+                raise_malformed("reasoning_exceeds_output")
+
+            if (
+                input_tokens is not None
+                and output_tokens is not None
+                and total_tokens is not None
+                and total_tokens != input_tokens + output_tokens
+            ):
+                raise_malformed("inconsistent_total_tokens")
 
             rec_input = input_tokens if input_tokens is not None else 0
             rec_output = output_tokens if output_tokens is not None else 0
@@ -311,7 +340,10 @@ class OpenAILLMClient:
                             "malformed_response",
                         )
                     )
-                    raise GenerationError("malformed_response") from None
+                    raise GenerationError(
+                        "malformed_response",
+                        malformed_response_reason="usage_accountant_rejected",
+                    ) from None
 
             self.observer(
                 CallMetadata(

@@ -331,3 +331,128 @@ def test_per_call_receives_sentinel_timeout():
     assert res == "sentinel test"
     assert len(transport.requests) == 1
     assert transport.requests[0]["timeout"] == 12.5
+
+
+# ---------------------------------------------------------
+# M2E2B-MO: Malformed Response & GenerationError Tests
+# ---------------------------------------------------------
+
+def test_generation_error_malformed_response_reason_defaults():
+    err1 = GenerationError("foo")
+    assert err1.code == "foo"
+    assert err1.last_provider_error is None
+    assert err1.malformed_response_reason is None
+
+    err2 = GenerationError("malformed_response", malformed_response_reason="empty_text")
+    assert err2.code == "malformed_response"
+    assert err2.last_provider_error is None
+    assert err2.malformed_response_reason == "empty_text"
+
+    err3 = GenerationError("foo", last_provider_error="provider_timeout")
+    assert err3.code == "foo"
+    assert err3.last_provider_error == "provider_timeout"
+    assert err3.malformed_response_reason is None
+
+
+def make_mock_response(
+    content="hello",
+    model="test-model",
+    input_tokens=10,
+    output_tokens=2,
+    reasoning_tokens=0,
+    total_tokens=12,
+    status="completed",
+):
+    usage = SimpleNamespace(
+        prompt_tokens=input_tokens,
+        input_tokens=input_tokens,
+        completion_tokens=output_tokens,
+        output_tokens=output_tokens,
+        total_tokens=total_tokens,
+        reasoning_tokens=reasoning_tokens,
+        completion_tokens_details=SimpleNamespace(reasoning_tokens=reasoning_tokens)
+        if reasoning_tokens is not None
+        else None,
+    )
+    return SimpleNamespace(
+        output_text=content,
+        choices=[SimpleNamespace(message=SimpleNamespace(content=content))] if isinstance(content, str) else None,
+        model=model,
+        usage=usage,
+        status=status,
+    )
+
+
+@pytest.mark.parametrize(
+    "resp_kwargs, expected_reason",
+    [
+        ({"content": None}, "missing_text"),
+        ({"content": ""}, "empty_text"),
+        ({"content": "   "}, "empty_text"),
+        ({"content": 123}, "invalid_text_type"),
+        ({"model": None}, "invalid_model"),
+        ({"status": "failed"}, "incomplete_response"),
+        ({"input_tokens": True, "total_tokens": 12}, "invalid_input_tokens_type"),
+        ({"input_tokens": -1, "total_tokens": 1}, "negative_input_tokens"),
+        ({"output_tokens": True, "total_tokens": 12}, "invalid_output_tokens_type"),
+        ({"output_tokens": -1, "total_tokens": 9}, "negative_output_tokens"),
+        ({"reasoning_tokens": True, "total_tokens": 12}, "invalid_reasoning_tokens_type"),
+        ({"reasoning_tokens": -1, "total_tokens": 12}, "negative_reasoning_tokens"),
+        ({"total_tokens": True}, "invalid_total_tokens_type"),
+        ({"total_tokens": -1}, "negative_total_tokens"),
+        ({"reasoning_tokens": 10, "output_tokens": 5, "total_tokens": 15}, "reasoning_exceeds_output"),
+        (
+            {"input_tokens": 5, "output_tokens": 5, "total_tokens": 20},
+            "inconsistent_total_tokens",
+        ),
+    ],
+)
+def test_openai_client_malformed_response_reasons(resp_kwargs, expected_reason):
+    resp = make_mock_response(**resp_kwargs)
+    client = OpenAILLMClient("test-model", 2.0, lambda _: None, transport=Transport([resp]))
+    with pytest.raises(GenerationError) as exc_info:
+        client.generate("prompt")
+
+    assert exc_info.value.code == "malformed_response"
+    assert exc_info.value.malformed_response_reason == expected_reason
+    assert exc_info.value.last_provider_error is None
+    assert not hasattr(client, "malformed_response_reason")
+
+
+def test_openai_client_usage_accountant_rejected():
+    from unittest.mock import MagicMock
+
+    from moh.llm.budget import ProviderUsageAccountant
+
+    accountant = MagicMock(spec=ProviderUsageAccountant)
+    accountant.record.side_effect = ValueError("Accountant cap exceeded")
+
+    resp = make_mock_response(content="hello")
+    client = OpenAILLMClient(
+        "test-model",
+        2.0,
+        lambda _: None,
+        transport=Transport([resp]),
+        usage_accountant=accountant,
+    )
+    with pytest.raises(GenerationError) as exc_info:
+        client.generate("prompt")
+
+    assert exc_info.value.code == "malformed_response"
+    assert exc_info.value.malformed_response_reason == "usage_accountant_rejected"
+    assert exc_info.value.last_provider_error is None
+    assert not hasattr(client, "malformed_response_reason")
+
+
+def test_openai_client_none_token_semantics_accepted():
+    resp = make_mock_response(
+        content="hello",
+        input_tokens=None,
+        output_tokens=None,
+        reasoning_tokens=None,
+        total_tokens=None,
+    )
+    client = OpenAILLMClient("test-model", 2.0, lambda _: None, transport=Transport([resp]))
+    result = client.generate("prompt")
+    assert result == "hello"
+

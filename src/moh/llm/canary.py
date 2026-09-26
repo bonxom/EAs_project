@@ -137,6 +137,7 @@ class CanaryResult:
     estimated_cost_usd: Decimal | None
     error: str | None = None
     last_provider_error: str | None = None
+    malformed_response_reason: str | None = None
 
     def to_dict(self) -> dict:
         d = asdict(self)
@@ -253,6 +254,7 @@ def run_llm_canary(
     except GenerationError as exc:
         code = getattr(exc, "code", str(exc))
         last_prov_err = getattr(exc, "last_provider_error", None)
+        malformed_reason = getattr(exc, "malformed_response_reason", None)
         u = usage_accountant.usage
         return CanaryResult(
             status="failed",
@@ -269,6 +271,7 @@ def run_llm_canary(
             estimated_cost_usd=usage_accountant.estimated_cost_usd,
             error=code,
             last_provider_error=last_prov_err,
+            malformed_response_reason=malformed_reason,
         )
 
 

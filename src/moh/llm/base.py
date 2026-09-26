@@ -12,6 +12,7 @@ class GenerationError(Exception):
         self,
         message: str | None = None,
         last_provider_error: str | None = None,
+        malformed_response_reason: str | None = None,
     ):
         class_code = getattr(type(self), "code", None)
         resolved_code = (
@@ -22,6 +23,7 @@ class GenerationError(Exception):
         super().__init__(resolved_code)
         self.code = resolved_code
         self.last_provider_error = last_provider_error
+        self.malformed_response_reason = malformed_response_reason
 
 
 class LLMClient(Protocol):
