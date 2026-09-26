@@ -153,9 +153,136 @@ def test_last_provider_error_preserved_on_budget_exhaustion():
 
     assert caught.value.code == "provider_attempt_budget_exhausted"
     assert caught.value.last_provider_error == "provider_connection_error"
-    assert client.last_provider_error == "provider_connection_error"
+    assert not hasattr(client, "last_provider_error")
     assert len(transport.requests) == 1
     assert budget.usage.attempts == 1
+
+
+def test_retry_blocked_on_timeout():
+    from moh.llm.budget import (
+        ProviderAttemptBudget,
+        ProviderAttemptBudgetExceeded,
+        ProviderAttemptLimits,
+    )
+
+    budget = ProviderAttemptBudget(ProviderAttemptLimits(max_attempts=1))
+    err = openai.APITimeoutError(
+        request=httpx.Request("POST", "https://example.invalid")
+    )
+    transport = Transport([err, response()])
+    client = OpenAILLMClient(
+        "test-model",
+        2.0,
+        lambda _: None,
+        transport=transport,
+        attempt_budget=budget,
+        sleep=lambda _: None,
+    )
+    with pytest.raises(ProviderAttemptBudgetExceeded) as caught:
+        client.generate("prompt")
+
+    assert caught.value.code == "provider_attempt_budget_exhausted"
+    assert caught.value.last_provider_error == "provider_timeout"
+    assert not hasattr(client, "last_provider_error")
+    assert len(transport.requests) == 1
+    assert budget.usage.attempts == 1
+
+
+def test_transient_failure_then_success():
+    from moh.llm.budget import ProviderAttemptBudget, ProviderAttemptLimits
+
+    budget = ProviderAttemptBudget(ProviderAttemptLimits(max_attempts=3))
+    transport = Transport([transient(), response("success text")])
+    client = OpenAILLMClient(
+        "test-model",
+        2.0,
+        lambda _: None,
+        transport=transport,
+        attempt_budget=budget,
+        sleep=lambda _: None,
+    )
+    res = client.generate("prompt")
+    assert res == "success text"
+    assert len(transport.requests) == 2
+    assert budget.usage.attempts == 2
+    assert not hasattr(client, "last_provider_error")
+
+
+def test_same_client_failure_then_success():
+    from moh.llm.budget import (
+        ProviderAttemptBudget,
+        ProviderAttemptBudgetExceeded,
+        ProviderAttemptLimits,
+    )
+
+    b1 = ProviderAttemptBudget(ProviderAttemptLimits(max_attempts=1))
+    t1 = Transport([transient(), response("r1")])
+    client = OpenAILLMClient(
+        "test-model",
+        2.0,
+        lambda _: None,
+        transport=t1,
+        attempt_budget=b1,
+        sleep=lambda _: None,
+    )
+    with pytest.raises(ProviderAttemptBudgetExceeded):
+        client.generate("prompt1")
+
+    # Call 2: fresh transport & budget
+    b2 = ProviderAttemptBudget(ProviderAttemptLimits(max_attempts=1))
+    t2 = Transport([response("r2")])
+    client.attempt_budget = b2
+    client.transport = t2
+    res2 = client.generate("prompt2")
+    assert res2 == "r2"
+    assert not hasattr(client, "last_provider_error")
+
+
+def test_first_attempt_success():
+    transport = Transport([response("first try")])
+    client = OpenAILLMClient("test-model", 2.0, lambda _: None, transport=transport)
+    res = client.generate("prompt")
+    assert res == "first try"
+    assert len(transport.requests) == 1
+    assert not hasattr(client, "last_provider_error")
+
+
+def test_secret_redaction():
+    from moh.llm.budget import ProviderAttemptBudget, ProviderAttemptLimits
+
+    secret = "TEST_SECRET_MUST_NOT_LEAK"
+    err = openai.APIConnectionError(
+        message=secret, request=httpx.Request("POST", "https://example.invalid")
+    )
+    budget = ProviderAttemptBudget(ProviderAttemptLimits(max_attempts=1))
+    transport = Transport([err])
+    client = OpenAILLMClient(
+        "test-model",
+        2.0,
+        lambda _: None,
+        transport=transport,
+        attempt_budget=budget,
+    )
+    with pytest.raises(GenerationError) as caught:
+        client.generate("prompt")
+
+    assert secret not in str(caught.value)
+    assert secret not in repr(caught.value)
+    assert caught.value.code == "provider_attempt_budget_exhausted"
+    assert caught.value.last_provider_error == "provider_connection_error"
+
+
+def test_generation_error_subclass_codes():
+    from moh.llm.budget import (
+        ProviderAttemptBudgetExceeded,
+        ProviderUsageBudgetExceeded,
+    )
+    from moh.llm.canary import CanaryLogicalGuardExceeded
+
+    assert ProviderAttemptBudgetExceeded().code == "provider_attempt_budget_exhausted"
+    assert CanaryLogicalGuardExceeded().code == "logical_canary_budget_exhausted"
+    assert ProviderUsageBudgetExceeded().code == "provider_usage_budget_exhausted"
+    assert GenerationError("custom").code == "custom"
 
 
 def test_both_keys_present_precedence(monkeypatch):

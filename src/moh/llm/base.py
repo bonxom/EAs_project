@@ -8,9 +8,18 @@ from moh.core.models import Status
 class GenerationError(Exception):
     """Expected provider, response, or candidate-generation failure."""
 
-    def __init__(self, message: str = "", last_provider_error: str | None = None):
-        super().__init__(message)
-        self.code = message
+    def __init__(
+        self,
+        message: str | None = None,
+        last_provider_error: str | None = None,
+    ):
+        resolved_code = (
+            message
+            if message is not None and message != ""
+            else getattr(type(self), "code", str(self))
+        )
+        super().__init__(resolved_code)
+        self.code = resolved_code
         self.last_provider_error = last_provider_error
 
 

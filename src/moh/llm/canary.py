@@ -243,9 +243,7 @@ def run_llm_canary(
         )
     except GenerationError as exc:
         code = getattr(exc, "code", str(exc))
-        last_prov_err = getattr(exc, "last_provider_error", None) or getattr(
-            llm_client, "last_provider_error", None
-        )
+        last_prov_err = getattr(exc, "last_provider_error", None)
         u = usage_accountant.usage
         return CanaryResult(
             status="failed",

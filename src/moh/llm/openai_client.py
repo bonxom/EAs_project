@@ -92,7 +92,6 @@ class OpenAILLMClient:
         self.max_output_tokens = max_output_tokens
         self.api_mode = api_mode
         self.owns_transport = transport is None
-        self.last_provider_error = None
         if transport is not None:
             self.transport = transport
         else:
@@ -205,7 +204,7 @@ class OpenAILLMClient:
         return self._fetch_chat_completion(prompt)
 
     def generate(self, prompt):
-        self.last_provider_error = None
+        last_provider_error = None
         for attempt in range(1, 4):
             if self.usage_accountant is not None:
                 self.usage_accountant.check_pre_request_guard(
@@ -215,7 +214,7 @@ class OpenAILLMClient:
                 try:
                     self.attempt_budget.reserve()
                 except ProviderAttemptBudgetExceeded as exc:
-                    exc.last_provider_error = self.last_provider_error
+                    exc.last_provider_error = last_provider_error
                     raise
             try:
                 (
@@ -232,7 +231,7 @@ class OpenAILLMClient:
                     exc, (openai.APIConnectionError, openai.RateLimitError)
                 ) or (isinstance(exc, openai.APIStatusError) and exc.status_code >= 500)
                 error_code = sanitize_provider_error(exc)
-                self.last_provider_error = error_code
+                last_provider_error = error_code
                 self.observer(
                     CallMetadata(
                         "openai", self.model, attempt, "failed", None, None, error_code
