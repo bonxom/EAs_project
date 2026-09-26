@@ -1,7 +1,8 @@
-"""Offline-only bounded one-request LLM API canary harness."""
+"""Bounded one-request LLM API canary harness (offline & armed real mode)."""
 
 import argparse
 import json
+import os
 import threading
 from dataclasses import asdict, dataclass
 from decimal import Decimal
@@ -20,14 +21,18 @@ CANARY_FIXED_PROMPT = "Return exactly the word OK."
 
 @dataclass(frozen=True)
 class CanaryConfig:
-    logical_generate_limit: int
-    provider_attempt_limit: int
-    evaluate_limit: int
-    prompt: str
-    max_output_tokens: int | None
-    model: str
+    mode: str = "offline"
+    logical_generate_limit: int = 1
+    provider_attempt_limit: int = 1
+    evaluate_limit: int = 0
+    prompt: str = CANARY_FIXED_PROMPT
+    max_output_tokens: int | None = 8
+    model: str = "test-model"
 
     def __post_init__(self):
+        if not isinstance(self.mode, str) or self.mode not in ("offline", "real"):
+            raise ValueError("mode must be either 'offline' or 'real'")
+
         if type(self.logical_generate_limit) is bool or not isinstance(
             self.logical_generate_limit, int
         ):
@@ -54,10 +59,23 @@ class CanaryConfig:
         if self.prompt != CANARY_FIXED_PROMPT:
             raise ValueError(f"prompt must be exactly '{CANARY_FIXED_PROMPT}'")
 
-        if self.max_output_tokens is not None and (
-            type(self.max_output_tokens) is bool
-            or not isinstance(self.max_output_tokens, int)
-            or self.max_output_tokens <= 0
+        if self.mode == "real":
+            if (
+                self.max_output_tokens is None
+                or type(self.max_output_tokens) is bool
+                or not isinstance(self.max_output_tokens, int)
+                or self.max_output_tokens <= 0
+            ):
+                raise ValueError(
+                    "max_output_tokens must be a positive integer in real mode"
+                )
+        elif (
+            self.max_output_tokens is not None
+            and (
+                type(self.max_output_tokens) is bool
+                or not isinstance(self.max_output_tokens, int)
+                or self.max_output_tokens <= 0
+            )
         ):
             raise ValueError(
                 "max_output_tokens must be a positive integer if provided"
@@ -96,9 +114,12 @@ class CanaryLogicalGuard:
 @dataclass(frozen=True)
 class CanaryResult:
     status: str
+    mode: str
+    model: str
     text: str | None
     logical_generate_requests: int
     provider_attempts: int
+    max_output_tokens_requested: int | None
     input_tokens: int
     output_tokens: int
     reasoning_tokens: int
@@ -119,7 +140,46 @@ def run_llm_canary(
     logical_guard: CanaryLogicalGuard,
     attempt_budget: ProviderAttemptBudget,
     usage_accountant: ProviderUsageAccountant,
+    allow_real_api: bool = False,
 ) -> CanaryResult:
+    if config.mode == "real" and not allow_real_api:
+        u = usage_accountant.usage
+        return CanaryResult(
+            status="failed",
+            mode=config.mode,
+            model=config.model,
+            text=None,
+            logical_generate_requests=logical_guard.calls,
+            provider_attempts=attempt_budget.usage.attempts,
+            max_output_tokens_requested=config.max_output_tokens,
+            input_tokens=u.input_tokens,
+            output_tokens=u.output_tokens,
+            reasoning_tokens=u.reasoning_tokens,
+            total_tokens=u.total_tokens,
+            estimated_cost_usd=usage_accountant.estimated_cost_usd,
+            error="real_api_not_authorized",
+        )
+
+    if config.mode == "real":
+        api_key = os.environ.get("OPENAI_API_KEY", "").strip()
+        if not api_key:
+            u = usage_accountant.usage
+            return CanaryResult(
+                status="failed",
+                mode=config.mode,
+                model=config.model,
+                text=None,
+                logical_generate_requests=logical_guard.calls,
+                provider_attempts=attempt_budget.usage.attempts,
+                max_output_tokens_requested=config.max_output_tokens,
+                input_tokens=u.input_tokens,
+                output_tokens=u.output_tokens,
+                reasoning_tokens=u.reasoning_tokens,
+                total_tokens=u.total_tokens,
+                estimated_cost_usd=usage_accountant.estimated_cost_usd,
+                error="missing_provider_credential",
+            )
+
     if config.evaluate_limit != 0:
         raise ValueError("Canary cannot evaluate heuristics")
 
@@ -129,9 +189,12 @@ def run_llm_canary(
         u = usage_accountant.usage
         return CanaryResult(
             status="failed",
+            mode=config.mode,
+            model=config.model,
             text=None,
             logical_generate_requests=logical_guard.calls,
             provider_attempts=attempt_budget.usage.attempts,
+            max_output_tokens_requested=config.max_output_tokens,
             input_tokens=u.input_tokens,
             output_tokens=u.output_tokens,
             reasoning_tokens=u.reasoning_tokens,
@@ -143,11 +206,32 @@ def run_llm_canary(
     try:
         text = llm_client.generate(config.prompt)
         u = usage_accountant.usage
+
+        if config.mode == "real" and (u.input_tokens <= 0 or u.output_tokens <= 0):
+            return CanaryResult(
+                status="failed",
+                mode=config.mode,
+                model=config.model,
+                text=None,
+                logical_generate_requests=logical_guard.calls,
+                provider_attempts=attempt_budget.usage.attempts,
+                max_output_tokens_requested=config.max_output_tokens,
+                input_tokens=u.input_tokens,
+                output_tokens=u.output_tokens,
+                reasoning_tokens=u.reasoning_tokens,
+                total_tokens=u.total_tokens,
+                estimated_cost_usd=usage_accountant.estimated_cost_usd,
+                error="missing_provider_usage",
+            )
+
         return CanaryResult(
             status="success",
+            mode=config.mode,
+            model=config.model,
             text=text,
             logical_generate_requests=logical_guard.calls,
             provider_attempts=attempt_budget.usage.attempts,
+            max_output_tokens_requested=config.max_output_tokens,
             input_tokens=u.input_tokens,
             output_tokens=u.output_tokens,
             reasoning_tokens=u.reasoning_tokens,
@@ -160,9 +244,12 @@ def run_llm_canary(
         u = usage_accountant.usage
         return CanaryResult(
             status="failed",
+            mode=config.mode,
+            model=config.model,
             text=None,
             logical_generate_requests=logical_guard.calls,
             provider_attempts=attempt_budget.usage.attempts,
+            max_output_tokens_requested=config.max_output_tokens,
             input_tokens=u.input_tokens,
             output_tokens=u.output_tokens,
             reasoning_tokens=u.reasoning_tokens,
@@ -176,10 +263,11 @@ def _load_yaml_config(path: str) -> CanaryConfig:
     with open(path, "r", encoding="utf-8") as f:
         raw = yaml.safe_load(f)
 
-    if raw.get("mode") != "fake":
-        raise ValueError("M2E1 canary CLI only supports offline mode ('mode: fake')")
+    mode_raw = raw.get("mode", "offline")
+    mode = "offline" if mode_raw in ("offline", "fake") else mode_raw
 
     return CanaryConfig(
+        mode=mode,
         logical_generate_limit=raw["logical_generate_limit"],
         provider_attempt_limit=raw["provider_attempt_limit"],
         evaluate_limit=raw["evaluate_limit"],
@@ -190,22 +278,64 @@ def _load_yaml_config(path: str) -> CanaryConfig:
 
 
 def main():
-    import os
+    from unittest.mock import MagicMock
 
-    parser = argparse.ArgumentParser(
-        description="Run LLM API Canary Harness (Offline)"
+    from moh.llm.openai_client import OpenAILLMClient
+
+    parser = argparse.ArgumentParser(description="Run LLM API Canary Harness")
+    parser.add_argument(
+        "--config", required=True, help="Path to canary YAML config file"
     )
     parser.add_argument(
-        "--config", required=True, help="Path to offline canary YAML config file"
+        "--allow-real-api",
+        action="store_true",
+        help="Explicit double opt-in authorizing real API call",
     )
     args = parser.parse_args()
 
     config = _load_yaml_config(args.config)
+
+    if config.mode == "real" and not args.allow_real_api:
+        result = CanaryResult(
+            status="failed",
+            mode=config.mode,
+            model=config.model,
+            text=None,
+            logical_generate_requests=0,
+            provider_attempts=0,
+            max_output_tokens_requested=config.max_output_tokens,
+            input_tokens=0,
+            output_tokens=0,
+            reasoning_tokens=0,
+            total_tokens=0,
+            estimated_cost_usd=None,
+            error="real_api_not_authorized",
+        )
+        print(json.dumps(result.to_dict(), indent=2))
+        return
+
+    if config.mode == "real":
+        api_key = os.environ.get("OPENAI_API_KEY", "").strip()
+        if not api_key:
+            result = CanaryResult(
+                status="failed",
+                mode=config.mode,
+                model=config.model,
+                text=None,
+                logical_generate_requests=0,
+                provider_attempts=0,
+                max_output_tokens_requested=config.max_output_tokens,
+                input_tokens=0,
+                output_tokens=0,
+                reasoning_tokens=0,
+                total_tokens=0,
+                estimated_cost_usd=None,
+                error="missing_provider_credential",
+            )
+            print(json.dumps(result.to_dict(), indent=2))
+            return
+
     os.environ.setdefault("OPENAI_API_KEY", "fake-offline-key")
-
-    from unittest.mock import MagicMock
-
-    from moh.llm.openai_client import OpenAILLMClient
 
     class FakeChoice:
         def __init__(self, content="OK"):
@@ -251,6 +381,7 @@ def main():
         transport=transport,
         attempt_budget=attempt_budget,
         usage_accountant=usage_accountant,
+        max_output_tokens=config.max_output_tokens,
     )
 
     result = run_llm_canary(
@@ -259,6 +390,7 @@ def main():
         logical_guard=logical_guard,
         attempt_budget=attempt_budget,
         usage_accountant=usage_accountant,
+        allow_real_api=args.allow_real_api,
     )
 
     print(json.dumps(result.to_dict(), indent=2))

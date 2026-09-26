@@ -31,6 +31,7 @@ class OpenAILLMClient:
         attempt_budget=None,
         usage_accountant=None,
         usage_limits=None,
+        max_output_tokens=None,
     ):
         validate_environment()
         if not isinstance(model, str) or not model.strip():
@@ -41,6 +42,17 @@ class OpenAILLMClient:
             or timeout_seconds <= 0
         ):
             raise ValueError("provider timeout must be positive and finite")
+        if (
+            max_output_tokens is not None
+            and (
+                type(max_output_tokens) is bool
+                or not isinstance(max_output_tokens, int)
+                or max_output_tokens <= 0
+            )
+        ):
+            raise ValueError(
+                "max_output_tokens must be a positive integer if provided"
+            )
         self.model, self.timeout, self.observer, self.sleep = (
             model,
             timeout_seconds,
@@ -50,6 +62,7 @@ class OpenAILLMClient:
         self.attempt_budget = attempt_budget
         self.usage_accountant = usage_accountant
         self.usage_limits = usage_limits
+        self.max_output_tokens = max_output_tokens
         self.owns_transport = transport is None
         if transport is not None:
             self.transport = transport
@@ -65,11 +78,14 @@ class OpenAILLMClient:
             self.transport = openai.OpenAI(**kwargs)
 
     def _fetch_chat_completion(self, prompt):
-        response = self.transport.chat.completions.create(
-            model=self.model,
-            messages=[{"role": "user", "content": prompt}],
-            timeout=self.timeout,
-        )
+        kwargs = {
+            "model": self.model,
+            "messages": [{"role": "user", "content": prompt}],
+            "timeout": self.timeout,
+        }
+        if self.max_output_tokens is not None:
+            kwargs["max_completion_tokens"] = self.max_output_tokens
+        response = self.transport.chat.completions.create(**kwargs)
         text = (
             response.choices[0].message.content
             if getattr(response, "choices", None)
@@ -105,9 +121,15 @@ class OpenAILLMClient:
     def _fetch_completion(self, prompt):
         if hasattr(self.transport, "responses"):
             try:
-                response = self.transport.responses.create(
-                    model=self.model, input=prompt, timeout=self.timeout, store=False
-                )
+                kwargs = {
+                    "model": self.model,
+                    "input": prompt,
+                    "timeout": self.timeout,
+                    "store": False,
+                }
+                if self.max_output_tokens is not None:
+                    kwargs["max_output_tokens"] = self.max_output_tokens
+                response = self.transport.responses.create(**kwargs)
                 try:
                     text = getattr(response, "output_text", None)
                 except TypeError:

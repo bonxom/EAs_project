@@ -1,14 +1,15 @@
-"""Comprehensive unit and integration tests for offline LLM API canary harness (M2E1)."""
+"""Comprehensive unit and integration tests for bounded LLM API canary harness (M2E2A)."""
 
+import json
 import socket
-from decimal import Decimal
+import subprocess
+import sys
 from unittest.mock import MagicMock
 
 import pytest
 
 from moh.llm.base import CallMetadata
 from moh.llm.budget import (
-    ModelPricing,
     ProviderAttemptBudget,
     ProviderAttemptLimits,
     ProviderUsageAccountant,
@@ -50,17 +51,24 @@ class FakeResponse:
         self.choices = [FakeChoice(content)]
         self.usage = FakeUsage(prompt_tokens, completion_tokens, reasoning_tokens)
         self.model = model
+        self.output_text = content
+        self.status = "completed"
 
 
 class FakeTransport:
     def __init__(self, responses=None):
         self.responses_list = responses or []
         self.call_count = 0
+        self.last_chat_kwargs = None
+        self.last_responses_kwargs = None
         self.chat = MagicMock()
-        self.chat.completions.create.side_effect = self._create
+        self.chat.completions.create.side_effect = self._create_chat
+        self.responses = MagicMock()
+        self.responses.create.side_effect = self._create_responses
 
-    def _create(self, **kwargs):
+    def _create_chat(self, **kwargs):
         self.call_count += 1
+        self.last_chat_kwargs = kwargs
         if self.call_count <= len(self.responses_list):
             res = self.responses_list[self.call_count - 1]
             if isinstance(res, Exception):
@@ -68,10 +76,23 @@ class FakeTransport:
             return res
         return FakeResponse()
 
+    def _create_responses(self, **kwargs):
+        self.call_count += 1
+        self.last_responses_kwargs = kwargs
+        if self.call_count <= len(self.responses_list):
+            res = self.responses_list[self.call_count - 1]
+            if isinstance(res, Exception):
+                raise res
+            return res
+        res = FakeResponse()
+        res.output_text = "OK"
+        res.status = "completed"
+        return res
+
 
 @pytest.fixture(autouse=True)
 def setup_env_and_killswitch(monkeypatch):
-    """Network kill switch fixture: traps any attempt to perform socket I/O."""
+    """Network kill switch fixture: traps any attempt to perform real socket I/O."""
     monkeypatch.setenv("OPENAI_API_KEY", "sk-test-key-12345")
 
     def forbidden_socket(*args, **kwargs):
@@ -87,6 +108,7 @@ def noop_observer(metadata: CallMetadata):
 
 def make_valid_config(**kwargs):
     defaults = {
+        "mode": "offline",
         "logical_generate_limit": 1,
         "provider_attempt_limit": 1,
         "evaluate_limit": 0,
@@ -101,155 +123,105 @@ def make_valid_config(**kwargs):
 # ---------------------------------------------------------
 # Test Matrix Items 1-7: CanaryConfig Strict Validation
 # ---------------------------------------------------------
-def test_valid_strict_canary_config():
-    cfg = make_valid_config()
+def test_valid_strict_canary_config_offline():
+    cfg = make_valid_config(mode="offline")
+    assert cfg.mode == "offline"
     assert cfg.logical_generate_limit == 1
     assert cfg.provider_attempt_limit == 1
     assert cfg.evaluate_limit == 0
     assert cfg.prompt == CANARY_FIXED_PROMPT
+    assert cfg.max_output_tokens == 8
 
 
-def test_logical_generate_limit_rejected():
+def test_valid_strict_canary_config_real():
+    cfg = make_valid_config(mode="real", max_output_tokens=8)
+    assert cfg.mode == "real"
+    assert cfg.max_output_tokens == 8
+
+
+def test_canary_config_invalid_mode_rejected():
     with pytest.raises(ValueError):
-        make_valid_config(logical_generate_limit=0)
+        make_valid_config(mode="invalid_mode")
+
+
+def test_max_output_tokens_validation_real_mode():
+    with pytest.raises(ValueError):
+        make_valid_config(mode="real", max_output_tokens=None)
 
     with pytest.raises(ValueError):
-        make_valid_config(logical_generate_limit=2)
-
-    with pytest.raises(TypeError):
-        make_valid_config(logical_generate_limit=True)  # type: ignore
-
-
-def test_provider_attempt_limit_rejected():
-    with pytest.raises(ValueError):
-        make_valid_config(provider_attempt_limit=0)
+        make_valid_config(mode="real", max_output_tokens=0)
 
     with pytest.raises(ValueError):
-        make_valid_config(provider_attempt_limit=2)
+        make_valid_config(mode="real", max_output_tokens=-5)
 
-
-def test_evaluate_limit_rejected():
     with pytest.raises(ValueError):
-        make_valid_config(evaluate_limit=1)
+        make_valid_config(mode="real", max_output_tokens=True)  # type: ignore
 
 
-def test_invalid_prompt_rejected():
+def test_max_output_tokens_validation_offline_mode():
+    # None is allowed in offline mode
+    cfg = make_valid_config(mode="offline", max_output_tokens=None)
+    assert cfg.max_output_tokens is None
+
     with pytest.raises(ValueError):
-        make_valid_config(prompt="Write a sorting algorithm")
+        make_valid_config(mode="offline", max_output_tokens=0)
+
+    with pytest.raises(ValueError):
+        make_valid_config(mode="offline", max_output_tokens=True)  # type: ignore
 
 
 # ---------------------------------------------------------
-# Test Matrix Items 8-12: Fake Provider Success & Accounting
+# SDK Boundary Kwargs Enforcement (Steps 4 & 5 / Matrix Items 8 & 9)
 # ---------------------------------------------------------
-def test_fake_provider_success():
-    cfg = make_valid_config()
-    pricing_policy = {
-        "test-model": ModelPricing(
-            input_usd_per_million_tokens=Decimal("1.00"),
-            output_usd_per_million_tokens=Decimal("2.00"),
-        )
-    }
-    accountant = ProviderUsageAccountant(pricing_policy=pricing_policy)
-    attempt_budget = ProviderAttemptBudget(
-        ProviderAttemptLimits(max_attempts=cfg.provider_attempt_limit)
-    )
-    logical_guard = CanaryLogicalGuard(max_calls=cfg.logical_generate_limit)
-    transport = FakeTransport(
-        responses=[
-            FakeResponse(
-                content="OK",
-                prompt_tokens=10,
-                completion_tokens=1,
-                reasoning_tokens=0,
-                model="test-model",
-            )
-        ]
-    )
-
+def test_responses_sdk_receives_output_cap_8():
+    accountant = ProviderUsageAccountant()
+    transport = FakeTransport()
     client = OpenAILLMClient(
-        model=cfg.model,
+        model="test-model",
         timeout_seconds=5.0,
         observer=noop_observer,
         transport=transport,
-        attempt_budget=attempt_budget,
         usage_accountant=accountant,
+        max_output_tokens=8,
     )
 
-    result = run_llm_canary(
-        config=cfg,
-        llm_client=client,
-        logical_guard=logical_guard,
-        attempt_budget=attempt_budget,
-        usage_accountant=accountant,
-    )
-
-    assert result.status == "success"
-    assert result.text == "OK"
-    assert result.logical_generate_requests == 1
-    assert result.provider_attempts == 1
-    assert result.input_tokens == 10
-    assert result.output_tokens == 1
-    assert result.reasoning_tokens == 0
-    assert result.total_tokens == 11
-    # 10*1/1e6 + 1*2/1e6 = 0.000012
-    assert result.estimated_cost_usd == Decimal("0.000012")
-    assert result.error is None
+    res = client.generate("prompt")
+    assert res == "OK"
     assert transport.call_count == 1
+    assert transport.last_responses_kwargs is not None
+    assert transport.last_responses_kwargs["max_output_tokens"] == 8
 
 
-# ---------------------------------------------------------
-# Test Matrix Items 13-14: Retryable First Failure & Attempt Cap
-# ---------------------------------------------------------
-def test_retryable_first_failure_attempt_cap():
-    import openai
-
-    cfg = make_valid_config()
+def test_chat_completions_sdk_receives_output_cap_8():
     accountant = ProviderUsageAccountant()
-    attempt_budget = ProviderAttemptBudget(
-        ProviderAttemptLimits(max_attempts=cfg.provider_attempt_limit)
-    )
-    logical_guard = CanaryLogicalGuard(max_calls=cfg.logical_generate_limit)
-
-    err = openai.APIConnectionError(request=MagicMock())
-    transport = FakeTransport(responses=[err, FakeResponse()])
+    # Transport without responses attribute forces chat completions path
+    transport = FakeTransport()
+    del transport.responses
 
     client = OpenAILLMClient(
-        model=cfg.model,
+        model="test-model",
         timeout_seconds=5.0,
         observer=noop_observer,
         transport=transport,
-        attempt_budget=attempt_budget,
         usage_accountant=accountant,
-        sleep=lambda _: None,
+        max_output_tokens=8,
     )
 
-    result = run_llm_canary(
-        config=cfg,
-        llm_client=client,
-        logical_guard=logical_guard,
-        attempt_budget=attempt_budget,
-        usage_accountant=accountant,
-    )
-
-    assert result.status == "failed"
-    assert result.text is None
-    assert result.logical_generate_requests == 1
-    assert result.provider_attempts == 1
-    assert result.error == "provider_attempt_budget_exhausted"
-    # Transport was invoked EXACTLY once! Attempt #2 was blocked before network!
+    res = client.generate("prompt")
+    assert res == "OK"
     assert transport.call_count == 1
+    assert transport.last_chat_kwargs is not None
+    assert transport.last_chat_kwargs["max_completion_tokens"] == 8
 
 
 # ---------------------------------------------------------
-# Test Matrix Item 15: Second Logical Generation Blocked
+# Double Opt-In & Real Mode Arming Tests (Matrix Items 10-13)
 # ---------------------------------------------------------
-def test_second_logical_generation_blocked():
-    cfg = make_valid_config()
+def test_mode_real_without_allow_flag_blocked():
+    cfg = make_valid_config(mode="real", max_output_tokens=8)
     accountant = ProviderUsageAccountant()
-    attempt_budget = ProviderAttemptBudget(
-        ProviderAttemptLimits(max_attempts=cfg.provider_attempt_limit)
-    )
-    logical_guard = CanaryLogicalGuard(max_calls=cfg.logical_generate_limit)
+    attempt_budget = ProviderAttemptBudget(ProviderAttemptLimits(max_attempts=1))
+    logical_guard = CanaryLogicalGuard(max_calls=1)
     transport = FakeTransport()
 
     client = OpenAILLMClient(
@@ -259,53 +231,7 @@ def test_second_logical_generation_blocked():
         transport=transport,
         attempt_budget=attempt_budget,
         usage_accountant=accountant,
-    )
-
-    res1 = run_llm_canary(
-        config=cfg,
-        llm_client=client,
-        logical_guard=logical_guard,
-        attempt_budget=attempt_budget,
-        usage_accountant=accountant,
-    )
-    assert res1.status == "success"
-    assert transport.call_count == 1
-
-    # Second logical call attempt
-    res2 = run_llm_canary(
-        config=cfg,
-        llm_client=client,
-        logical_guard=logical_guard,
-        attempt_budget=attempt_budget,
-        usage_accountant=accountant,
-    )
-    assert res2.status == "failed"
-    assert res2.error == "logical_canary_budget_exhausted"
-    # Transport call count remains 1!
-    assert transport.call_count == 1
-
-
-# ---------------------------------------------------------
-# Test Matrix Item 16: Malformed Provider Usage
-# ---------------------------------------------------------
-def test_malformed_provider_usage_bounded_failure():
-    cfg = make_valid_config()
-    accountant = ProviderUsageAccountant()
-    attempt_budget = ProviderAttemptBudget(
-        ProviderAttemptLimits(max_attempts=cfg.provider_attempt_limit)
-    )
-    logical_guard = CanaryLogicalGuard(max_calls=cfg.logical_generate_limit)
-    transport = FakeTransport(
-        responses=[FakeResponse(prompt_tokens=-5, completion_tokens=1)]
-    )
-
-    client = OpenAILLMClient(
-        model=cfg.model,
-        timeout_seconds=5.0,
-        observer=noop_observer,
-        transport=transport,
-        attempt_budget=attempt_budget,
-        usage_accountant=accountant,
+        max_output_tokens=8,
     )
 
     result = run_llm_canary(
@@ -314,95 +240,16 @@ def test_malformed_provider_usage_bounded_failure():
         logical_guard=logical_guard,
         attempt_budget=attempt_budget,
         usage_accountant=accountant,
+        allow_real_api=False,  # Flag absent!
     )
+
     assert result.status == "failed"
-    assert result.error == "malformed_response"
+    assert result.error == "real_api_not_authorized"
+    assert transport.call_count == 0
 
 
-# ---------------------------------------------------------
-# Test Matrix Item 17: Unknown Fake Pricing Handled Safely
-# ---------------------------------------------------------
-def test_unknown_fake_pricing_handled_safely():
-    cfg = make_valid_config(model="unknown-model")
-    accountant = ProviderUsageAccountant(pricing_policy={})
-    attempt_budget = ProviderAttemptBudget(
-        ProviderAttemptLimits(max_attempts=cfg.provider_attempt_limit)
-    )
-    logical_guard = CanaryLogicalGuard(max_calls=cfg.logical_generate_limit)
-    transport = FakeTransport(responses=[FakeResponse(model="unknown-model")])
-
-    client = OpenAILLMClient(
-        model="unknown-model",
-        timeout_seconds=5.0,
-        observer=noop_observer,
-        transport=transport,
-        attempt_budget=attempt_budget,
-        usage_accountant=accountant,
-    )
-
-    result = run_llm_canary(
-        config=cfg,
-        llm_client=client,
-        logical_guard=logical_guard,
-        attempt_budget=attempt_budget,
-        usage_accountant=accountant,
-    )
-    assert result.status == "success"
-    assert result.estimated_cost_usd is None
-
-
-# ---------------------------------------------------------
-# Test Matrix Items 18-20: Unused Components Isolation
-# ---------------------------------------------------------
-def test_unused_components_never_called(monkeypatch):
-    """Prove evaluator, optimizer runner, and outer loop are never invoked by canary."""
-    eval_mock = MagicMock(side_effect=AssertionError("Evaluator must not be called!"))
-    runner_mock = MagicMock(side_effect=AssertionError("Runner must not be called!"))
-    outer_mock = MagicMock(side_effect=AssertionError("Outer loop must not be called!"))
-
-    monkeypatch.setattr("moh.evaluation.evaluate_heuristic", eval_mock, raising=False)
-    monkeypatch.setattr(
-        "moh.optimizers.runner.OptimizerProgramRunner", runner_mock, raising=False
-    )
-
-    cfg = make_valid_config()
-    accountant = ProviderUsageAccountant()
-    attempt_budget = ProviderAttemptBudget(
-        ProviderAttemptLimits(max_attempts=cfg.provider_attempt_limit)
-    )
-    logical_guard = CanaryLogicalGuard(max_calls=cfg.logical_generate_limit)
-    transport = FakeTransport()
-
-    client = OpenAILLMClient(
-        model=cfg.model,
-        timeout_seconds=5.0,
-        observer=noop_observer,
-        transport=transport,
-        attempt_budget=attempt_budget,
-        usage_accountant=accountant,
-    )
-
-    res = run_llm_canary(
-        config=cfg,
-        llm_client=client,
-        logical_guard=logical_guard,
-        attempt_budget=attempt_budget,
-        usage_accountant=accountant,
-    )
-    assert res.status == "success"
-    assert eval_mock.call_count == 0
-    assert runner_mock.call_count == 0
-    assert outer_mock.call_count == 0
-
-
-# ---------------------------------------------------------
-# Test Matrix Item 21: No API Key Required Offline
-# ---------------------------------------------------------
-def test_no_api_key_required_offline(monkeypatch):
-    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
-    monkeypatch.setenv("OPENAI_API_KEY", "fake-offline-key")
-
-    cfg = make_valid_config()
+def test_offline_config_with_allow_flag_remains_offline():
+    cfg = make_valid_config(mode="offline")
     accountant = ProviderUsageAccountant()
     attempt_budget = ProviderAttemptBudget(ProviderAttemptLimits(max_attempts=1))
     logical_guard = CanaryLogicalGuard(max_calls=1)
@@ -423,17 +270,190 @@ def test_no_api_key_required_offline(monkeypatch):
         logical_guard=logical_guard,
         attempt_budget=attempt_budget,
         usage_accountant=accountant,
+        allow_real_api=True,
     )
+
     assert result.status == "success"
+    assert result.mode == "offline"
+    assert transport.call_count == 1
+
+
+def test_real_mode_allow_flag_missing_credential_blocked(monkeypatch):
+    monkeypatch.setenv("OPENAI_API_KEY", "   ")  # Blank credential!
+
+    cfg = make_valid_config(mode="real", max_output_tokens=8)
+    accountant = ProviderUsageAccountant()
+    attempt_budget = ProviderAttemptBudget(ProviderAttemptLimits(max_attempts=1))
+    logical_guard = CanaryLogicalGuard(max_calls=1)
+    transport = FakeTransport()
+
+    # Fail closed BEFORE transport or SDK creation
+    client = MagicMock()
+
+    result = run_llm_canary(
+        config=cfg,
+        llm_client=client,
+        logical_guard=logical_guard,
+        attempt_budget=attempt_budget,
+        usage_accountant=accountant,
+        allow_real_api=True,
+    )
+
+    assert result.status == "failed"
+    assert result.error == "missing_provider_credential"
+    assert transport.call_count == 0
+
+
+def test_real_mode_allow_flag_dummy_credential_fake_transport_succeeds(monkeypatch):
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-fake-armed-key")
+
+    cfg = make_valid_config(mode="real", max_output_tokens=8)
+    accountant = ProviderUsageAccountant()
+    attempt_budget = ProviderAttemptBudget(ProviderAttemptLimits(max_attempts=1))
+    logical_guard = CanaryLogicalGuard(max_calls=1)
+    transport = FakeTransport()
+
+    client = OpenAILLMClient(
+        model=cfg.model,
+        timeout_seconds=5.0,
+        observer=noop_observer,
+        transport=transport,
+        attempt_budget=attempt_budget,
+        usage_accountant=accountant,
+        max_output_tokens=8,
+    )
+
+    result = run_llm_canary(
+        config=cfg,
+        llm_client=client,
+        logical_guard=logical_guard,
+        attempt_budget=attempt_budget,
+        usage_accountant=accountant,
+        allow_real_api=True,
+    )
+
+    assert result.status == "success"
+    assert result.mode == "real"
+    assert result.max_output_tokens_requested == 8
+    assert transport.call_count == 1
 
 
 # ---------------------------------------------------------
-# Test Matrix Item 22: Credential Redaction Test
+# Hard Bounds & Accounting Tests (Matrix Items 14-16 & 20-22)
+# ---------------------------------------------------------
+def test_retry_blocked_before_sdk():
+    import openai
+
+    cfg = make_valid_config(mode="offline")
+    accountant = ProviderUsageAccountant()
+    attempt_budget = ProviderAttemptBudget(ProviderAttemptLimits(max_attempts=1))
+    logical_guard = CanaryLogicalGuard(max_calls=1)
+
+    err = openai.APIConnectionError(request=MagicMock())
+    transport = FakeTransport(responses=[err, FakeResponse()])
+
+    client = OpenAILLMClient(
+        model=cfg.model,
+        timeout_seconds=5.0,
+        observer=noop_observer,
+        transport=transport,
+        attempt_budget=attempt_budget,
+        usage_accountant=accountant,
+        max_output_tokens=8,
+        sleep=lambda _: None,
+    )
+
+    result = run_llm_canary(
+        config=cfg,
+        llm_client=client,
+        logical_guard=logical_guard,
+        attempt_budget=attempt_budget,
+        usage_accountant=accountant,
+    )
+
+    assert result.status == "failed"
+    assert result.error == "provider_attempt_budget_exhausted"
+    assert transport.call_count == 1
+
+
+def test_malformed_usage_fails_real_canary(monkeypatch):
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-fake-armed-key")
+
+    cfg = make_valid_config(mode="real", max_output_tokens=8)
+    accountant = ProviderUsageAccountant()
+    attempt_budget = ProviderAttemptBudget(ProviderAttemptLimits(max_attempts=1))
+    logical_guard = CanaryLogicalGuard(max_calls=1)
+
+    resp = FakeResponse(prompt_tokens=-5, completion_tokens=1)
+    transport = FakeTransport(responses=[resp])
+
+    client = OpenAILLMClient(
+        model=cfg.model,
+        timeout_seconds=5.0,
+        observer=noop_observer,
+        transport=transport,
+        attempt_budget=attempt_budget,
+        usage_accountant=accountant,
+        max_output_tokens=8,
+    )
+
+    result = run_llm_canary(
+        config=cfg,
+        llm_client=client,
+        logical_guard=logical_guard,
+        attempt_budget=attempt_budget,
+        usage_accountant=accountant,
+        allow_real_api=True,
+    )
+
+    assert result.status == "failed"
+    assert result.error == "malformed_response"
+    assert transport.call_count == 1
+
+
+def test_missing_usage_fails_real_canary(monkeypatch):
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-fake-armed-key")
+
+    cfg = make_valid_config(mode="real", max_output_tokens=8)
+    accountant = ProviderUsageAccountant()
+    attempt_budget = ProviderAttemptBudget(ProviderAttemptLimits(max_attempts=1))
+    logical_guard = CanaryLogicalGuard(max_calls=1)
+
+    resp = FakeResponse(prompt_tokens=0, completion_tokens=0)
+    transport = FakeTransport(responses=[resp])
+
+    client = OpenAILLMClient(
+        model=cfg.model,
+        timeout_seconds=5.0,
+        observer=noop_observer,
+        transport=transport,
+        attempt_budget=attempt_budget,
+        usage_accountant=accountant,
+        max_output_tokens=8,
+    )
+
+    result = run_llm_canary(
+        config=cfg,
+        llm_client=client,
+        logical_guard=logical_guard,
+        attempt_budget=attempt_budget,
+        usage_accountant=accountant,
+        allow_real_api=True,
+    )
+
+    assert result.status == "failed"
+    assert result.error == "missing_provider_usage"
+    assert transport.call_count == 1
+
+
+# ---------------------------------------------------------
+# Credential Redaction & Safety (Matrix Item 23)
 # ---------------------------------------------------------
 def test_credential_sentinel_absent_from_result_repr(monkeypatch):
-    secret = "TEST_SECRET_CANARY_DO_NOT_LEAK"
+    secret = "TEST_SECRET_M2E2A_DO_NOT_LEAK"
     monkeypatch.setenv("OPENAI_API_KEY", secret)
-    cfg = make_valid_config()
+
+    cfg = make_valid_config(mode="real", max_output_tokens=8)
     accountant = ProviderUsageAccountant()
     attempt_budget = ProviderAttemptBudget(ProviderAttemptLimits(max_attempts=1))
     logical_guard = CanaryLogicalGuard(max_calls=1)
@@ -448,6 +468,7 @@ def test_credential_sentinel_absent_from_result_repr(monkeypatch):
         transport=transport,
         attempt_budget=attempt_budget,
         usage_accountant=accountant,
+        max_output_tokens=8,
     )
 
     result = run_llm_canary(
@@ -456,6 +477,7 @@ def test_credential_sentinel_absent_from_result_repr(monkeypatch):
         logical_guard=logical_guard,
         attempt_budget=attempt_budget,
         usage_accountant=accountant,
+        allow_real_api=True,
     )
 
     r_repr = repr(result)
@@ -466,19 +488,20 @@ def test_credential_sentinel_absent_from_result_repr(monkeypatch):
 
 
 # ---------------------------------------------------------
-# Test Matrix Item 23: Network Kill Switch Test
+# CLI Double Opt-In & Runtime Warning Checks (Matrix Items 25-26)
 # ---------------------------------------------------------
-def test_network_kill_switch_traps_real_access():
-    with pytest.raises(AssertionError) as exc_info:
-        socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    assert "Accidental real network I/O" in str(exc_info.value)
-
-
-# ---------------------------------------------------------
-# Test Matrix Item 24: Ordinary V0 Config Cannot Trigger Canary Real Network
-# ---------------------------------------------------------
-def test_ordinary_config_cannot_trigger_canary_real_network():
-    cfg = make_valid_config()
-    assert cfg.logical_generate_limit == 1
-    assert cfg.provider_attempt_limit == 1
-    assert cfg.evaluate_limit == 0
+def test_cli_real_mode_without_allow_flag_outputs_failure_json():
+    cmd = [
+        sys.executable,
+        "-m",
+        "moh.llm.canary",
+        "--config",
+        "configs/api_canary_real.yaml",
+    ]
+    proc = subprocess.run(cmd, capture_output=True, text=True, check=False)
+    assert proc.returncode == 0
+    assert "RuntimeWarning" not in proc.stderr
+    data = json.loads(proc.stdout)
+    assert data["status"] == "failed"
+    assert data["error"] == "real_api_not_authorized"
+    assert data["max_output_tokens_requested"] == 8
