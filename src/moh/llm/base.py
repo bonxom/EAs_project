@@ -13,10 +13,11 @@ class GenerationError(Exception):
         message: str | None = None,
         last_provider_error: str | None = None,
     ):
+        class_code = getattr(type(self), "code", None)
         resolved_code = (
             message
             if message is not None and message != ""
-            else getattr(type(self), "code", str(self))
+            else class_code or ""
         )
         super().__init__(resolved_code)
         self.code = resolved_code
