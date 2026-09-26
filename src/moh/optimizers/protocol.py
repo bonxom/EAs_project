@@ -98,6 +98,31 @@ def validate_message_dict(d: dict[str, Any]) -> None:
     if not isinstance(msg_type, str):
         raise TypeError("type must be a string")
 
+    if msg_type == "optimizer_result":
+        if "status" not in d:
+            raise ValueError("missing required field: status")
+        status = d["status"]
+        if status not in ("success", "failed"):
+            raise ValueError("status must be 'success' or 'failed'")
+        if status == "success":
+            expected_fields = {"type", "status", "result"}
+            if set(d.keys()) != expected_fields:
+                raise ValueError(
+                    f"invalid fields for optimizer_result success: expected {expected_fields}, got {set(d.keys())}"
+                )
+        else:
+            expected_fields = {"type", "status", "code", "message"}
+            if set(d.keys()) != expected_fields:
+                raise ValueError(
+                    f"invalid fields for optimizer_result failure: expected {expected_fields}, got {set(d.keys())}"
+                )
+            code = d["code"]
+            if not isinstance(code, str) or not code:
+                raise ValueError("code must be a non-empty string")
+            if not isinstance(d["message"], str):
+                raise TypeError("message must be a string")
+        return
+
     if "request_id" not in d:
         raise ValueError("missing required field: request_id")
     validate_request_id(d["request_id"])
