@@ -299,3 +299,35 @@ def test_both_keys_present_precedence(monkeypatch):
     _ = OpenAILLMClient("test-model", 2.0, lambda _: None, transport=None)
     assert captured_kwargs["api_key"] == "canonical-secret-value"
     assert captured_kwargs["api_key"] != "legacy-secret-value"
+
+
+def test_sdk_constructor_receives_sentinel_timeout(monkeypatch):
+    captured_sdk_kwargs = {}
+
+    class FakeOpenAI:
+        def __init__(self, **kwargs):
+            captured_sdk_kwargs.update(kwargs)
+
+    monkeypatch.setattr("openai.OpenAI", FakeOpenAI)
+    _ = OpenAILLMClient(
+        "test-model",
+        12.5,
+        lambda _: None,
+        transport=None,
+    )
+    assert captured_sdk_kwargs.get("timeout") == 12.5
+    assert captured_sdk_kwargs.get("max_retries") == 0
+
+
+def test_per_call_receives_sentinel_timeout():
+    transport = Transport([response("sentinel test")])
+    client = OpenAILLMClient(
+        "test-model",
+        12.5,
+        lambda _: None,
+        transport=transport,
+    )
+    res = client.generate("test prompt")
+    assert res == "sentinel test"
+    assert len(transport.requests) == 1
+    assert transport.requests[0]["timeout"] == 12.5

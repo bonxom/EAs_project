@@ -115,6 +115,7 @@ def make_valid_config(**kwargs):
         "prompt": CANARY_FIXED_PROMPT,
         "max_output_tokens": 8,
         "model": "test-model",
+        "timeout_seconds": 5.0,
     }
     defaults.update(kwargs)
     return CanaryConfig(**defaults)
@@ -927,3 +928,83 @@ def test_secret_redaction_with_compat_key(monkeypatch):
     assert compat_secret not in r_dict
     assert legacy_secret not in r_repr
     assert legacy_secret not in r_dict
+
+
+# ---------------------------------------------------------
+# M2E2B-TC: Configurable Timeout Tests
+# ---------------------------------------------------------
+@pytest.mark.parametrize("valid_timeout", [0.1, 1, 5.0, 30, 30.0])
+def test_canary_config_valid_timeout_seconds(valid_timeout):
+    cfg = make_valid_config(timeout_seconds=valid_timeout)
+    assert cfg.timeout_seconds == float(valid_timeout)
+    assert isinstance(cfg.timeout_seconds, float)
+
+
+@pytest.mark.parametrize(
+    "invalid_timeout",
+    [
+        0,
+        -1,
+        -0.1,
+        True,
+        False,
+        float("nan"),
+        float("inf"),
+        float("-inf"),
+        None,
+        "30",
+    ],
+)
+def test_canary_config_invalid_timeout_seconds_rejected(invalid_timeout):
+    with pytest.raises(ValueError, match="timeout_seconds must be positive and finite"):
+        make_valid_config(timeout_seconds=invalid_timeout)
+
+
+def test_load_yaml_config_real_yaml():
+    from moh.llm.canary import _load_yaml_config
+
+    cfg = _load_yaml_config("configs/api_canary_real.yaml")
+    assert cfg.timeout_seconds == 30.0
+    assert cfg.mode == "real"
+    assert cfg.logical_generate_limit == 1
+    assert cfg.provider_attempt_limit == 1
+    assert cfg.evaluate_limit == 0
+    assert cfg.max_output_tokens == 8
+    assert cfg.model == "ag/gemini-3.6-flash-low"
+
+
+def test_load_yaml_config_offline_yaml():
+    from moh.llm.canary import _load_yaml_config
+
+    cfg = _load_yaml_config("configs/api_canary_offline.yaml")
+    assert cfg.timeout_seconds == 5.0
+    assert cfg.mode == "offline"
+    assert cfg.logical_generate_limit == 1
+    assert cfg.provider_attempt_limit == 1
+    assert cfg.evaluate_limit == 0
+    assert cfg.max_output_tokens == 8
+    assert cfg.model == "test-model"
+
+
+def test_main_uses_configured_timeout(monkeypatch):
+    captured_kwargs = {}
+    orig_init = OpenAILLMClient.__init__
+
+    def dummy_init(self, *args, **kwargs):
+        captured_kwargs.update(kwargs)
+        if len(args) >= 2:
+            captured_kwargs["timeout_seconds"] = args[1]
+        elif "timeout_seconds" in kwargs:
+            captured_kwargs["timeout_seconds"] = kwargs["timeout_seconds"]
+        orig_init(self, *args, **kwargs)
+
+    monkeypatch.setattr(OpenAILLMClient, "__init__", dummy_init)
+    monkeypatch.setattr(
+        "sys.argv",
+        ["canary", "--config", "configs/api_canary_offline.yaml"],
+    )
+
+    from moh.llm.canary import main
+
+    main()
+    assert captured_kwargs.get("timeout_seconds") == 5.0

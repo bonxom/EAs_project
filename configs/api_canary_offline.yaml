@@ -5,3 +5,4 @@ evaluate_limit: 0
 prompt: "Return exactly the word OK."
 max_output_tokens: 8
 model: "test-model"
+timeout_seconds: 5.0

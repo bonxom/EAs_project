@@ -2,6 +2,7 @@
 
 import argparse
 import json
+import math
 import os
 import threading
 from dataclasses import asdict, dataclass
@@ -29,6 +30,7 @@ class CanaryConfig:
     prompt: str = CANARY_FIXED_PROMPT
     max_output_tokens: int | None = 8
     model: str = "test-model"
+    timeout_seconds: float = 5.0
 
     def __post_init__(self):
         if not isinstance(self.mode, str) or self.mode not in ("offline", "real"):
@@ -84,6 +86,13 @@ class CanaryConfig:
 
         if not isinstance(self.model, str) or not self.model.strip():
             raise ValueError("model must be a non-empty string")
+        if (
+            type(self.timeout_seconds) not in (int, float)
+            or not math.isfinite(self.timeout_seconds)
+            or self.timeout_seconds <= 0
+        ):
+            raise ValueError("timeout_seconds must be positive and finite")
+        object.__setattr__(self, "timeout_seconds", float(self.timeout_seconds))
 
 
 class CanaryLogicalGuardExceeded(GenerationError):
@@ -276,15 +285,19 @@ def _load_yaml_config(path: str) -> CanaryConfig:
         or raw.get("model", "gpt-4o-mini")
     )
 
-    return CanaryConfig(
-        mode=mode,
-        logical_generate_limit=raw["logical_generate_limit"],
-        provider_attempt_limit=raw["provider_attempt_limit"],
-        evaluate_limit=raw["evaluate_limit"],
-        prompt=raw["prompt"],
-        max_output_tokens=raw.get("max_output_tokens"),
-        model=model,
-    )
+    kwargs = {
+        "mode": mode,
+        "logical_generate_limit": raw["logical_generate_limit"],
+        "provider_attempt_limit": raw["provider_attempt_limit"],
+        "evaluate_limit": raw["evaluate_limit"],
+        "prompt": raw["prompt"],
+        "max_output_tokens": raw.get("max_output_tokens"),
+        "model": model,
+    }
+    if "timeout_seconds" in raw:
+        kwargs["timeout_seconds"] = raw["timeout_seconds"]
+
+    return CanaryConfig(**kwargs)
 
 
 def main():
@@ -388,7 +401,7 @@ def main():
 
     client = OpenAILLMClient(
         model=config.model,
-        timeout_seconds=5.0,
+        timeout_seconds=config.timeout_seconds,
         observer=lambda _: None,
         transport=transport,
         attempt_budget=attempt_budget,
