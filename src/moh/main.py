@@ -1,6 +1,8 @@
 import argparse
 import json
+import os
 import sys
+from pathlib import Path
 
 import yaml
 
@@ -14,7 +16,28 @@ from moh.problems.baselines import NEAREST_NEIGHBOR_SOURCE, RANDOM_CHOICE_SOURCE
 from moh.problems.tsp import TSPTask
 
 
+def load_dotenv(path=".env"):
+    p = Path(path)
+    if not p.is_file():
+        return
+    for line in p.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if "=" in line:
+            key, value = line.split("=", 1)
+            key = key.strip()
+            value = value.strip().strip("'\"")
+            if key and key not in os.environ:
+                os.environ[key] = value
+    if "OPENAI_COMPAT_API_KEY" in os.environ and "OPENAI_API_KEY" not in os.environ:
+        os.environ["OPENAI_API_KEY"] = os.environ["OPENAI_COMPAT_API_KEY"]
+    if "OPENAI_COMPAT_BASE_URL" in os.environ and "OPENAI_BASE_URL" not in os.environ:
+        os.environ["OPENAI_BASE_URL"] = os.environ["OPENAI_COMPAT_BASE_URL"]
+
+
 def main(argv=None):
+    load_dotenv()
     parser = argparse.ArgumentParser(description="Mini-MoH two-level TSP search")
     parser.add_argument("--config", default="configs/smoke.yaml")
     parser.add_argument(
