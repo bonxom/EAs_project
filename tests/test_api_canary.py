@@ -1143,3 +1143,117 @@ def test_canary_success_and_provider_failure_reasons_are_none():
     assert res_timeout.last_provider_error == "provider_timeout"
     assert res_timeout.malformed_response_reason is None
 
+
+
+# ---------------------------------------------------------
+# M2E2B-UN: Canary Token Normalization Integration Tests
+# ---------------------------------------------------------
+
+def test_canary_r3_9router_separate_thinking_succeeds():
+    from types import SimpleNamespace
+
+    from moh.llm.budget import (
+        ProviderAttemptBudget,
+        ProviderAttemptLimits,
+        ProviderUsageAccountant,
+    )
+    from moh.llm.canary import CanaryLogicalGuard, _load_yaml_config, run_llm_canary
+    from moh.llm.openai_client import OpenAILLMClient
+
+    class Transport:
+        def __init__(self, resp):
+            self.resp = resp
+            self.responses = self
+        def create(self, **kwargs):
+            return self.resp
+
+    cfg = _load_yaml_config("configs/api_canary_offline.yaml")
+    resp = SimpleNamespace(
+        output_text="OK",
+        choices=[SimpleNamespace(message=SimpleNamespace(content="OK"))],
+        model=cfg.model,
+        usage=SimpleNamespace(prompt_tokens=21, completion_tokens=2, total_tokens=29, reasoning_tokens=6),
+        status="completed",
+    )
+    b = ProviderAttemptBudget(ProviderAttemptLimits(max_attempts=1))
+    acc = ProviderUsageAccountant()
+    client = OpenAILLMClient(
+        model=cfg.model,
+        timeout_seconds=5.0,
+        observer=lambda _: None,
+        transport=Transport(resp),
+        attempt_budget=b,
+        usage_accountant=acc,
+    )
+
+    res = run_llm_canary(
+        config=cfg,
+        llm_client=client,
+        logical_guard=CanaryLogicalGuard(max_calls=1),
+        attempt_budget=b,
+        usage_accountant=acc,
+        allow_real_api=False,
+    )
+
+    assert res.status == "success"
+    assert res.text == "OK"
+    assert res.input_tokens == 21
+    assert res.output_tokens == 8
+    assert res.reasoning_tokens == 6
+    assert res.total_tokens == 29
+    assert res.error is None
+    assert res.last_provider_error is None
+    assert res.malformed_response_reason is None
+
+
+def test_canary_native_openai_usage_remains_canonical():
+    from types import SimpleNamespace
+
+    from moh.llm.budget import (
+        ProviderAttemptBudget,
+        ProviderAttemptLimits,
+        ProviderUsageAccountant,
+    )
+    from moh.llm.canary import CanaryLogicalGuard, _load_yaml_config, run_llm_canary
+    from moh.llm.openai_client import OpenAILLMClient
+
+    class Transport:
+        def __init__(self, resp):
+            self.resp = resp
+            self.responses = self
+        def create(self, **kwargs):
+            return self.resp
+
+    cfg = _load_yaml_config("configs/api_canary_offline.yaml")
+    resp = SimpleNamespace(
+        output_text="OK",
+        choices=[SimpleNamespace(message=SimpleNamespace(content="OK"))],
+        model=cfg.model,
+        usage=SimpleNamespace(prompt_tokens=21, completion_tokens=8, total_tokens=29, reasoning_tokens=6),
+        status="completed",
+    )
+    b = ProviderAttemptBudget(ProviderAttemptLimits(max_attempts=1))
+    acc = ProviderUsageAccountant()
+    client = OpenAILLMClient(
+        model=cfg.model,
+        timeout_seconds=5.0,
+        observer=lambda _: None,
+        transport=Transport(resp),
+        attempt_budget=b,
+        usage_accountant=acc,
+    )
+
+    res = run_llm_canary(
+        config=cfg,
+        llm_client=client,
+        logical_guard=CanaryLogicalGuard(max_calls=1),
+        attempt_budget=b,
+        usage_accountant=acc,
+        allow_real_api=False,
+    )
+
+    assert res.status == "success"
+    assert res.input_tokens == 21
+    assert res.output_tokens == 8
+    assert res.reasoning_tokens == 6
+    assert res.total_tokens == 29

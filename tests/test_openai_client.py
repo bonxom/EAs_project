@@ -456,3 +456,66 @@ def test_openai_client_none_token_semantics_accepted():
     result = client.generate("prompt")
     assert result == "hello"
 
+
+
+# ---------------------------------------------------------
+# M2E2B-UN: Token Usage Semantics Normalization Tests
+# ---------------------------------------------------------
+
+from moh.llm.openai_client import _normalize_token_usage_semantics
+
+
+def test_normalize_native_openai_noop():
+    # 21, 8, 6, 29 -> native OpenAI (total == 21+8, 6 <= 8)
+    inp, out, reas, tot = _normalize_token_usage_semantics(21, 8, 6, 29)
+    assert (inp, out, reas, tot) == (21, 8, 6, 29)
+
+def test_normalize_r3_9router_separate_thinking():
+    # 21, 2, 6, 29 -> 9router separate thinking (total == 21+2+6)
+    inp, out, reas, tot = _normalize_token_usage_semantics(21, 2, 6, 29)
+    assert (inp, out, reas, tot) == (21, 8, 6, 29)
+
+def test_normalize_separate_thinking_reasoning_le_visible():
+    # 10, 7, 3, 20 -> separate thinking with reasoning <= output (total == 10+7+3)
+    inp, out, reas, tot = _normalize_token_usage_semantics(10, 7, 3, 20)
+    assert (inp, out, reas, tot) == (10, 10, 3, 20)
+
+def test_normalize_zero_reasoning_unchanged():
+    inp, out, reas, tot = _normalize_token_usage_semantics(10, 2, 0, 12)
+    assert (inp, out, reas, tot) == (10, 2, 0, 12)
+
+def test_normalize_inconsistent_counts_not_normalized():
+    # 10, 2, 6, 17 -> neither 10+2 nor 10+2+6 matches 17
+    inp, out, reas, tot = _normalize_token_usage_semantics(10, 2, 6, 17)
+    assert (inp, out, reas, tot) == (10, 2, 6, 17)
+
+def test_normalize_missing_total_not_normalized():
+    # 10, 2, 6, None -> total is None
+    inp, out, reas, tot = _normalize_token_usage_semantics(10, 2, 6, None)
+    assert (inp, out, reas, tot) == (10, 2, 6, None)
+
+def test_openai_client_generate_r3_9router_usage_succeeds():
+    resp = make_mock_response(
+        content="OK",
+        input_tokens=21,
+        output_tokens=2,
+        reasoning_tokens=6,
+        total_tokens=29,
+    )
+    client = OpenAILLMClient("test-model", 2.0, lambda _: None, transport=Transport([resp]))
+    res = client.generate("prompt")
+    assert res == "OK"
+
+def test_openai_client_inconsistent_usage_stays_malformed():
+    resp = make_mock_response(
+        content="OK",
+        input_tokens=10,
+        output_tokens=2,
+        reasoning_tokens=6,
+        total_tokens=17,
+    )
+    client = OpenAILLMClient("test-model", 2.0, lambda _: None, transport=Transport([resp]))
+    with pytest.raises(GenerationError) as exc_info:
+        client.generate("prompt")
+    assert exc_info.value.code == "malformed_response"
+    assert exc_info.value.malformed_response_reason == "reasoning_exceeds_output"

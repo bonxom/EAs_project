@@ -45,6 +45,38 @@ def sanitize_provider_error(exc: Exception) -> str:
     return type(exc).__name__
 
 
+def _normalize_token_usage_semantics(
+    input_tokens: int | None,
+    output_tokens: int | None,
+    reasoning_tokens: int | None,
+    total_tokens: int | None,
+) -> tuple[int | None, int | None, int | None, int | None]:
+    if (
+        input_tokens is not None
+        and output_tokens is not None
+        and reasoning_tokens is not None
+        and total_tokens is not None
+    ):
+        if (
+            total_tokens == input_tokens + output_tokens
+            and reasoning_tokens <= output_tokens
+        ):
+            return input_tokens, output_tokens, reasoning_tokens, total_tokens
+
+        if (
+            reasoning_tokens > 0
+            and total_tokens == input_tokens + output_tokens + reasoning_tokens
+        ):
+            return (
+                input_tokens,
+                output_tokens + reasoning_tokens,
+                reasoning_tokens,
+                total_tokens,
+            )
+
+    return input_tokens, output_tokens, reasoning_tokens, total_tokens
+
+
 class OpenAILLMClient:
     def __init__(
         self,
@@ -300,6 +332,15 @@ class OpenAILLMClient:
                 raise_malformed("invalid_total_tokens_type")
             elif total_tokens is not None and total_tokens < 0:
                 raise_malformed("negative_total_tokens")
+
+            (
+                input_tokens,
+                output_tokens,
+                reasoning_tokens,
+                total_tokens,
+            ) = _normalize_token_usage_semantics(
+                input_tokens, output_tokens, reasoning_tokens, total_tokens
+            )
 
             if (
                 output_tokens is not None
