@@ -90,8 +90,17 @@ class OpenAILLMClient:
         if reasoning_tokens is None:
             reasoning_tokens = 0
 
+        total_tokens = getattr(usage, "total_tokens", None)
         model = getattr(response, "model", self.model)
-        return text, input_tokens, output_tokens, reasoning_tokens, model, True
+        return (
+            text,
+            input_tokens,
+            output_tokens,
+            reasoning_tokens,
+            total_tokens,
+            model,
+            True,
+        )
 
     def _fetch_completion(self, prompt):
         if hasattr(self.transport, "responses"):
@@ -122,6 +131,7 @@ class OpenAILLMClient:
                 if reasoning_tokens is None:
                     reasoning_tokens = 0
 
+                total_tokens = getattr(usage, "total_tokens", None)
                 model = getattr(response, "model", self.model)
                 status = getattr(response, "status", None)
                 return (
@@ -129,6 +139,7 @@ class OpenAILLMClient:
                     input_tokens,
                     output_tokens,
                     reasoning_tokens,
+                    total_tokens,
                     model,
                     status == "completed",
                 )
@@ -154,6 +165,7 @@ class OpenAILLMClient:
                     input_tokens,
                     output_tokens,
                     reasoning_tokens,
+                    total_tokens,
                     model,
                     is_completed,
                 ) = self._fetch_completion(prompt)
@@ -179,9 +191,30 @@ class OpenAILLMClient:
                 and isinstance(model, str)
                 and all(
                     x is None or (type(x) is int and x >= 0)
-                    for x in (input_tokens, output_tokens, reasoning_tokens)
+                    for x in (
+                        input_tokens,
+                        output_tokens,
+                        reasoning_tokens,
+                        total_tokens,
+                    )
                 )
             )
+            if (
+                valid
+                and output_tokens is not None
+                and reasoning_tokens is not None
+                and reasoning_tokens > output_tokens
+            ):
+                valid = False
+            if (
+                valid
+                and input_tokens is not None
+                and output_tokens is not None
+                and total_tokens is not None
+                and total_tokens != input_tokens + output_tokens
+            ):
+                valid = False
+
             if not valid:
                 self.observer(
                     CallMetadata(

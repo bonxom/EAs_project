@@ -61,7 +61,7 @@ class ProviderTokenUsage:
 
     @property
     def total_tokens(self) -> int:
-        return self.input_tokens + self.output_tokens + self.reasoning_tokens
+        return self.input_tokens + self.output_tokens
 
     def __post_init__(self):
         for name, val in (
@@ -73,6 +73,9 @@ class ProviderTokenUsage:
                 raise TypeError(f"{name} must be an integer (not bool)")
             if val < 0:
                 raise ValueError(f"{name} must be non-negative")
+
+        if self.reasoning_tokens > self.output_tokens:
+            raise ValueError("reasoning_tokens cannot exceed output_tokens")
 
 
 @dataclass(frozen=True)
@@ -152,17 +155,21 @@ class ModelPricing:
         reasoning_tokens: int = 0,
     ) -> Decimal:
         million = Decimal(1000000)
-        cost = (
-            Decimal(input_tokens) * self.input_usd_per_million_tokens / million
-            + Decimal(output_tokens) * self.output_usd_per_million_tokens / million
-        )
-        if reasoning_tokens > 0 and self.reasoning_usd_per_million_tokens is not None:
-            cost += (
-                Decimal(reasoning_tokens)
+        if self.reasoning_usd_per_million_tokens is not None and reasoning_tokens > 0:
+            visible_output_tokens = output_tokens - reasoning_tokens
+            return (
+                Decimal(input_tokens) * self.input_usd_per_million_tokens / million
+                + Decimal(visible_output_tokens)
+                * self.output_usd_per_million_tokens
+                / million
+                + Decimal(reasoning_tokens)
                 * self.reasoning_usd_per_million_tokens
                 / million
             )
-        return cost
+        return (
+            Decimal(input_tokens) * self.input_usd_per_million_tokens / million
+            + Decimal(output_tokens) * self.output_usd_per_million_tokens / million
+        )
 
 
 class ProviderUsageAccountant:
@@ -214,7 +221,7 @@ class ProviderUsageAccountant:
                     "provider_output_token_budget_exhausted"
                 )
 
-            total = self._input_tokens + self._output_tokens + self._reasoning_tokens
+            total = self._input_tokens + self._output_tokens
             if (
                 limits.max_total_tokens is not None
                 and total >= limits.max_total_tokens
@@ -248,6 +255,9 @@ class ProviderUsageAccountant:
         ):
             if type(val) is bool or not isinstance(val, int) or val < 0:
                 raise ValueError(f"{name} must be a non-negative integer (not bool)")
+
+        if reasoning_tokens > output_tokens:
+            raise ValueError("reasoning_tokens cannot exceed output_tokens")
 
         with self._lock:
             self._input_tokens += input_tokens

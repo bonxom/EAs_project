@@ -80,11 +80,47 @@ def noop_observer(metadata: CallMetadata):
 
 
 # ---------------------------------------------------------
+# Step 1 Regression: Responses API Path
+# ---------------------------------------------------------
+def test_responses_api_reasoning_tokens_path():
+    """Regression test for Responses API path ensuring reasoning_tokens is properly extracted."""
+    accountant = ProviderUsageAccountant()
+    fake_response = MagicMock()
+    fake_response.output_text = "responses api output"
+    fake_response.status = "completed"
+    fake_response.model = "test-model"
+    fake_response.usage = MagicMock(
+        input_tokens=100,
+        output_tokens=40,
+        output_tokens_details=MagicMock(reasoning_tokens=30),
+        total_tokens=140,
+    )
+    transport = MagicMock()
+    transport.responses.create.return_value = fake_response
+
+    client = OpenAILLMClient(
+        model="test-model",
+        timeout_seconds=5.0,
+        observer=noop_observer,
+        transport=transport,
+        usage_accountant=accountant,
+    )
+
+    res = client.generate("prompt")
+    assert res == "responses api output"
+    u = accountant.usage
+    assert u.input_tokens == 100
+    assert u.output_tokens == 40
+    assert u.reasoning_tokens == 30
+    assert u.total_tokens == 140
+
+
+# ---------------------------------------------------------
 # Step 2: Token Usage Model Unit Tests
 # ---------------------------------------------------------
 def test_provider_token_usage_validation():
     usage = ProviderTokenUsage(input_tokens=100, output_tokens=50, reasoning_tokens=10)
-    assert usage.total_tokens == 160
+    assert usage.total_tokens == 150  # 100 + 50 (NOT 160!)
 
     with pytest.raises(TypeError):
         ProviderTokenUsage(input_tokens=True)  # type: ignore
@@ -122,7 +158,7 @@ def test_provider_usage_limits_validation():
 
 
 # ---------------------------------------------------------
-# Step 7 & 8: Pricing & Cost Calculation
+# Pricing & Cost Calculation (Steps 6, 8, 9)
 # ---------------------------------------------------------
 def test_model_pricing_cost_calculation():
     pricing = ModelPricing(
@@ -131,12 +167,132 @@ def test_model_pricing_cost_calculation():
         reasoning_usd_per_million_tokens=Decimal("10.00"),
     )
     # 1,000,000 input = $1.50
-    # 1,000,000 output = $6.00
+    # 900,000 visible output (1M - 100k) = $5.40
     # 100,000 reasoning = $1.00
+    # Total = 1.50 + 5.40 + 1.00 = $7.90
     cost = pricing.calculate_cost(
         input_tokens=1_000_000, output_tokens=1_000_000, reasoning_tokens=100_000
     )
-    assert cost == Decimal("8.50")
+    assert cost == Decimal("7.90")
+
+
+def test_normal_cost_with_reasoning():
+    """Step 8: Standard output-inclusive pricing where reasoning adds no extra charge."""
+    pricing = ModelPricing(
+        input_usd_per_million_tokens=Decimal("1.00"),
+        output_usd_per_million_tokens=Decimal("2.00"),
+    )
+    cost = pricing.calculate_cost(input_tokens=100, output_tokens=40, reasoning_tokens=30)
+    # 100*1/1e6 + 40*2/1e6 = 0.00018
+    assert cost == Decimal("0.00018")
+
+
+def test_separate_reasoning_price():
+    """Step 9: Separate reasoning rate recalculates visible output tokens to avoid double counting."""
+    pricing = ModelPricing(
+        input_usd_per_million_tokens=Decimal("1.00"),
+        output_usd_per_million_tokens=Decimal("2.00"),
+        reasoning_usd_per_million_tokens=Decimal("3.00"),
+    )
+    cost = pricing.calculate_cost(input_tokens=100, output_tokens=40, reasoning_tokens=30)
+    # Visible output = 40 - 30 = 10
+    # 100*1/1e6 + 10*2/1e6 + 30*3/1e6 = 0.00021
+    assert cost == Decimal("0.00021")
+
+
+# ---------------------------------------------------------
+# Step 7: Required Nonzero Reasoning Test
+# ---------------------------------------------------------
+def test_nonzero_reasoning_total():
+    u = ProviderTokenUsage(input_tokens=100, output_tokens=40, reasoning_tokens=30)
+    assert u.input_tokens == 100
+    assert u.output_tokens == 40
+    assert u.reasoning_tokens == 30
+    assert u.total_tokens == 140  # NOT 170!
+
+
+# ---------------------------------------------------------
+# Step 10: Malformed Reasoning Test
+# ---------------------------------------------------------
+def test_malformed_reasoning_exceeds_output():
+    accountant = ProviderUsageAccountant()
+    t = FakeTransport(
+        responses=[FakeResponse(prompt_tokens=100, completion_tokens=20, reasoning_tokens=21)]
+    )
+    c = OpenAILLMClient(
+        model="test-model",
+        timeout_seconds=5.0,
+        observer=noop_observer,
+        transport=t,
+        usage_accountant=accountant,
+    )
+    with pytest.raises(GenerationError) as exc_info:
+        c.generate("prompt")
+    assert str(exc_info.value) == "malformed_response"
+
+
+# ---------------------------------------------------------
+# Step 12: Total-Budget Regression
+# ---------------------------------------------------------
+def test_total_budget_regression_with_reasoning():
+    accountant = ProviderUsageAccountant()
+    limits = ProviderUsageLimits(max_total_tokens=200)
+
+    accountant.record("test-model", input_tokens=100, output_tokens=100, reasoning_tokens=80)
+    assert accountant.usage.total_tokens == 200  # NOT 280!
+
+    t = FakeTransport()
+    c = OpenAILLMClient(
+        model="test-model",
+        timeout_seconds=5.0,
+        observer=noop_observer,
+        transport=t,
+        usage_accountant=accountant,
+        usage_limits=limits,
+    )
+    with pytest.raises(ProviderUsageBudgetExceeded) as exc_info:
+        c.generate("prompt")
+
+    assert exc_info.value.code == "provider_total_token_budget_exhausted"
+    assert t.call_count == 0
+
+
+# ---------------------------------------------------------
+# Provider total_tokens Consistency Test (Step 5)
+# ---------------------------------------------------------
+def test_provider_total_tokens_consistency():
+    # Inconsistent total_tokens (150 != 100 + 40)
+    fake_usage_bad = FakeUsage(prompt_tokens=100, completion_tokens=40)
+    fake_usage_bad.total_tokens = 150
+    resp_bad = FakeResponse()
+    resp_bad.usage = fake_usage_bad
+
+    t_bad = FakeTransport(responses=[resp_bad])
+    c_bad = OpenAILLMClient(
+        model="test-model",
+        timeout_seconds=5.0,
+        observer=noop_observer,
+        transport=t_bad,
+    )
+    with pytest.raises(GenerationError) as exc_info:
+        c_bad.generate("prompt")
+    assert str(exc_info.value) == "malformed_response"
+
+    # Consistent total_tokens (140 == 100 + 40)
+    fake_usage_good = FakeUsage(prompt_tokens=100, completion_tokens=40)
+    fake_usage_good.total_tokens = 140
+    resp_good = FakeResponse()
+    resp_good.usage = fake_usage_good
+
+    t_good = FakeTransport(responses=[resp_good])
+    c_good = OpenAILLMClient(
+        model="test-model",
+        timeout_seconds=5.0,
+        observer=noop_observer,
+        transport=t_good,
+    )
+    res = c_good.generate("prompt")
+    assert res == "generated response"
 
 
 # ---------------------------------------------------------
