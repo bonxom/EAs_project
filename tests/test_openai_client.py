@@ -131,6 +131,33 @@ def test_preconditions(monkeypatch):
             OpenAILLMClient(model, timeout, lambda _: None, transport=Transport([]))
 
 
+def test_last_provider_error_preserved_on_budget_exhaustion():
+    from moh.llm.budget import (
+        ProviderAttemptBudget,
+        ProviderAttemptBudgetExceeded,
+        ProviderAttemptLimits,
+    )
+
+    budget = ProviderAttemptBudget(ProviderAttemptLimits(max_attempts=1))
+    transport = Transport([transient(), response()])
+    client = OpenAILLMClient(
+        "test-model",
+        2.0,
+        lambda _: None,
+        transport=transport,
+        attempt_budget=budget,
+        sleep=lambda _: None,
+    )
+    with pytest.raises(ProviderAttemptBudgetExceeded) as caught:
+        client.generate("prompt")
+
+    assert caught.value.code == "provider_attempt_budget_exhausted"
+    assert caught.value.last_provider_error == "provider_connection_error"
+    assert client.last_provider_error == "provider_connection_error"
+    assert len(transport.requests) == 1
+    assert budget.usage.attempts == 1
+
+
 def test_both_keys_present_precedence(monkeypatch):
     captured_kwargs = {}
 

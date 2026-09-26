@@ -28,6 +28,14 @@ class ProviderAttemptBudgetExceeded(GenerationError):
 
     code: str = "provider_attempt_budget_exhausted"
 
+    def __init__(
+        self,
+        code: str = "provider_attempt_budget_exhausted",
+        last_provider_error: str | None = None,
+    ):
+        super().__init__(code, last_provider_error=last_provider_error)
+        self.code = code
+
 
 class ProviderAttemptBudget:
     def __init__(self, limits: ProviderAttemptLimits):

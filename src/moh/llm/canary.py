@@ -127,6 +127,7 @@ class CanaryResult:
     total_tokens: int
     estimated_cost_usd: Decimal | None
     error: str | None = None
+    last_provider_error: str | None = None
 
     def to_dict(self) -> dict:
         d = asdict(self)
@@ -242,6 +243,9 @@ def run_llm_canary(
         )
     except GenerationError as exc:
         code = getattr(exc, "code", str(exc))
+        last_prov_err = getattr(exc, "last_provider_error", None) or getattr(
+            llm_client, "last_provider_error", None
+        )
         u = usage_accountant.usage
         return CanaryResult(
             status="failed",
@@ -257,6 +261,7 @@ def run_llm_canary(
             total_tokens=u.total_tokens,
             estimated_cost_usd=usage_accountant.estimated_cost_usd,
             error=code,
+            last_provider_error=last_prov_err,
         )
 
 

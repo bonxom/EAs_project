@@ -7,6 +7,7 @@ import time
 import openai
 
 from moh.llm.base import CallMetadata, GenerationError
+from moh.llm.budget import ProviderAttemptBudgetExceeded
 
 
 def resolve_base_url() -> str | None:
@@ -32,6 +33,16 @@ def validate_environment():
 def redact_credentials(text):
     key = resolve_api_key()
     return text.replace(key, "[REDACTED]") if key else text
+
+
+def sanitize_provider_error(exc: Exception) -> str:
+    if isinstance(exc, openai.APITimeoutError):
+        return "provider_timeout"
+    if isinstance(exc, openai.APIConnectionError):
+        return "provider_connection_error"
+    if isinstance(exc, openai.RateLimitError):
+        return "provider_rate_limited"
+    return type(exc).__name__
 
 
 class OpenAILLMClient:
@@ -81,6 +92,7 @@ class OpenAILLMClient:
         self.max_output_tokens = max_output_tokens
         self.api_mode = api_mode
         self.owns_transport = transport is None
+        self.last_provider_error = None
         if transport is not None:
             self.transport = transport
         else:
@@ -193,13 +205,18 @@ class OpenAILLMClient:
         return self._fetch_chat_completion(prompt)
 
     def generate(self, prompt):
+        self.last_provider_error = None
         for attempt in range(1, 4):
             if self.usage_accountant is not None:
                 self.usage_accountant.check_pre_request_guard(
                     self.usage_limits, self.model
                 )
             if self.attempt_budget is not None:
-                self.attempt_budget.reserve()
+                try:
+                    self.attempt_budget.reserve()
+                except ProviderAttemptBudgetExceeded as exc:
+                    exc.last_provider_error = self.last_provider_error
+                    raise
             try:
                 (
                     text,
@@ -214,16 +231,17 @@ class OpenAILLMClient:
                 transient = isinstance(
                     exc, (openai.APIConnectionError, openai.RateLimitError)
                 ) or (isinstance(exc, openai.APIStatusError) and exc.status_code >= 500)
-                error = type(
-                    exc
-                ).__name__  # Never retain headers, bodies, or credentials.
+                error_code = sanitize_provider_error(exc)
+                self.last_provider_error = error_code
                 self.observer(
                     CallMetadata(
-                        "openai", self.model, attempt, "failed", None, None, error
+                        "openai", self.model, attempt, "failed", None, None, error_code
                     )
                 )
                 if not transient or attempt == 3:
-                    raise GenerationError(error) from None
+                    raise GenerationError(
+                        error_code, last_provider_error=error_code
+                    ) from None
                 self.sleep(0.25 * attempt)
                 continue
             valid = isinstance(text, str) and bool(text.strip()) and is_completed

@@ -373,7 +373,88 @@ def test_retry_blocked_before_sdk():
 
     assert result.status == "failed"
     assert result.error == "provider_attempt_budget_exhausted"
+    assert result.last_provider_error == "provider_connection_error"
     assert transport.call_count == 1
+    assert attempt_budget.usage.attempts == 1
+
+
+def test_retry_blocked_on_timeout():
+    import openai
+
+    cfg = make_valid_config(mode="offline")
+    accountant = ProviderUsageAccountant()
+    attempt_budget = ProviderAttemptBudget(ProviderAttemptLimits(max_attempts=1))
+    logical_guard = CanaryLogicalGuard(max_calls=1)
+
+    err = openai.APITimeoutError(request=MagicMock())
+    transport = FakeTransport(responses=[err, FakeResponse()])
+
+    client = OpenAILLMClient(
+        model=cfg.model,
+        timeout_seconds=5.0,
+        observer=noop_observer,
+        transport=transport,
+        attempt_budget=attempt_budget,
+        usage_accountant=accountant,
+        max_output_tokens=8,
+        sleep=lambda _: None,
+    )
+
+    result = run_llm_canary(
+        config=cfg,
+        llm_client=client,
+        logical_guard=logical_guard,
+        attempt_budget=attempt_budget,
+        usage_accountant=accountant,
+    )
+
+    assert result.status == "failed"
+    assert result.error == "provider_attempt_budget_exhausted"
+    assert result.last_provider_error == "provider_timeout"
+    assert transport.call_count == 1
+    assert attempt_budget.usage.attempts == 1
+
+
+def test_secret_redaction_in_provider_error():
+    import openai
+
+    secret = "TEST_SECRET_MUST_NOT_LEAK"
+    cfg = make_valid_config(mode="offline")
+    accountant = ProviderUsageAccountant()
+    attempt_budget = ProviderAttemptBudget(ProviderAttemptLimits(max_attempts=1))
+    logical_guard = CanaryLogicalGuard(max_calls=1)
+
+    err = openai.APIConnectionError(message=secret, request=MagicMock())
+    transport = FakeTransport(responses=[err, FakeResponse()])
+
+    client = OpenAILLMClient(
+        model=cfg.model,
+        timeout_seconds=5.0,
+        observer=noop_observer,
+        transport=transport,
+        attempt_budget=attempt_budget,
+        usage_accountant=accountant,
+        max_output_tokens=8,
+        sleep=lambda _: None,
+    )
+
+    result = run_llm_canary(
+        config=cfg,
+        llm_client=client,
+        logical_guard=logical_guard,
+        attempt_budget=attempt_budget,
+        usage_accountant=accountant,
+    )
+
+    r_repr = repr(result)
+    r_dict = str(result.to_dict())
+    r_json = json.dumps(result.to_dict())
+
+    assert secret not in r_repr
+    assert secret not in r_dict
+    assert secret not in r_json
+    assert result.error == "provider_attempt_budget_exhausted"
+    assert result.last_provider_error == "provider_connection_error"
 
 
 def test_malformed_usage_fails_real_canary(monkeypatch):
