@@ -102,6 +102,7 @@ def test_invalid_config_has_no_side_effects(tmp_path, monkeypatch):
     with pytest.raises(ValueError):
         run_experiment(invalid)
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.delenv("OPENAI_COMPAT_API_KEY", raising=False)
     with pytest.raises(ValueError):
         run_experiment(
             ExperimentConfig.model_validate(

@@ -9,13 +9,28 @@ import openai
 from moh.llm.base import CallMetadata, GenerationError
 
 
+def resolve_base_url() -> str | None:
+    return (
+        os.environ.get("OPENAI_COMPAT_BASE_URL", "").strip()
+        or os.environ.get("OPENAI_BASE_URL", "").strip()
+        or None
+    )
+
+
+def resolve_api_key() -> str:
+    return (
+        os.environ.get("OPENAI_API_KEY", "").strip()
+        or os.environ.get("OPENAI_COMPAT_API_KEY", "").strip()
+    )
+
+
 def validate_environment():
-    if not os.environ.get("OPENAI_API_KEY", "").strip():
+    if not resolve_api_key():
         raise ValueError("OPENAI_API_KEY must be configured")
 
 
 def redact_credentials(text):
-    key = os.environ.get("OPENAI_API_KEY", "")
+    key = resolve_api_key()
     return text.replace(key, "[REDACTED]") if key else text
 
 
@@ -32,6 +47,7 @@ class OpenAILLMClient:
         usage_accountant=None,
         usage_limits=None,
         max_output_tokens=None,
+        api_mode="auto",
     ):
         validate_environment()
         if not isinstance(model, str) or not model.strip():
@@ -63,13 +79,14 @@ class OpenAILLMClient:
         self.usage_accountant = usage_accountant
         self.usage_limits = usage_limits
         self.max_output_tokens = max_output_tokens
+        self.api_mode = api_mode
         self.owns_transport = transport is None
         if transport is not None:
             self.transport = transport
         else:
-            base_url = os.environ.get("OPENAI_BASE_URL", "").strip() or None
+            base_url = resolve_base_url()
             kwargs = {
-                "api_key": os.environ["OPENAI_API_KEY"],
+                "api_key": resolve_api_key(),
                 "timeout": timeout_seconds,
                 "max_retries": 0,
             }
@@ -119,7 +136,9 @@ class OpenAILLMClient:
         )
 
     def _fetch_completion(self, prompt):
-        if hasattr(self.transport, "responses"):
+        if self.api_mode == "responses" or (
+            self.api_mode == "auto" and hasattr(self.transport, "responses")
+        ):
             try:
                 kwargs = {
                     "model": self.model,

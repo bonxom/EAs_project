@@ -100,6 +100,7 @@ def test_observer_error_not_retried():
 
 
 def test_preconditions(monkeypatch):
+    monkeypatch.delenv("OPENAI_COMPAT_API_KEY", raising=False)
     for key in ["", "  "]:
         monkeypatch.setenv("OPENAI_API_KEY", key)
         with pytest.raises(ValueError):

@@ -15,6 +15,7 @@ from moh.llm.budget import (
     ProviderAttemptLimits,
     ProviderUsageAccountant,
 )
+from moh.llm.openai_client import resolve_api_key
 
 CANARY_FIXED_PROMPT = "Return exactly the word OK."
 
@@ -161,7 +162,7 @@ def run_llm_canary(
         )
 
     if config.mode == "real":
-        api_key = os.environ.get("OPENAI_API_KEY", "").strip()
+        api_key = resolve_api_key()
         if not api_key:
             u = usage_accountant.usage
             return CanaryResult(
@@ -266,6 +267,12 @@ def _load_yaml_config(path: str) -> CanaryConfig:
     mode_raw = raw.get("mode", "offline")
     mode = "offline" if mode_raw in ("offline", "fake") else mode_raw
 
+    model = (
+        os.environ.get("OPENAI_COMPAT_MODEL", "").strip()
+        or os.environ.get("OPENAI_MODEL", "").strip()
+        or raw.get("model", "gpt-4o-mini")
+    )
+
     return CanaryConfig(
         mode=mode,
         logical_generate_limit=raw["logical_generate_limit"],
@@ -273,7 +280,7 @@ def _load_yaml_config(path: str) -> CanaryConfig:
         evaluate_limit=raw["evaluate_limit"],
         prompt=raw["prompt"],
         max_output_tokens=raw.get("max_output_tokens"),
-        model=raw["model"],
+        model=model,
     )
 
 
@@ -315,7 +322,7 @@ def main():
         return
 
     if config.mode == "real":
-        api_key = os.environ.get("OPENAI_API_KEY", "").strip()
+        api_key = resolve_api_key()
         if not api_key:
             result = CanaryResult(
                 status="failed",
@@ -334,45 +341,47 @@ def main():
             )
             print(json.dumps(result.to_dict(), indent=2))
             return
+        transport = None
+    else:
+        os.environ.setdefault("OPENAI_API_KEY", "fake-offline-key")
 
-    os.environ.setdefault("OPENAI_API_KEY", "fake-offline-key")
+        class FakeChoice:
+            def __init__(self, content="OK"):
+                self.message = MagicMock(content=content)
 
-    class FakeChoice:
-        def __init__(self, content="OK"):
-            self.message = MagicMock(content=content)
+        class FakeUsage:
+            def __init__(self):
+                self.prompt_tokens = 10
+                self.completion_tokens = 1
+                self.input_tokens = 10
+                self.output_tokens = 1
+                self.total_tokens = 11
+                self.completion_tokens_details = MagicMock(reasoning_tokens=0)
+                self.reasoning_tokens = 0
 
-    class FakeUsage:
-        def __init__(self):
-            self.prompt_tokens = 10
-            self.completion_tokens = 1
-            self.input_tokens = 10
-            self.output_tokens = 1
-            self.total_tokens = 11
-            self.completion_tokens_details = MagicMock(reasoning_tokens=0)
-            self.reasoning_tokens = 0
+        class FakeResponse:
+            def __init__(self):
+                self.choices = [FakeChoice("OK")]
+                self.usage = FakeUsage()
+                self.model = config.model
 
-    class FakeResponse:
-        def __init__(self):
-            self.choices = [FakeChoice("OK")]
-            self.usage = FakeUsage()
-            self.model = config.model
+        class FakeTransport:
+            def __init__(self):
+                self.call_count = 0
+                self.chat = MagicMock()
+                self.chat.completions.create.side_effect = self._create
 
-    class FakeTransport:
-        def __init__(self):
-            self.call_count = 0
-            self.chat = MagicMock()
-            self.chat.completions.create.side_effect = self._create
+            def _create(self, **kwargs):
+                self.call_count += 1
+                return FakeResponse()
 
-        def _create(self, **kwargs):
-            self.call_count += 1
-            return FakeResponse()
+        transport = FakeTransport()
 
     attempt_budget = ProviderAttemptBudget(
         ProviderAttemptLimits(max_attempts=config.provider_attempt_limit)
     )
     usage_accountant = ProviderUsageAccountant()
     logical_guard = CanaryLogicalGuard(max_calls=config.logical_generate_limit)
-    transport = FakeTransport()
 
     client = OpenAILLMClient(
         model=config.model,
@@ -382,6 +391,7 @@ def main():
         attempt_budget=attempt_budget,
         usage_accountant=usage_accountant,
         max_output_tokens=config.max_output_tokens,
+        api_mode="chat_completions",
     )
 
     result = run_llm_canary(

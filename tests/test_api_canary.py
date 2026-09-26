@@ -505,3 +505,237 @@ def test_cli_real_mode_without_allow_flag_outputs_failure_json():
     assert data["status"] == "failed"
     assert data["error"] == "real_api_not_authorized"
     assert data["max_output_tokens_requested"] == 8
+
+
+
+# ---------------------------------------------------------
+# M2E2A Real Proxy Wiring & Transport Separation Tests
+# ---------------------------------------------------------
+@pytest.fixture(autouse=True)
+def block_sockets(monkeypatch):
+    import socket
+
+    def guard(*args, **kwargs):
+        raise RuntimeError("Network socket creation blocked in test suite")
+
+    monkeypatch.setattr(socket, "socket", guard)
+
+
+def test_base_url_resolution_precedence(monkeypatch):
+    from moh.llm.openai_client import resolve_base_url
+
+    monkeypatch.setenv("OPENAI_COMPAT_BASE_URL", "http://localhost:20128/v1")
+    monkeypatch.setenv("OPENAI_BASE_URL", "http://other.invalid/v1")
+    assert resolve_base_url() == "http://localhost:20128/v1"
+
+    monkeypatch.delenv("OPENAI_COMPAT_BASE_URL")
+    assert resolve_base_url() == "http://other.invalid/v1"
+
+    monkeypatch.delenv("OPENAI_BASE_URL")
+    assert resolve_base_url() is None
+
+
+def test_model_resolution_precedence(monkeypatch, tmp_path):
+    from moh.llm.canary import _load_yaml_config
+
+    cfg_file = tmp_path / "test_cfg.yaml"
+    cfg_file.write_text(
+        "mode: real\n"
+        "logical_generate_limit: 1\n"
+        "provider_attempt_limit: 1\n"
+        "evaluate_limit: 0\n"
+        "prompt: 'Return exactly the word OK.'\n"
+        "max_output_tokens: 8\n"
+        "model: 'ag/yaml-model'\n"
+    )
+
+    # Test A: COMPAT > MODEL > YAML
+    monkeypatch.setenv("OPENAI_COMPAT_MODEL", "ag/compat-model")
+    monkeypatch.setenv("OPENAI_MODEL", "ag/openai-model")
+    assert _load_yaml_config(str(cfg_file)).model == "ag/compat-model"
+
+    # Test B: MODEL > YAML (when COMPAT absent)
+    monkeypatch.delenv("OPENAI_COMPAT_MODEL")
+    assert _load_yaml_config(str(cfg_file)).model == "ag/openai-model"
+
+    # Test C: YAML (when both absent)
+    monkeypatch.delenv("OPENAI_MODEL")
+    assert _load_yaml_config(str(cfg_file)).model == "ag/yaml-model"
+
+
+def test_real_mode_construction_with_fake_openai_client(monkeypatch):
+    from unittest.mock import MagicMock
+
+    from moh.llm.budget import (
+        ProviderAttemptBudget,
+        ProviderAttemptLimits,
+        ProviderUsageAccountant,
+    )
+    from moh.llm.canary import CanaryLogicalGuard, _load_yaml_config, run_llm_canary
+    from moh.llm.openai_client import OpenAILLMClient
+
+    captured_sdk_kwargs = {}
+    captured_create_kwargs = {}
+
+    class FakeSDKChoice:
+        def __init__(self, content="OK"):
+            self.message = MagicMock(content=content)
+
+    class FakeSDKUsage:
+        def __init__(self):
+            self.prompt_tokens = 10
+            self.completion_tokens = 1
+            self.input_tokens = 10
+            self.output_tokens = 1
+            self.total_tokens = 11
+            self.completion_tokens_details = MagicMock(reasoning_tokens=0)
+
+    class FakeSDKResponse:
+        def __init__(self, model):
+            self.choices = [FakeSDKChoice("OK")]
+            self.usage = FakeSDKUsage()
+            self.model = model
+
+    class FakeSDKTransport:
+        def __init__(self, **kwargs):
+            captured_sdk_kwargs.update(kwargs)
+            self.chat = MagicMock()
+            self.chat.completions.create.side_effect = self._create
+
+        def _create(self, **kwargs):
+            captured_create_kwargs.update(kwargs)
+            return FakeSDKResponse(kwargs.get("model", "unknown"))
+
+    monkeypatch.setattr("openai.OpenAI", FakeSDKTransport)
+    monkeypatch.setenv("OPENAI_API_KEY", "fake-local-proxy-key")
+    monkeypatch.setenv("OPENAI_COMPAT_BASE_URL", "http://localhost:20128/v1")
+    monkeypatch.setenv("OPENAI_COMPAT_MODEL", "ag/gemini-3.6-flash-low")
+
+    cfg = _load_yaml_config("configs/api_canary_real.yaml")
+    attempt_budget = ProviderAttemptBudget(ProviderAttemptLimits(max_attempts=cfg.provider_attempt_limit))
+    usage_accountant = ProviderUsageAccountant()
+    logical_guard = CanaryLogicalGuard(max_calls=cfg.logical_generate_limit)
+
+    client = OpenAILLMClient(
+        model=cfg.model,
+        timeout_seconds=5.0,
+        observer=lambda _: None,
+        transport=None,
+        attempt_budget=attempt_budget,
+        usage_accountant=usage_accountant,
+        max_output_tokens=cfg.max_output_tokens,
+        api_mode="chat_completions",
+    )
+
+    res = run_llm_canary(
+        config=cfg,
+        llm_client=client,
+        logical_guard=logical_guard,
+        attempt_budget=attempt_budget,
+        usage_accountant=usage_accountant,
+        allow_real_api=True,
+    )
+
+    assert res.status == "success"
+    assert captured_sdk_kwargs["api_key"] == "fake-local-proxy-key"
+    assert captured_sdk_kwargs["base_url"] == "http://localhost:20128/v1"
+    assert captured_sdk_kwargs["max_retries"] == 0
+    assert captured_create_kwargs["model"] == "ag/gemini-3.6-flash-low"
+    assert captured_create_kwargs["max_completion_tokens"] == 8
+    assert res.logical_generate_requests == 1
+    assert res.provider_attempts == 1
+
+
+def test_offline_mode_does_not_instantiate_openai(monkeypatch):
+    from moh.llm.budget import (
+        ProviderAttemptBudget,
+        ProviderAttemptLimits,
+        ProviderUsageAccountant,
+    )
+    from moh.llm.canary import CanaryLogicalGuard, _load_yaml_config, run_llm_canary
+    from moh.llm.openai_client import OpenAILLMClient
+
+    def error_factory(*args, **kwargs):
+        raise RuntimeError("openai.OpenAI should not be called in offline mode")
+
+    monkeypatch.setattr("openai.OpenAI", error_factory)
+
+    cfg = _load_yaml_config("configs/api_canary_offline.yaml")
+    attempt_budget = ProviderAttemptBudget(ProviderAttemptLimits(max_attempts=1))
+    usage_accountant = ProviderUsageAccountant()
+    logical_guard = CanaryLogicalGuard(max_calls=1)
+
+    class FakeOfflineTransport:
+        def __init__(self):
+            from unittest.mock import MagicMock
+            self.chat = MagicMock()
+            resp = MagicMock()
+            resp.choices = [MagicMock(message=MagicMock(content="OK"))]
+            resp.usage = MagicMock(prompt_tokens=5, completion_tokens=1, input_tokens=5, output_tokens=1, total_tokens=6, completion_tokens_details=MagicMock(reasoning_tokens=0))
+            resp.model = cfg.model
+            self.chat.completions.create.return_value = resp
+
+    client = OpenAILLMClient(
+        model=cfg.model,
+        timeout_seconds=5.0,
+        observer=lambda _: None,
+        transport=FakeOfflineTransport(),
+        attempt_budget=attempt_budget,
+        usage_accountant=usage_accountant,
+        max_output_tokens=cfg.max_output_tokens,
+    )
+
+    res = run_llm_canary(
+        config=cfg,
+        llm_client=client,
+        logical_guard=logical_guard,
+        attempt_budget=attempt_budget,
+        usage_accountant=usage_accountant,
+        allow_real_api=False,
+    )
+    assert res.status == "success"
+
+
+def test_double_opt_in_regression_cases(monkeypatch):
+    from moh.llm.budget import (
+        ProviderAttemptBudget,
+        ProviderAttemptLimits,
+        ProviderUsageAccountant,
+    )
+    from moh.llm.canary import CanaryLogicalGuard, _load_yaml_config, run_llm_canary
+
+    called = []
+    def fake_openai(*args, **kwargs):
+        called.append(kwargs)
+        raise RuntimeError("Fake SDK instantiated")
+
+    monkeypatch.setattr("openai.OpenAI", fake_openai)
+    cfg = _load_yaml_config("configs/api_canary_real.yaml")
+
+    # Case A: Real mode without --allow-real-api
+    res_a = run_llm_canary(
+        config=cfg,
+        llm_client=None,
+        logical_guard=CanaryLogicalGuard(max_calls=1),
+        attempt_budget=ProviderAttemptBudget(ProviderAttemptLimits(max_attempts=1)),
+        usage_accountant=ProviderUsageAccountant(),
+        allow_real_api=False,
+    )
+    assert res_a.status == "failed"
+    assert res_a.error == "real_api_not_authorized"
+    assert len(called) == 0
+
+    # Case B: Real mode with allow flag but missing credential
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.delenv("OPENAI_COMPAT_API_KEY", raising=False)
+    res_b = run_llm_canary(
+        config=cfg,
+        llm_client=None,
+        logical_guard=CanaryLogicalGuard(max_calls=1),
+        attempt_budget=ProviderAttemptBudget(ProviderAttemptLimits(max_attempts=1)),
+        usage_accountant=ProviderUsageAccountant(),
+        allow_real_api=True,
+    )
+    assert res_b.status == "failed"
+    assert res_b.error == "missing_provider_credential"
+    assert len(called) == 0
