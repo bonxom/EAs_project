@@ -10,9 +10,22 @@ from moh.llm.budget import (
     ProviderUsageBudgetExceeded,
     ProviderUsageLimits,
 )
+from moh.llm.canary import (
+    CANARY_FIXED_PROMPT,
+    CanaryConfig,
+    CanaryLogicalGuard,
+    CanaryLogicalGuardExceeded,
+    CanaryResult,
+    run_llm_canary,
+)
 
 __all__ = [
+    "CANARY_FIXED_PROMPT",
     "CallMetadata",
+    "CanaryConfig",
+    "CanaryLogicalGuard",
+    "CanaryLogicalGuardExceeded",
+    "CanaryResult",
     "GenerationError",
     "LLMClient",
     "ModelPricing",
@@ -24,5 +37,6 @@ __all__ = [
     "ProviderUsageAccountant",
     "ProviderUsageBudgetExceeded",
     "ProviderUsageLimits",
+    "run_llm_canary",
 ]
 
