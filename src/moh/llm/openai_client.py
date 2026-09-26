@@ -29,6 +29,8 @@ class OpenAILLMClient:
         transport=None,
         sleep=time.sleep,
         attempt_budget=None,
+        usage_accountant=None,
+        usage_limits=None,
     ):
         validate_environment()
         if not isinstance(model, str) or not model.strip():
@@ -46,6 +48,8 @@ class OpenAILLMClient:
             sleep,
         )
         self.attempt_budget = attempt_budget
+        self.usage_accountant = usage_accountant
+        self.usage_limits = usage_limits
         self.owns_transport = transport is None
         if transport is not None:
             self.transport = transport
@@ -73,9 +77,21 @@ class OpenAILLMClient:
         )
         usage = getattr(response, "usage", None)
         input_tokens = getattr(usage, "prompt_tokens", None)
+        if input_tokens is None:
+            input_tokens = getattr(usage, "input_tokens", None)
         output_tokens = getattr(usage, "completion_tokens", None)
+        if output_tokens is None:
+            output_tokens = getattr(usage, "output_tokens", None)
+
+        details = getattr(usage, "completion_tokens_details", None)
+        reasoning_tokens = getattr(details, "reasoning_tokens", None)
+        if reasoning_tokens is None:
+            reasoning_tokens = getattr(usage, "reasoning_tokens", None)
+        if reasoning_tokens is None:
+            reasoning_tokens = 0
+
         model = getattr(response, "model", self.model)
-        return text, input_tokens, output_tokens, model, True
+        return text, input_tokens, output_tokens, reasoning_tokens, model, True
 
     def _fetch_completion(self, prompt):
         if hasattr(self.transport, "responses"):
@@ -91,10 +107,31 @@ class OpenAILLMClient:
                         return self._fetch_chat_completion(prompt)
                 usage = getattr(response, "usage", None)
                 input_tokens = getattr(usage, "input_tokens", None)
+                if input_tokens is None:
+                    input_tokens = getattr(usage, "prompt_tokens", None)
                 output_tokens = getattr(usage, "output_tokens", None)
+                if output_tokens is None:
+                    output_tokens = getattr(usage, "completion_tokens", None)
+
+                details = getattr(usage, "output_tokens_details", None)
+                if details is None:
+                    details = getattr(usage, "completion_tokens_details", None)
+                reasoning_tokens = getattr(details, "reasoning_tokens", None)
+                if reasoning_tokens is None:
+                    reasoning_tokens = getattr(usage, "reasoning_tokens", None)
+                if reasoning_tokens is None:
+                    reasoning_tokens = 0
+
                 model = getattr(response, "model", self.model)
                 status = getattr(response, "status", None)
-                return text, input_tokens, output_tokens, model, status == "completed"
+                return (
+                    text,
+                    input_tokens,
+                    output_tokens,
+                    reasoning_tokens,
+                    model,
+                    status == "completed",
+                )
             except (openai.NotFoundError, AttributeError):
                 pass
             except openai.APIStatusError as exc:
@@ -105,12 +142,21 @@ class OpenAILLMClient:
 
     def generate(self, prompt):
         for attempt in range(1, 4):
+            if self.usage_accountant is not None:
+                self.usage_accountant.check_pre_request_guard(
+                    self.usage_limits, self.model
+                )
             if self.attempt_budget is not None:
                 self.attempt_budget.reserve()
             try:
-                text, input_tokens, output_tokens, model, is_completed = (
-                    self._fetch_completion(prompt)
-                )
+                (
+                    text,
+                    input_tokens,
+                    output_tokens,
+                    reasoning_tokens,
+                    model,
+                    is_completed,
+                ) = self._fetch_completion(prompt)
             except openai.APIError as exc:
                 transient = isinstance(
                     exc, (openai.APIConnectionError, openai.RateLimitError)
@@ -133,7 +179,7 @@ class OpenAILLMClient:
                 and isinstance(model, str)
                 and all(
                     x is None or (type(x) is int and x >= 0)
-                    for x in (input_tokens, output_tokens)
+                    for x in (input_tokens, output_tokens, reasoning_tokens)
                 )
             )
             if not valid:
@@ -149,6 +195,33 @@ class OpenAILLMClient:
                     )
                 )
                 raise GenerationError("malformed_response")
+
+            rec_input = input_tokens if input_tokens is not None else 0
+            rec_output = output_tokens if output_tokens is not None else 0
+            rec_reasoning = reasoning_tokens if reasoning_tokens is not None else 0
+
+            if self.usage_accountant is not None:
+                try:
+                    self.usage_accountant.record(
+                        model=model,
+                        input_tokens=rec_input,
+                        output_tokens=rec_output,
+                        reasoning_tokens=rec_reasoning,
+                    )
+                except ValueError:
+                    self.observer(
+                        CallMetadata(
+                            "openai",
+                            self.model,
+                            attempt,
+                            "failed",
+                            None,
+                            None,
+                            "malformed_response",
+                        )
+                    )
+                    raise GenerationError("malformed_response") from None
+
             self.observer(
                 CallMetadata(
                     "openai",
