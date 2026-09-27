@@ -445,6 +445,121 @@ def test_run_full_moh_repeatability():
     assert res1.work_counts == res2.work_counts
 
 
+def test_work_counts_generation_failure_after_admission():
+    """Verify generate request admitted before LLM failure is counted in logical inner_generate_requests."""
+    evaluator = FakeEvaluator(default_score=None)
+    inner_llm = ScriptedLLM([GenerationError("LLM generation failed")])
+
+    prog = parse_optimizer_program(
+        "def improve_algorithm(api):\n"
+        "    c = api.generate('KIND: mutate\\nTry.')\n"
+        "    return api.evaluate(c)\n",
+        "o000001",
+    )
+
+    config = FullMoHConfig(population_size=1, generations=0)
+    res = run_full_moh(
+        config=config,
+        seed_programs=[prog],
+        meta_llm=ScriptedLLM([]),
+        inner_llm=inner_llm,
+        evaluator=evaluator,
+    )
+
+    assert res.work_counts.inner_generate_requests == 1
+    assert res.work_counts.inner_evaluate_requests == 0
+    inner_res = res.outer_result.all_evaluated[0].inner_result
+    assert inner_res.generated_count == 1
+    assert len(inner_res.evaluations) == 0
+
+
+def test_work_counts_evaluator_failure_after_admission():
+    """Verify evaluate request admitted before evaluator exception is counted in logical inner_evaluate_requests."""
+
+    def crashing_evaluator(_src: str):
+        raise RuntimeError("Evaluator crashed")
+
+    evaluator = FakeEvaluator(crashing_evaluator, default_score=None)
+    inner_llm = ScriptedLLM(["def solve(): return 'c1'"])
+
+    prog = parse_optimizer_program(
+        "def improve_algorithm(api):\n"
+        "    c = api.generate('KIND: mutate\\nTry.')\n"
+        "    return api.evaluate(c)\n",
+        "o000001",
+    )
+
+    config = FullMoHConfig(population_size=1, generations=0)
+    res = run_full_moh(
+        config=config,
+        seed_programs=[prog],
+        meta_llm=ScriptedLLM([]),
+        inner_llm=inner_llm,
+        evaluator=evaluator,
+    )
+
+    assert res.work_counts.inner_generate_requests == 1
+    assert res.work_counts.inner_evaluate_requests == 1
+    inner_res = res.outer_result.all_evaluated[0].inner_result
+    assert inner_res.evaluated_count == 1
+    assert inner_res.valid_evaluation_count == 0
+    assert inner_res.invalid_evaluation_count == 1
+
+
+def test_work_counts_no_double_counting_survivors_across_generations():
+    """Verify surviving elite optimizers are counted exactly once across multiple generation snapshots."""
+    evaluator = FakeEvaluator(
+        {
+            "def solve(): return 'code_p1'": 0.80,
+            "def solve(): return 'code_p2'": 0.10,
+            "def solve(): return 'code_gen1'": 0.05,
+            "def solve(): return 'code_gen2'": 0.05,
+        },
+        default_score=None,
+    )
+
+    inner_llm = ScriptedLLM(
+        [
+            "def solve(): return 'code_p1'",
+            "def solve(): return 'code_p2'",
+            "def solve(): return 'code_gen1'",
+            "def solve(): return 'code_gen2'",
+        ]
+    )
+
+    meta_llm = ScriptedLLM(
+        [
+            (
+                "def improve_algorithm(api):\n"
+                "    c = api.generate('KIND: mutate\\nGen 1.')\n"
+                "    return api.evaluate(c)\n"
+            ),
+            (
+                "def improve_algorithm(api):\n"
+                "    c = api.generate('KIND: mutate\\nGen 2.')\n"
+                "    return api.evaluate(c)\n"
+            ),
+        ]
+    )
+
+    seeds = [create_simple_seed_program("o000001"), create_simple_seed_program("o000002")]
+    config = FullMoHConfig(population_size=2, generations=2)
+    res = run_full_moh(
+        config=config,
+        seed_programs=seeds,
+        meta_llm=meta_llm,
+        inner_llm=inner_llm,
+        evaluator=evaluator,
+    )
+
+    # 2 seed programs + 2 offspring programs evaluated = 4 total outer evaluations
+    assert res.work_counts.outer_programs_evaluated == 4
+    assert res.work_counts.outer_offspring_generated == 2
+    # 4 unique executions * 1 generate request each = 4 (NOT 2+2+2=6 snapshot appearances)
+    assert res.work_counts.inner_generate_requests == 4
+    assert res.work_counts.inner_evaluate_requests == 4
+
+
 def test_hifo_absent_in_m5_data_models():
     result_fields = set(FullMoHResult.__dataclass_fields__.keys())
     config_fields = set(FullMoHConfig.__dataclass_fields__.keys())

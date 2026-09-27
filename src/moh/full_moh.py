@@ -147,16 +147,23 @@ def run_full_moh(
         emit=emit,
     )
 
-    seen_ids: set[str] = set()
-    total_inner_generate = 0
-    total_inner_evaluate = 0
+    evaluations_to_count = outer_result.all_evaluated
+    if not evaluations_to_count:
+        seen_ids: set[str] = set()
+        evaluations_list = []
+        for gen_record in outer_result.generations:
+            for evaluated in gen_record.population:
+                if evaluated.program.id not in seen_ids:
+                    seen_ids.add(evaluated.program.id)
+                    evaluations_list.append(evaluated)
+        evaluations_to_count = tuple(evaluations_list)
 
-    for gen_record in outer_result.generations:
-        for evaluated in gen_record.population:
-            if evaluated.program.id not in seen_ids:
-                seen_ids.add(evaluated.program.id)
-                total_inner_generate += evaluated.inner_result.generated_count
-                total_inner_evaluate += evaluated.inner_result.evaluated_count
+    total_inner_generate = sum(
+        ev.inner_result.generated_count for ev in evaluations_to_count
+    )
+    total_inner_evaluate = sum(
+        ev.inner_result.evaluated_count for ev in evaluations_to_count
+    )
 
     work_counts = FullMoHWorkCounts(
         outer_programs_evaluated=outer_result.programs_evaluated,

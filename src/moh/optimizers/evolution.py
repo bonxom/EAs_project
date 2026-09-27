@@ -88,9 +88,11 @@ class OuterEvolutionResult:
     best_utility: float | None
     programs_evaluated: int
     offspring_generated: int
+    all_evaluated: tuple[EvaluatedOptimizer, ...] = ()
 
     def __post_init__(self):
         object.__setattr__(self, "generations", tuple(self.generations))
+        object.__setattr__(self, "all_evaluated", tuple(self.all_evaluated))
         if self.status not in ("success", "failed"):
             raise ValueError("status must be 'success' or 'failed'")
         for count_name, count_val in (
@@ -211,6 +213,7 @@ def run_outer_evolution(
     programs_evaluated = 0
     offspring_generated = 0
     population: list[EvaluatedOptimizer] = []
+    all_evaluated_list: list[EvaluatedOptimizer] = []
 
     for prog in initial_programs:
         safe_emit(
@@ -229,6 +232,7 @@ def run_outer_evolution(
         )
         programs_evaluated += 1
         population.append(evaluated)
+        all_evaluated_list.append(evaluated)
 
     population.sort(key=outer_rank_key)
     population = population[:outer_capacity]
@@ -307,6 +311,7 @@ def run_outer_evolution(
             offspring, inner_llm, evaluator, cap_limits, program_limits
         )
         programs_evaluated += 1
+        all_evaluated_list.append(evaluated_offspring)
 
         population = sorted([*population, evaluated_offspring], key=outer_rank_key)[
             :outer_capacity
@@ -357,4 +362,5 @@ def run_outer_evolution(
         best_utility=winner.utility if winner else None,
         programs_evaluated=programs_evaluated,
         offspring_generated=offspring_generated,
+        all_evaluated=tuple(all_evaluated_list),
     )
