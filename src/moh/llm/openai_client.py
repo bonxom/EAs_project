@@ -57,12 +57,17 @@ def _normalize_token_usage_semantics(
         and reasoning_tokens is not None
         and total_tokens is not None
     ):
+        if reasoning_tokens == 0:
+            return input_tokens, output_tokens, reasoning_tokens, total_tokens
+
+        # Case A: Canonical / OpenAI-inclusive
         if (
             total_tokens == input_tokens + output_tokens
             and reasoning_tokens <= output_tokens
         ):
             return input_tokens, output_tokens, reasoning_tokens, total_tokens
 
+        # Case B: Separate reasoning, total includes reasoning
         if (
             reasoning_tokens > 0
             and total_tokens == input_tokens + output_tokens + reasoning_tokens
@@ -72,6 +77,19 @@ def _normalize_token_usage_semantics(
                 output_tokens + reasoning_tokens,
                 reasoning_tokens,
                 total_tokens,
+            )
+
+        # Case C: Separate reasoning, total excludes reasoning
+        if (
+            total_tokens == input_tokens + output_tokens
+            and reasoning_tokens > output_tokens
+            and reasoning_tokens > 0
+        ):
+            return (
+                input_tokens,
+                output_tokens + reasoning_tokens,
+                reasoning_tokens,
+                total_tokens + reasoning_tokens,
             )
 
     return input_tokens, output_tokens, reasoning_tokens, total_tokens

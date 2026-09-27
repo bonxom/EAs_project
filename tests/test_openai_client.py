@@ -400,7 +400,7 @@ def make_mock_response(
         ({"reasoning_tokens": -1, "total_tokens": 12}, "negative_reasoning_tokens"),
         ({"total_tokens": True}, "invalid_total_tokens_type"),
         ({"total_tokens": -1}, "negative_total_tokens"),
-        ({"reasoning_tokens": 10, "output_tokens": 5, "total_tokens": 15}, "reasoning_exceeds_output"),
+        ({"reasoning_tokens": 10, "output_tokens": 5, "total_tokens": None}, "reasoning_exceeds_output"),
         (
             {"input_tokens": 5, "output_tokens": 5, "total_tokens": 20},
             "inconsistent_total_tokens",
@@ -568,3 +568,28 @@ def test_openai_client_inconsistent_total_tokens_observability():
     assert err.observed_output_tokens == 8
     assert err.observed_reasoning_tokens == 3
     assert err.observed_total_tokens == 99
+
+
+def test_normalize_exact_r5_case_c():
+    assert _normalize_token_usage_semantics(2071, 1, 64, 2072) == (2071, 65, 64, 2136)
+
+def test_normalize_small_case_c():
+    assert _normalize_token_usage_semantics(10, 2, 6, 12) == (10, 8, 6, 18)
+
+def test_normalize_native_canonical_guard():
+    assert _normalize_token_usage_semantics(10, 8, 6, 18) == (10, 8, 6, 18)
+
+def test_normalize_ambiguous_reasoning_le_output_total_eq_io():
+    assert _normalize_token_usage_semantics(10, 7, 3, 17) == (10, 7, 3, 17)
+
+def test_openai_client_generate_exact_r5_shape_succeeds():
+    resp = make_mock_response(
+        content="OK",
+        input_tokens=2071,
+        output_tokens=1,
+        reasoning_tokens=64,
+        total_tokens=2072,
+    )
+    client = OpenAILLMClient("test-model", 2.0, lambda _: None, transport=Transport([resp]))
+    res = client.generate("prompt")
+    assert res == "OK"

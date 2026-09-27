@@ -1375,3 +1375,64 @@ def test_canary_observed_tokens_propagation_on_malformed():
     assert res.observed_output_tokens == 2
     assert res.observed_reasoning_tokens == 6
     assert res.observed_total_tokens is None
+
+
+def test_canary_r5_exact_shape_separate_thinking_succeeds():
+    from types import SimpleNamespace
+
+    class Transport:
+        def __init__(self, resp):
+            self.resp = resp
+            self.chat = SimpleNamespace(
+                completions=SimpleNamespace(create=lambda **kw: self.resp)
+            )
+
+    cfg = CanaryConfig(
+        mode="offline",
+        logical_generate_limit=1,
+        provider_attempt_limit=1,
+        evaluate_limit=0,
+        prompt="Return exactly the word OK.",
+        max_output_tokens=8,
+        model="test-model",
+        timeout_seconds=5.0,
+    )
+    resp = SimpleNamespace(
+        choices=[SimpleNamespace(message=SimpleNamespace(content="OK"))],
+        usage=SimpleNamespace(
+            prompt_tokens=2071,
+            completion_tokens=1,
+            total_tokens=2072,
+            completion_tokens_details=SimpleNamespace(reasoning_tokens=64),
+        ),
+        model="test-model",
+    )
+    b = ProviderAttemptBudget(ProviderAttemptLimits(max_attempts=1))
+    acc = ProviderUsageAccountant()
+    client = OpenAILLMClient(
+        model=cfg.model,
+        timeout_seconds=5.0,
+        observer=lambda _: None,
+        transport=Transport(resp),
+        attempt_budget=b,
+        usage_accountant=acc,
+    )
+
+    res = run_llm_canary(
+        config=cfg,
+        llm_client=client,
+        logical_guard=CanaryLogicalGuard(max_calls=1),
+        attempt_budget=b,
+        usage_accountant=acc,
+        allow_real_api=False,
+    )
+
+    assert res.status == "success"
+    assert res.input_tokens == 2071
+    assert res.output_tokens == 65
+    assert res.reasoning_tokens == 64
+    assert res.total_tokens == 2136
+    assert res.observed_input_tokens is None
+    assert res.observed_output_tokens is None
+    assert res.observed_reasoning_tokens is None
+    assert res.observed_total_tokens is None
