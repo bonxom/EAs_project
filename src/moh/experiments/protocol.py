@@ -306,6 +306,12 @@ VALID_MANIFEST_STATUSES = (
     "SAFETY_FAILURE",
 )
 
+VALID_CAMPAIGN_STATUSES = (
+    "SANITY_CAMPAIGN_COMPLETE",
+    "SANITY_CAMPAIGN_SAFETY_STOP",
+    "SANITY_CAMPAIGN_INFRASTRUCTURE_FAILURE",
+)
+
 
 @dataclass(frozen=True)
 class ExperimentManifest:
@@ -361,6 +367,57 @@ class ExperimentManifest:
         validate_manifest_safety(_to_canonical_dict(self))
 
 
+@dataclass(frozen=True)
+class CampaignManifest:
+    campaign_id: str
+    timestamp: str
+    git_commit: str
+    git_dirty: bool
+    campaign_kind: str
+    method: str
+    config_hash: str
+    requested_model: str
+    planned_replicates: tuple[int, ...]
+    attempted_replicates: tuple[int, ...]
+    completed_replicates: tuple[int, ...]
+    replicate_run_ids: tuple[str, ...]
+    replicate_statuses: tuple[str, ...]
+    status_counts: dict[str, int]
+    total_work_counts: dict[str, int]
+    total_provider_attempts: dict[str, int]
+    total_token_usage: dict[str, int]
+    quality_summary: dict[str, Any]
+    campaign_status: Literal[
+        "SANITY_CAMPAIGN_COMPLETE",
+        "SANITY_CAMPAIGN_SAFETY_STOP",
+        "SANITY_CAMPAIGN_INFRASTRUCTURE_FAILURE",
+    ]
+    stop_reason: str | None = None
+    artifact_references: tuple[dict[str, str], ...] = ()
+
+    def __post_init__(self):
+        object.__setattr__(self, "planned_replicates", tuple(self.planned_replicates))
+        object.__setattr__(self, "attempted_replicates", tuple(self.attempted_replicates))
+        object.__setattr__(self, "completed_replicates", tuple(self.completed_replicates))
+        object.__setattr__(self, "replicate_run_ids", tuple(self.replicate_run_ids))
+        object.__setattr__(self, "replicate_statuses", tuple(self.replicate_statuses))
+        object.__setattr__(self, "artifact_references", tuple(self.artifact_references))
+
+        if not isinstance(self.campaign_id, str) or not self.campaign_id.strip():
+            raise ValueError("campaign_id must be a non-empty string")
+        if not isinstance(self.timestamp, str) or not self.timestamp.strip():
+            raise ValueError("timestamp must be a non-empty string")
+        if not isinstance(self.git_commit, str) or not self.git_commit.strip():
+            raise ValueError("git_commit must be a non-empty string")
+        if not isinstance(self.git_dirty, bool):
+            raise TypeError("git_dirty must be a boolean")
+        if self.campaign_status not in VALID_CAMPAIGN_STATUSES:
+            raise ValueError(f"campaign_status must be one of {VALID_CAMPAIGN_STATUSES}")
+
+        validate_manifest_safety(_to_canonical_dict(self))
+
+
+
 FORBIDDEN_SECRET_KEYS = (
     "api_key",
     "apikey",
@@ -398,7 +455,7 @@ def validate_manifest_safety(data: Any) -> None:
                 for secret in FORBIDDEN_SECRET_KEYS:
                     if secret in lower_k:
                         raise ValueError(f"Manifest safety violation: forbidden secret key '{k}' found")
-                if lower_k in INTEGER_COUNT_KEYS:
+                if lower_k in INTEGER_COUNT_KEYS and not isinstance(v, dict):
                     if type(v) is bool:
                         raise ValueError(f"Manifest safety violation: boolean value not allowed for integer count '{k}'")
                     if not isinstance(v, int) or v < 0:

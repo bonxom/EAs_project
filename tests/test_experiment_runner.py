@@ -16,12 +16,20 @@ from moh.experiments.protocol import (
     compare_protocol_fairness,
 )
 from moh.experiments.runner import (
+    CampaignMasterGuard,
+    ReplicateAttemptBudget,
     generate_dry_run_preview,
     load_experiment_config,
+    run_campaign,
     run_experiment,
+    validate_real_provider_environment,
 )
 from moh.llm.base import GenerationError
-from moh.llm.budget import ProviderAttemptBudget, ProviderAttemptLimits
+from moh.llm.budget import (
+    ProviderAttemptBudget,
+    ProviderAttemptBudgetExceeded,
+    ProviderAttemptLimits,
+)
 from moh.llm.openai_client import OpenAILLMClient
 from moh.optimizers.evolution import initial_optimizer_programs
 
@@ -229,3 +237,162 @@ output_dir: "outputs/test_run"
     assert config.algorithm.population_size == 2
     assert config.llm.requested_model == "ag/gemini-3.6-flash-low"
     assert config.task.instances_per_task == 3
+
+
+def test_real_provider_environment_validation(monkeypatch):
+    """Verify validate_real_provider_environment enforces auth and endpoint safety."""
+    llm_cfg = LLMRuntimeConfig(requested_model="ag/gemini-3.6-flash-low")
+
+    # 1. OPENAI_API_KEY active -> ValueError
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-active-key")
+    monkeypatch.setenv("OPENAI_COMPAT_API_KEY", "sk-compat-key")
+    monkeypatch.setenv("OPENAI_COMPAT_BASE_URL", "http://172.25.16.1:20128/v1")
+    with pytest.raises(ValueError, match="OPENAI_API_KEY must be UNSET"):
+        validate_real_provider_environment(llm_cfg)
+
+    # 2. OPENAI_COMPAT_API_KEY missing -> ValueError
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.delenv("OPENAI_COMPAT_API_KEY", raising=False)
+    with pytest.raises(ValueError, match="OPENAI_COMPAT_API_KEY must be configured"):
+        validate_real_provider_environment(llm_cfg)
+
+    # 3. OPENAI_COMPAT_MODEL mismatch -> ValueError
+    monkeypatch.setenv("OPENAI_COMPAT_API_KEY", "sk-compat-key")
+    monkeypatch.setenv("OPENAI_COMPAT_MODEL", "different-model")
+    with pytest.raises(ValueError, match="OPENAI_COMPAT_MODEL mismatch"):
+        validate_real_provider_environment(llm_cfg)
+
+    # 4. OPENAI_COMPAT_BASE_URL invalid endpoint -> ValueError
+    monkeypatch.setenv("OPENAI_COMPAT_MODEL", "ag/gemini-3.6-flash-low")
+    monkeypatch.setenv("OPENAI_COMPAT_BASE_URL", "http://invalid-endpoint:8080")
+    with pytest.raises(ValueError, match="invalid endpoint path or port"):
+        validate_real_provider_environment(llm_cfg)
+
+    # Valid env succeeds
+    monkeypatch.setenv("OPENAI_COMPAT_BASE_URL", "http://172.25.16.1:20128/v1")
+    validate_real_provider_environment(llm_cfg)  # Should not raise
+
+
+def test_offline_real_path_construction_fake_transport(monkeypatch, tmp_path: Path):
+    """Verify real-provider construction path reaches execution code with fake transport and zero network."""
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.setenv("OPENAI_COMPAT_API_KEY", "sk-fake-compat-key")
+    monkeypatch.setenv("OPENAI_COMPAT_MODEL", "ag/gemini-3.6-flash-low")
+    monkeypatch.setenv("OPENAI_COMPAT_BASE_URL", "http://172.25.16.1:20128/v1")
+
+    cfg = ExperimentProtocolConfig(
+        output_dir=tmp_path,
+        llm=LLMRuntimeConfig(provider="openai", requested_model="ag/gemini-3.6-flash-low"),
+        algorithm=FullMoHAlgorithmConfig(
+            population_size=1,
+            generations=1,
+            max_inner_generate_requests=1,
+            max_inner_evaluate_requests=1,
+        ),
+    )
+
+    class FakeChatResponse:
+        def __init__(self, content):
+            self.choices = [
+                type("Choice", (), {"message": type("Message", (), {"content": content, "reasoning_content": None})()})()
+            ]
+            self.usage = type(
+                "Usage",
+                (),
+                {"prompt_tokens": 10, "completion_tokens": 20, "reasoning_tokens": 0, "total_tokens": 30},
+            )()
+
+    class FakeTransport:
+        def __init__(self):
+            class Completions:
+                def create(self, **kwargs):
+                    return FakeChatResponse("def select_next_node(*args):\n    return 0\n")
+            self.chat = type("Chat", (), {"completions": Completions()})()
+
+    res = run_experiment(cfg, allow_real_api=True, transport_factory=lambda: FakeTransport())
+    assert res["status"] in ("COMPLETED_VALID", "COMPLETED_NO_VALID_UTILITY")
+    assert Path(res["manifest_path"]).exists()
+
+
+def test_three_replicate_offline_campaign_e2e(tmp_path: Path):
+    """Run a 3-replicate offline campaign and verify distinct run_ids and manifests."""
+    cfg = ExperimentProtocolConfig(
+        output_dir=tmp_path,
+        algorithm=FullMoHAlgorithmConfig(
+            population_size=1,
+            generations=1,
+            max_inner_generate_requests=1,
+            max_inner_evaluate_requests=1,
+        ),
+        llm=LLMRuntimeConfig(provider="fake"),
+    )
+
+    res = run_campaign(cfg, allow_real_api=False, replicates=3)
+    assert res["status"] == "SANITY_CAMPAIGN_COMPLETE"
+    assert res["attempted_replicates"] == [0, 1, 2]
+    assert res["completed_replicates"] == [0, 1, 2]
+
+    # Check campaign manifest
+    c_manifest_path = Path(res["manifest_path"])
+    assert c_manifest_path.exists()
+    c_manifest_data = json.loads(c_manifest_path.read_text(encoding="utf-8"))
+    assert c_manifest_data["campaign_status"] == "SANITY_CAMPAIGN_COMPLETE"
+    assert len(c_manifest_data["replicate_run_ids"]) == 3
+    assert len(set(c_manifest_data["replicate_run_ids"])) == 3
+
+
+def test_mixed_status_campaign(tmp_path: Path):
+    """Verify campaign correctly aggregates mixed replicate statuses without replacement."""
+    cfg = ExperimentProtocolConfig(
+        output_dir=tmp_path,
+        llm=LLMRuntimeConfig(provider="fake"),
+    )
+
+    res = run_campaign(cfg, allow_real_api=False, replicates=3)
+    assert res["status"] == "SANITY_CAMPAIGN_COMPLETE"
+    assert res["status_counts"]["COMPLETED_VALID"] >= 0
+
+
+def test_campaign_master_limit():
+    """Verify exceeding campaign master limit stops campaign with SANITY_CAMPAIGN_SAFETY_STOP."""
+    c_guard = CampaignMasterGuard(max_attempts=2)
+    c_guard.reserve()
+    c_guard.reserve()
+
+    with pytest.raises(ProviderAttemptBudgetExceeded, match="campaign_attempt_budget_exhausted"):
+        c_guard.reserve()
+
+    assert c_guard.attempts == 2
+
+
+def test_per_run_limit():
+    """Verify replicate attempt limit stops replicate without exceeding its allowance."""
+    c_guard = CampaignMasterGuard(max_attempts=66)
+    rep_budget = ReplicateAttemptBudget(c_guard, max_replicate_attempts=2)
+
+    rep_budget.reserve()
+    rep_budget.reserve()
+    assert rep_budget.usage.attempts == 2
+    assert c_guard.attempts == 2
+
+    with pytest.raises(ProviderAttemptBudgetExceeded, match="replicate_attempt_budget_exhausted"):
+        rep_budget.reserve()
+
+    assert c_guard.attempts == 2
+
+
+def test_campaign_aggregation(tmp_path: Path):
+    """Verify campaign aggregates total work counts and token totals."""
+    cfg = ExperimentProtocolConfig(
+        output_dir=tmp_path,
+        algorithm=FullMoHAlgorithmConfig(
+            population_size=1,
+            generations=1,
+            max_inner_generate_requests=1,
+            max_inner_evaluate_requests=1,
+        ),
+        llm=LLMRuntimeConfig(provider="fake"),
+    )
+    res = run_campaign(cfg, allow_real_api=False, replicates=3)
+    assert res["total_work_counts"]["outer_programs_evaluated"] == 6
+

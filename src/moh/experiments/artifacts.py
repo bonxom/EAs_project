@@ -11,7 +11,11 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
-from moh.experiments.protocol import ExperimentManifest, validate_manifest_safety
+from moh.experiments.protocol import (
+    CampaignManifest,
+    ExperimentManifest,
+    validate_manifest_safety,
+)
 
 
 def save_program_artifact(output_dir: Path, program_id: str, source_code: str) -> dict[str, str]:
@@ -79,3 +83,19 @@ def save_manifest_atomic(output_dir: Path, manifest: ExperimentManifest) -> Path
     temp_path.write_text(dumped, encoding="utf-8")
     temp_path.replace(manifest_path)
     return manifest_path
+
+
+def save_campaign_manifest_atomic(campaign_dir: Path, manifest: CampaignManifest) -> Path:
+    """Atomically save campaign_manifest.json after strict safety validation."""
+    campaign_dir.mkdir(parents=True, exist_ok=True)
+    manifest_path = campaign_dir / "campaign_manifest.json"
+    temp_path = campaign_dir / "campaign_manifest.json.tmp"
+    
+    manifest_dict = asdict(manifest)
+    validate_manifest_safety(manifest_dict)
+    
+    dumped = json.dumps(manifest_dict, indent=2, sort_keys=True)
+    temp_path.write_text(dumped, encoding="utf-8")
+    temp_path.replace(manifest_path)
+    return manifest_path
+
