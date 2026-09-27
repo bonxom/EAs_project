@@ -1,7 +1,8 @@
-"""M7B-A Experiment Artifact Management.
+"""M7B-A / M7B-A2 Experiment Artifact Management.
 
 Handles atomic serialization of experiment manifests, content-addressed preservation
-of generated outer optimizer programs, and raw trajectory records without HiFo interpretation.
+of generated outer optimizer programs and inner candidate heuristics (Policy SOURCE-A),
+and raw trajectory records without HiFo interpretation.
 """
 
 import hashlib
@@ -27,6 +28,24 @@ def save_program_artifact(output_dir: Path, program_id: str, source_code: str) -
         "filename": f"programs/{program_id}.py",
         "sha256": sha256,
         "size_bytes": str(len(source_code.encode("utf-8"))),
+    }
+
+
+def save_candidate_artifact(output_dir: Path, source_code: str, max_bytes: int = 65536) -> dict[str, str]:
+    """Save inner candidate heuristic source code as a content-addressed artifact (SOURCE-A policy)."""
+    candidates_dir = output_dir / "candidates"
+    candidates_dir.mkdir(parents=True, exist_ok=True)
+
+    source_bytes = source_code.encode("utf-8")[:max_bytes]
+    sha256 = hashlib.sha256(source_bytes).hexdigest()
+    file_path = candidates_dir / f"{sha256}.py"
+    if not file_path.exists():
+        file_path.write_bytes(source_bytes)
+
+    return {
+        "filename": f"candidates/{sha256}.py",
+        "sha256": sha256,
+        "size_bytes": str(len(source_bytes)),
     }
 
 

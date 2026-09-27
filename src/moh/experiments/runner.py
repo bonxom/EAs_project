@@ -1,4 +1,4 @@
-"""M7B-A Experiment Runner and CLI.
+"""M7B-A / M7B-A2 Experiment Runner and CLI.
 
 Orchestrates Full MoH experiment protocol execution, enforces real API opt-in guards,
 provides dry-run budget calculation previews, and produces paper-ready manifests/artifacts.
@@ -20,6 +20,7 @@ from moh.core.seeds import derive_seed
 from moh.execution.heuristic_runner import HeuristicRunner
 from moh.execution.protocol import ExecutionLimits
 from moh.experiments.artifacts import (
+    save_candidate_artifact,
     save_manifest_atomic,
     save_program_artifact,
     save_trajectory_artifact,
@@ -191,10 +192,17 @@ def run_experiment(
     size = config.task.sizes[0]
     task = TSPTask.create(size, config.task.instances_per_task, config.task.root_seed)
     runner = HeuristicRunner(limits=ExecutionLimits())
+    candidate_artifact_refs: list[dict[str, str]] = []
 
     def evaluator(source_code: str) -> float:
         if not isinstance(source_code, str):
             raise TypeError("source_code must be a string")
+        
+        # Policy SOURCE-A: Save candidate source artifact
+        cand_ref = save_candidate_artifact(run_dir, source_code)
+        if cand_ref not in candidate_artifact_refs:
+            candidate_artifact_refs.append(cand_ref)
+
         heuristic_obj = Heuristic("h_candidate", source_code)
         context = EvaluationContext(
             task.id,
@@ -246,6 +254,7 @@ def run_experiment(
         art_info = save_program_artifact(run_dir, evaluated.program.id, evaluated.program.source_code)
         artifact_refs.append(art_info)
 
+    artifact_refs.extend(candidate_artifact_refs)
     traj_info = save_trajectory_artifact(run_dir, trajectory_records)
     artifact_refs.append(traj_info)
 

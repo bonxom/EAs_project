@@ -109,6 +109,7 @@ class OpenAILLMClient:
         usage_limits=None,
         max_output_tokens=None,
         api_mode="auto",
+        max_attempts_per_request=3,
     ):
         validate_environment()
         if not isinstance(model, str) or not model.strip():
@@ -130,6 +131,12 @@ class OpenAILLMClient:
             raise ValueError(
                 "max_output_tokens must be a positive integer if provided"
             )
+        if (
+            type(max_attempts_per_request) is bool
+            or not isinstance(max_attempts_per_request, int)
+            or max_attempts_per_request <= 0
+        ):
+            raise ValueError("max_attempts_per_request must be a positive integer")
         self.model, self.timeout, self.observer, self.sleep = (
             model,
             timeout_seconds,
@@ -141,6 +148,7 @@ class OpenAILLMClient:
         self.usage_limits = usage_limits
         self.max_output_tokens = max_output_tokens
         self.api_mode = api_mode
+        self.max_attempts_per_request = max_attempts_per_request
         self.owns_transport = transport is None
         if transport is not None:
             self.transport = transport
@@ -255,7 +263,7 @@ class OpenAILLMClient:
 
     def generate(self, prompt):
         last_provider_error = None
-        for attempt in range(1, 4):
+        for attempt in range(1, self.max_attempts_per_request + 1):
             if self.usage_accountant is not None:
                 self.usage_accountant.check_pre_request_guard(
                     self.usage_limits, self.model
@@ -291,7 +299,7 @@ class OpenAILLMClient:
                         "openai", self.model, attempt, "failed", None, None, error_code
                     )
                 )
-                if not transient or attempt == 3:
+                if not transient or attempt == self.max_attempts_per_request:
                     raise GenerationError(
                         error_code, last_provider_error=error_code
                     ) from None
