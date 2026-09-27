@@ -1,5 +1,6 @@
 """Trusted parent capability controller and logical budget accounting."""
 
+import inspect
 import math
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -45,6 +46,17 @@ class OptimizerCapabilityController:
         self._llm = llm
         self._evaluator = evaluator
         self._limits = limits
+
+        try:
+            sig = inspect.signature(evaluator)
+            params = [
+                p
+                for p in sig.parameters.values()
+                if p.kind in (p.POSITIONAL_ONLY, p.POSITIONAL_OR_KEYWORD)
+            ]
+            self._evaluator_takes_req_id = len(params) >= 2
+        except (ValueError, TypeError):
+            self._evaluator_takes_req_id = False
 
         self._generate_requests = 0
         self._evaluate_requests = 0
@@ -145,7 +157,10 @@ class OptimizerCapabilityController:
         self._evaluate_requests += 1
 
         try:
-            score = self._evaluator(source_code)
+            if getattr(self, "_evaluator_takes_req_id", False):
+                score = self._evaluator(req_id, source_code)
+            else:
+                score = self._evaluator(source_code)
         except Exception as exc:  # noqa: BLE001
             return {
                 "type": "error",
