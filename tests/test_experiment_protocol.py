@@ -99,6 +99,7 @@ def test_pilot_budget_reproduction():
         max_outer_meta_generations=1,
         max_inner_generate_requests=2,
         max_inner_evaluate_requests=2,
+        max_task_instance_evaluations=6,
         max_provider_attempts=3,
     )
 
@@ -120,6 +121,7 @@ def test_larger_hypothetical_budget_formula():
         max_outer_meta_generations=2,
         max_inner_generate_requests=25,
         max_inner_evaluate_requests=25,
+        max_task_instance_evaluations=75,
         max_provider_attempts=27,
     )
 

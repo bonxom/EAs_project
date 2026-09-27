@@ -1,7 +1,8 @@
-"""M7A Freeze Experiment Protocol and Budget Contract.
+"""M7A/M7B-A Experiment Protocol, Fair Budget Contract, and Campaign Calculator.
 
 Defines immutable experiment configurations, pure budget calculations,
-deterministic config hashing, prompt fingerprinting, and run manifest schemas.
+task-instance evaluation bounds, campaign budget calculations, deterministic
+config hashing, prompt fingerprinting, and run manifest schemas.
 """
 
 import hashlib
@@ -147,6 +148,7 @@ class BudgetMaxima:
     max_outer_meta_generations: int
     max_inner_generate_requests: int
     max_inner_evaluate_requests: int
+    max_task_instance_evaluations: int
     max_provider_attempts: int
 
     def __post_init__(self):
@@ -155,10 +157,23 @@ class BudgetMaxima:
             ("max_outer_meta_generations", self.max_outer_meta_generations),
             ("max_inner_generate_requests", self.max_inner_generate_requests),
             ("max_inner_evaluate_requests", self.max_inner_evaluate_requests),
+            ("max_task_instance_evaluations", self.max_task_instance_evaluations),
             ("max_provider_attempts", self.max_provider_attempts),
         ):
             if type(val) is bool or not isinstance(val, int) or val < 0:
                 raise ValueError(f"{name} must be a non-negative integer")
+
+
+@dataclass(frozen=True)
+class CampaignBudgetMaxima:
+    replicates: int
+    per_run: BudgetMaxima
+    campaign_max_optimizer_executions: int
+    campaign_max_outer_meta_generations: int
+    campaign_max_inner_generate_requests: int
+    campaign_max_inner_evaluate_requests: int
+    campaign_max_task_instance_evaluations: int
+    campaign_max_provider_attempts: int
 
 
 def calculate_budget_maxima(config: ExperimentProtocolConfig) -> BudgetMaxima:
@@ -168,11 +183,13 @@ def calculate_budget_maxima(config: ExperimentProtocolConfig) -> BudgetMaxima:
     inner_gen_per_opt = config.algorithm.max_inner_generate_requests
     inner_eval_per_opt = config.algorithm.max_inner_evaluate_requests
     attempt_limit = config.llm.provider_attempt_limit_per_request
+    instances_per_task = config.task.instances_per_task
 
     max_optimizer_executions = pop + gen
     max_outer_meta_generations = gen
     max_inner_generate_requests = max_optimizer_executions * inner_gen_per_opt
     max_inner_evaluate_requests = max_optimizer_executions * inner_eval_per_opt
+    max_task_instance_evaluations = max_inner_evaluate_requests * instances_per_task
 
     max_provider_attempts = (
         max_outer_meta_generations * attempt_limit
@@ -184,8 +201,65 @@ def calculate_budget_maxima(config: ExperimentProtocolConfig) -> BudgetMaxima:
         max_outer_meta_generations=max_outer_meta_generations,
         max_inner_generate_requests=max_inner_generate_requests,
         max_inner_evaluate_requests=max_inner_evaluate_requests,
+        max_task_instance_evaluations=max_task_instance_evaluations,
         max_provider_attempts=max_provider_attempts,
     )
+
+
+def calculate_campaign_budget(config: ExperimentProtocolConfig, replicates: int) -> CampaignBudgetMaxima:
+    """Calculate campaign-level ceilings across N independent replicates."""
+    if type(replicates) is bool or not isinstance(replicates, int) or replicates <= 0:
+        raise ValueError("replicates must be a positive integer")
+
+    per_run = calculate_budget_maxima(config)
+    return CampaignBudgetMaxima(
+        replicates=replicates,
+        per_run=per_run,
+        campaign_max_optimizer_executions=per_run.max_optimizer_executions * replicates,
+        campaign_max_outer_meta_generations=per_run.max_outer_meta_generations * replicates,
+        campaign_max_inner_generate_requests=per_run.max_inner_generate_requests * replicates,
+        campaign_max_inner_evaluate_requests=per_run.max_inner_evaluate_requests * replicates,
+        campaign_max_task_instance_evaluations=per_run.max_task_instance_evaluations * replicates,
+        campaign_max_provider_attempts=per_run.max_provider_attempts * replicates,
+    )
+
+
+def compare_protocol_fairness(
+    config_a: ExperimentProtocolConfig, config_b: ExperimentProtocolConfig
+) -> tuple[bool, list[str]]:
+    """Verify that two experiment configurations share identical fairness-locked parameters."""
+    mismatches = []
+
+    if config_a.task.family != config_b.task.family:
+        mismatches.append(f"task family mismatch: {config_a.task.family} vs {config_b.task.family}")
+    if config_a.task.sizes != config_b.task.sizes:
+        mismatches.append(f"task sizes mismatch: {config_a.task.sizes} vs {config_b.task.sizes}")
+    if config_a.task.instances_per_task != config_b.task.instances_per_task:
+        mismatches.append(f"instances_per_task mismatch: {config_a.task.instances_per_task} vs {config_b.task.instances_per_task}")
+    if config_a.task.root_seed != config_b.task.root_seed:
+        mismatches.append(f"task root_seed mismatch: {config_a.task.root_seed} vs {config_b.task.root_seed}")
+
+    if config_a.algorithm.population_size != config_b.algorithm.population_size:
+        mismatches.append(f"population_size mismatch: {config_a.algorithm.population_size} vs {config_b.algorithm.population_size}")
+    if config_a.algorithm.generations != config_b.algorithm.generations:
+        mismatches.append(f"generations mismatch: {config_a.algorithm.generations} vs {config_b.algorithm.generations}")
+    if config_a.algorithm.max_inner_generate_requests != config_b.algorithm.max_inner_generate_requests:
+        mismatches.append(f"max_inner_generate_requests mismatch: {config_a.algorithm.max_inner_generate_requests} vs {config_b.algorithm.max_inner_generate_requests}")
+    if config_a.algorithm.max_inner_evaluate_requests != config_b.algorithm.max_inner_evaluate_requests:
+        mismatches.append(f"max_inner_evaluate_requests mismatch: {config_a.algorithm.max_inner_evaluate_requests} vs {config_b.algorithm.max_inner_evaluate_requests}")
+
+    if config_a.llm.requested_model != config_b.llm.requested_model:
+        mismatches.append(f"requested_model mismatch: {config_a.llm.requested_model} vs {config_b.llm.requested_model}")
+    if config_a.llm.outer_max_output_tokens != config_b.llm.outer_max_output_tokens:
+        mismatches.append(f"outer_max_output_tokens mismatch: {config_a.llm.outer_max_output_tokens} vs {config_b.llm.outer_max_output_tokens}")
+    if config_a.llm.inner_max_output_tokens != config_b.llm.inner_max_output_tokens:
+        mismatches.append(f"inner_max_output_tokens mismatch: {config_a.llm.inner_max_output_tokens} vs {config_b.llm.inner_max_output_tokens}")
+    if config_a.llm.provider_attempt_limit_per_request != config_b.llm.provider_attempt_limit_per_request:
+        mismatches.append(f"provider_attempt_limit_per_request mismatch: {config_a.llm.provider_attempt_limit_per_request} vs {config_b.llm.provider_attempt_limit_per_request}")
+    if config_a.llm.sdk_retries != config_b.llm.sdk_retries:
+        mismatches.append(f"sdk_retries mismatch: {config_a.llm.sdk_retries} vs {config_b.llm.sdk_retries}")
+
+    return len(mismatches) == 0, mismatches
 
 
 def _to_canonical_dict(obj: Any) -> Any:
@@ -307,6 +381,7 @@ INTEGER_COUNT_KEYS = (
     "max_outer_meta_generations",
     "max_inner_generate_requests",
     "max_inner_evaluate_requests",
+    "max_task_instance_evaluations",
     "max_provider_attempts",
     "outer_provider_attempts",
     "inner_provider_attempts",
