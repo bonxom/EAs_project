@@ -1,5 +1,6 @@
 """M3 Evaluator Contract and Inner-Search Semantics."""
 
+import hashlib
 import math
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -14,6 +15,25 @@ from moh.optimizers.capabilities import (
 from moh.optimizers.runner import OptimizerProgramRunner, ProgramLimits
 
 
+def classify_candidate_failure(error_msg: str) -> tuple[str, str]:
+    msg = error_msg.lower()
+    if "syntax" in msg:
+        return "candidate_validation", "syntax_error"
+    if "missing_function" in msg:
+        return "candidate_validation", "missing_function"
+    if "invalid_signature" in msg:
+        return "candidate_validation", "invalid_signature"
+    if "source_limit" in msg:
+        return "candidate_validation", "source_limit_exceeded"
+    if "invalid_return" in msg or "invalid_result" in msg:
+        return "candidate_execution", "invalid_result"
+    if "timeout" in msg:
+        return "candidate_execution", "execution_timeout"
+    if "exception" in msg or "execution" in msg:
+        return "candidate_execution", "execution_failed"
+    return "evaluator", "evaluator_failed"
+
+
 @dataclass(frozen=True)
 class CandidateEvaluationResult:
     candidate_id: str
@@ -21,6 +41,10 @@ class CandidateEvaluationResult:
     score: float | None
     valid: bool
     error: str | None = None
+    failure_stage: str | None = None
+    candidate_error_code: str | None = None
+    candidate_source_length: int | None = None
+    candidate_source_sha256: str | None = None
 
     def __post_init__(self):
         if not isinstance(self.candidate_id, str) or not self.candidate_id.strip():
@@ -29,6 +53,13 @@ class CandidateEvaluationResult:
             raise TypeError("source_code must be a string")
         if type(self.valid) is not bool:
             raise TypeError("valid must be a bool")
+
+        if self.candidate_source_length is None:
+            object.__setattr__(self, "candidate_source_length", len(self.source_code))
+        if self.candidate_source_sha256 is None:
+            sha = hashlib.sha256(self.source_code.encode("utf-8")).hexdigest()
+            object.__setattr__(self, "candidate_source_sha256", sha)
+
         if self.valid:
             if (
                 type(self.score) is bool
@@ -39,11 +70,19 @@ class CandidateEvaluationResult:
             if self.error is not None:
                 raise ValueError("valid result must not have an error")
             object.__setattr__(self, "score", float(self.score))
+            object.__setattr__(self, "failure_stage", None)
+            object.__setattr__(self, "candidate_error_code", None)
         else:
             if self.score is not None:
                 raise ValueError("invalid result must have null score")
             if not isinstance(self.error, str) or not self.error.strip():
                 raise ValueError("invalid result requires a non-empty error message")
+            if self.failure_stage is None or self.candidate_error_code is None:
+                derived_stage, derived_code = classify_candidate_failure(self.error)
+                if self.failure_stage is None:
+                    object.__setattr__(self, "failure_stage", derived_stage)
+                if self.candidate_error_code is None:
+                    object.__setattr__(self, "candidate_error_code", derived_code)
 
 
 @dataclass(frozen=True)

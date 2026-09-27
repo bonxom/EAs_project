@@ -315,3 +315,124 @@ def test_make_tsp_evaluator():
 
     with pytest.raises(ValueError, match="Heuristic execution failed"):
         evaluator("def bad_syntax(:")
+
+
+def test_prompt_injection_and_separation(monkeypatch):
+    monkeypatch.setenv("OPENAI_COMPAT_API_KEY", "fake-key")
+    responses = [
+        FakeResponse(SAMPLE_HEURISTIC_SOURCE_1),
+        FakeResponse(SAMPLE_OFFSPRING_OPTIMIZER_SOURCE),
+        FakeResponse(SAMPLE_HEURISTIC_SOURCE_2),
+    ]
+    transport = FakeTransport(responses)
+    cfg = RealPilotConfig()
+    result = run_real_pilot_harness(cfg, allow_real_api=True, transport=transport)
+    assert result.status == "success"
+
+    assert len(transport.requests) == 3
+    req_inner_1 = transport.requests[0]["messages"][-1]["content"]
+    req_outer = transport.requests[1]["messages"][-1]["content"]
+    req_inner_2 = transport.requests[2]["messages"][-1]["content"]
+
+    assert "select_next_node" in req_inner_1
+    assert "[TASK CONTRACT]" in req_inner_1
+    assert "KIND: mutate" in req_inner_1
+
+    assert "select_next_node" in req_inner_2
+    assert "[TASK CONTRACT]" in req_inner_2
+
+    assert "improve_algorithm" in req_outer
+    assert "select_next_node" not in req_outer
+    assert "[TASK CONTRACT]" not in req_outer
+
+
+def test_fenced_python_candidate_accepted(monkeypatch):
+    monkeypatch.setenv("OPENAI_COMPAT_API_KEY", "fake-key")
+    fenced_source = f"```python\n{SAMPLE_HEURISTIC_SOURCE_1}\n```"
+    responses = [
+        FakeResponse(fenced_source),
+        FakeResponse(SAMPLE_OFFSPRING_OPTIMIZER_SOURCE),
+        FakeResponse(fenced_source),
+    ]
+    transport = FakeTransport(responses)
+    cfg = RealPilotConfig()
+    res = run_real_pilot_harness(cfg, allow_real_api=True, transport=transport)
+    assert res.status == "success"
+    assert res.inner_generate_requests == 2
+    assert res.inner_evaluate_requests == 2
+
+
+def test_prose_plus_code_rejected(monkeypatch):
+    monkeypatch.setenv("OPENAI_COMPAT_API_KEY", "fake-key")
+    prose_source = f"Here is the requested code:\n```python\n{SAMPLE_HEURISTIC_SOURCE_1}\n```"
+    responses = [
+        FakeResponse(prose_source),
+        FakeResponse(SAMPLE_OFFSPRING_OPTIMIZER_SOURCE),
+        FakeResponse(prose_source),
+    ]
+    transport = FakeTransport(responses)
+    cfg = RealPilotConfig()
+    res = run_real_pilot_harness(cfg, allow_real_api=True, transport=transport)
+    assert res.status == "failed"
+    assert res.inner_generate_requests == 2
+    assert res.inner_evaluate_requests == 2
+    assert res.total_provider_attempts == 3
+
+
+def test_wrong_function_and_signature_rejected(monkeypatch):
+    monkeypatch.setenv("OPENAI_COMPAT_API_KEY", "fake-key")
+    wrong_fn = "def choose_next_node(current_node, unvisited, coordinates):\n    return unvisited[0]\n"
+    wrong_sig = "def select_next_node(current_node):\n    return current_node\n"
+    responses = [
+        FakeResponse(wrong_fn),
+        FakeResponse(SAMPLE_OFFSPRING_OPTIMIZER_SOURCE),
+        FakeResponse(wrong_sig),
+    ]
+    transport = FakeTransport(responses)
+    cfg = RealPilotConfig()
+    res = run_real_pilot_harness(cfg, allow_real_api=True, transport=transport)
+    assert res.status == "failed"
+    assert res.inner_generate_requests == 2
+    assert res.inner_evaluate_requests == 2
+    assert res.total_provider_attempts == 3
+
+
+def test_syntax_error_rejected(monkeypatch):
+    monkeypatch.setenv("OPENAI_COMPAT_API_KEY", "fake-key")
+    bad_syntax = "def select_next_node(:"
+    responses = [
+        FakeResponse(bad_syntax),
+        FakeResponse(SAMPLE_OFFSPRING_OPTIMIZER_SOURCE),
+        FakeResponse(bad_syntax),
+    ]
+    transport = FakeTransport(responses)
+    cfg = RealPilotConfig()
+    res = run_real_pilot_harness(cfg, allow_real_api=True, transport=transport)
+    assert res.status == "failed"
+    assert res.inner_generate_requests == 2
+    assert res.inner_evaluate_requests == 2
+    assert res.total_provider_attempts == 3
+
+
+def test_m6b_topology_accounting_regression(monkeypatch):
+    monkeypatch.setenv("OPENAI_COMPAT_API_KEY", "fake-key")
+    bad_cand_1 = "def select_next_node(current_node, unvisited, coordinates):\n    return 'invalid_type'\n"
+    bad_cand_2 = "def select_next_node(current_node, unvisited, coordinates):\n    raise RuntimeError()\n"
+    responses = [
+        FakeResponse(bad_cand_1),
+        FakeResponse(SAMPLE_OFFSPRING_OPTIMIZER_SOURCE),
+        FakeResponse(bad_cand_2),
+    ]
+    transport = FakeTransport(responses)
+    cfg = RealPilotConfig()
+    res = run_real_pilot_harness(cfg, allow_real_api=True, transport=transport)
+
+    assert res.status == "failed"
+    assert res.best_utility is None
+    assert res.outer_provider_attempts == 1
+    assert res.inner_provider_attempts == 2
+    assert res.total_provider_attempts == 3
+
+    assert res.inner_generate_requests == 2
+    assert res.inner_evaluate_requests == 2
+

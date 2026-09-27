@@ -22,6 +22,7 @@ from moh.llm.budget import (
     ProviderUsageAccountant,
 )
 from moh.llm.openai_client import OpenAILLMClient, resolve_base_url
+from moh.llm.parsing import strip_code_fence
 from moh.optimizers.capabilities import CapabilityLimits
 from moh.optimizers.programs import parse_optimizer_program
 from moh.optimizers.runner import ProgramLimits
@@ -36,6 +37,41 @@ PILOT_SEED_OPTIMIZER = parse_optimizer_program(
     "o000001",
     idea="Initial pilot seed optimizer",
 )
+
+TSP_CANDIDATE_CONTRACT_PROMPT = """[TASK CONTRACT]
+Generate a Python TSP heuristic function implementing exactly:
+
+def select_next_node(current_node, unvisited, coordinates):
+
+Parameters:
+- current_node: int or coordinate representing the current node index.
+- unvisited: list of unvisited node indices.
+- coordinates: dict or list mapping node index to (x, y) coordinates.
+
+Requirements:
+- Must define a function named `select_next_node`.
+- Must return a single node index from `unvisited`.
+- Output MUST be executable Python source code ONLY.
+- Do NOT include markdown code blocks or fences (no ```python or ```).
+- Do NOT include any explanations, prose, or commentary.
+"""
+
+
+class TaskCandidateLLMAdapter:
+    """Wraps an LLM client to prepend a task-specific candidate contract to generate prompts."""
+
+    def __init__(self, llm: Any, task_contract_prompt: str):
+        self._llm = llm
+        self._task_contract_prompt = task_contract_prompt
+
+    def generate(self, prompt: str) -> str:
+        combined_prompt = (
+            f"{self._task_contract_prompt}\n\n[OPTIMIZER INSTRUCTION]\n{prompt}"
+        )
+        return self._llm.generate(combined_prompt)
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._llm, name)
 
 
 @dataclass(frozen=True)
@@ -314,7 +350,8 @@ def make_tsp_evaluator(
     runner = HeuristicRunner(ExecutionLimits())
 
     def evaluate_heuristic(source_code: str) -> float:
-        heuristic = Heuristic("cand", source_code)
+        cleaned_source = strip_code_fence(source_code)
+        heuristic = Heuristic("cand", cleaned_source)
         res = runner.evaluate(heuristic, task, context)
         if res.status != "success" or res.utility is None:
             raise ValueError(f"Heuristic execution failed: {res.error or 'unknown error'}")
@@ -391,7 +428,7 @@ def run_real_pilot_harness(
     inner_accountants: list[ProviderUsageAccountant] = []
     inner_budgets: list[ProviderAttemptBudget] = []
 
-    def inner_llm_factory(_prog_id: str) -> OpenAILLMClient:
+    def inner_llm_factory(_prog_id: str) -> Any:
         acct = ProviderUsageAccountant()
         budg = ProviderAttemptBudget(
             ProviderAttemptLimits(
@@ -400,7 +437,7 @@ def run_real_pilot_harness(
         )
         inner_accountants.append(acct)
         inner_budgets.append(budg)
-        return OpenAILLMClient(
+        raw_client = OpenAILLMClient(
             model=cfg.inner_llm.requested_model,
             timeout_seconds=cfg.runtime.timeout_seconds,
             observer=obs,
@@ -410,6 +447,7 @@ def run_real_pilot_harness(
             max_output_tokens=cfg.inner_llm.max_output_tokens,
             api_mode=cfg.runtime.api_mode,
         )
+        return TaskCandidateLLMAdapter(raw_client, TSP_CANDIDATE_CONTRACT_PROMPT)
 
     eval_fn = evaluator or make_tsp_evaluator(
         size=cfg.task.size, count=cfg.task.count, seed=cfg.task.seed
