@@ -1,0 +1,37 @@
+# EXPERIMENT CONFIG — NOT PILOT
+# Full MoH Experimental Protocol & Fair Budget Contract (M7A)
+
+protocol_version: "1.0.0"
+run_seed: 42
+replicate_index: 0
+
+algorithm:
+  method: "full_moh"
+  population_size: 2
+  generations: 2
+  max_inner_generate_requests: 5
+  max_inner_evaluate_requests: 5
+  program_limits:
+    timeout_seconds: 5.0
+    max_message_bytes: 1048576
+    max_output_bytes: 65536
+
+llm:
+  requested_model: "ag/gemini-3.6-flash-low"
+  provider: "openai"
+  proxy: "9router"
+  proxy_version: "0.5.81"
+  api_mode: "chat_completions"
+  outer_max_output_tokens: 2048
+  inner_max_output_tokens: 2048
+  timeout_seconds: 30.0
+  sdk_retries: 0
+  provider_attempt_limit_per_request: 1
+
+task:
+  family: "tsp"
+  sizes: [10]
+  instances_per_task: 3
+  root_seed: 42
+
+output_dir: "outputs/experiments"
