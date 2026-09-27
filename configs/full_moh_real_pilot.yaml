@@ -1,0 +1,31 @@
+# PILOT CONFIG — NOT BENCHMARK CONFIG
+population_size: 1
+generations: 1
+
+inner:
+  max_generate_requests: 1
+  max_evaluate_requests: 1
+
+outer_llm:
+  requested_model: "ag/gemini-3.6-flash-low"
+  max_output_tokens: 2048
+  provider_attempt_limit: 1
+
+inner_llm:
+  requested_model: "ag/gemini-3.6-flash-low"
+  max_output_tokens: 2048
+  provider_attempt_limit_per_optimizer: 1
+
+runtime:
+  timeout_seconds: 30.0
+  sdk_max_retries: 0
+  route_provider: "antigravity"
+  proxy: "9router"
+  proxy_version: "0.5.81"
+  api_mode: "chat_completions"
+
+task:
+  name: "tsp10"
+  size: 10
+  count: 1
+  seed: 42
