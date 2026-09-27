@@ -93,6 +93,7 @@ def clean_env(monkeypatch):
     monkeypatch.delenv("OPENAI_COMPAT_API_KEY", raising=False)
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     monkeypatch.delenv("OPENAI_COMPAT_BASE_URL", raising=False)
+    monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
 
 
 def test_cli_without_allow_real_api_performs_zero_network():
@@ -160,6 +161,8 @@ def test_environment_validation(monkeypatch):
 
     # Case 3: Missing base URL
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.delenv("OPENAI_COMPAT_BASE_URL", raising=False)
+    monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
     with pytest.raises(ValueError, match="OPENAI_COMPAT_BASE_URL"):
         validate_real_pilot_environment(cfg)
 
