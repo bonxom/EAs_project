@@ -8,6 +8,7 @@ config hashing, prompt fingerprinting, and run manifest schemas.
 import hashlib
 import json
 import math
+from collections.abc import Sequence
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Literal
@@ -466,3 +467,30 @@ def validate_manifest_safety(data: Any) -> None:
             validate_manifest_safety(item)
     elif isinstance(data, float) and not math.isfinite(data):
         raise ValueError("Manifest safety violation: non-finite float value found")
+
+
+def calculate_diversity_facts(population_sources: Sequence[str]) -> dict[str, int]:
+    """Calculate exact-source diversity facts for a population of source strings.
+    
+    Formula:
+      active_population_size = len(population_sources)
+      unique_source_sha_count = len(set(hash(src) for src in population_sources))
+      exact_duplicate_count = active_population_size - unique_source_sha_count
+    """
+    if not isinstance(population_sources, (list, tuple)):
+        raise TypeError("population_sources must be a list or tuple")
+    
+    shas = [
+        hashlib.sha256(src.encode("utf-8")).hexdigest()
+        for src in population_sources
+        if isinstance(src, str)
+    ]
+    size = len(shas)
+    unique_count = len(set(shas))
+    duplicate_count = size - unique_count
+    
+    return {
+        "active_population_size": size,
+        "unique_source_sha_count": unique_count,
+        "exact_duplicate_count": duplicate_count,
+    }

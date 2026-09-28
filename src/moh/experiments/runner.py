@@ -121,15 +121,14 @@ def build_real_provider_llms(
     replicate_budget: ProviderAttemptBudget,
     usage_accountant: ProviderUsageAccountant | None = None,
     transport_factory: Callable[[], Any] | None = None,
-) -> tuple[Any, Any]:
-    """Construct production outer meta-LLM and inner task-candidate LLM adapter."""
+) -> tuple[Any, Callable[[str], Any], ProviderUsageAccountant, list[ProviderUsageAccountant]]:
+    """Construct production outer meta-LLM and inner task-candidate LLM factory."""
     validate_real_provider_environment(config.llm)
 
-    if usage_accountant is None:
-        usage_accountant = ProviderUsageAccountant()
+    outer_accountant = usage_accountant or ProviderUsageAccountant()
+    inner_accountants: list[ProviderUsageAccountant] = []
 
     meta_transport = transport_factory() if transport_factory is not None else None
-    inner_transport = transport_factory() if transport_factory is not None else None
 
     meta_llm = OpenAILLMClient(
         model=config.llm.requested_model,
@@ -137,27 +136,30 @@ def build_real_provider_llms(
         observer=lambda *_: None,
         transport=meta_transport,
         attempt_budget=replicate_budget,
-        usage_accountant=usage_accountant,
+        usage_accountant=outer_accountant,
         max_output_tokens=config.llm.outer_max_output_tokens,
         api_mode=config.llm.api_mode,
         max_attempts_per_request=config.llm.provider_attempt_limit_per_request,
     )
 
-    inner_client = OpenAILLMClient(
-        model=config.llm.requested_model,
-        timeout_seconds=config.llm.timeout_seconds,
-        observer=lambda *_: None,
-        transport=inner_transport,
-        attempt_budget=replicate_budget,
-        usage_accountant=usage_accountant,
-        max_output_tokens=config.llm.inner_max_output_tokens,
-        api_mode=config.llm.api_mode,
-        max_attempts_per_request=config.llm.provider_attempt_limit_per_request,
-    )
+    def inner_llm_factory(_prog_id: str) -> Any:
+        acct = ProviderUsageAccountant()
+        inner_accountants.append(acct)
+        inner_transport = transport_factory() if transport_factory is not None else None
+        inner_client = OpenAILLMClient(
+            model=config.llm.requested_model,
+            timeout_seconds=config.llm.timeout_seconds,
+            observer=lambda *_: None,
+            transport=inner_transport,
+            attempt_budget=replicate_budget,
+            usage_accountant=acct,
+            max_output_tokens=config.llm.inner_max_output_tokens,
+            api_mode=config.llm.api_mode,
+            max_attempts_per_request=config.llm.provider_attempt_limit_per_request,
+        )
+        return TaskCandidateLLMAdapter(inner_client, TSP_CANDIDATE_CONTRACT_PROMPT)
 
-    inner_llm = TaskCandidateLLMAdapter(inner_client, TSP_CANDIDATE_CONTRACT_PROMPT)
-
-    return meta_llm, inner_llm
+    return meta_llm, inner_llm_factory, outer_accountant, inner_accountants
 
 
 def get_git_commit_info(cwd: Path | None = None) -> tuple[str, bool]:
@@ -298,22 +300,34 @@ def run_experiment(
     run_dir = config.output_dir / run_id
     run_dir.mkdir(parents=True, exist_ok=True)
 
+    outer_accountant: ProviderUsageAccountant | None = None
+    inner_accountants: list[ProviderUsageAccountant] = []
+    inner_factory: Callable[[str], Any] | None = None
+
     # Construct LLMs if not provided
     if meta_llm is None:
         if config.llm.provider == "fake":
             meta_llm = FakeLLM(seed=config.run_seed + config.replicate_index)
-            inner_llm = inner_llm or meta_llm
+            if inner_llm is not None:
+                inner_factory = lambda _prog_id: inner_llm
+            else:
+                inner_factory = lambda _prog_id: meta_llm
+            outer_accountant = ProviderUsageAccountant()
         else:
             if replicate_budget is None:
                 c_guard = campaign_guard or CampaignMasterGuard(max_attempts=66)
                 replicate_budget = ReplicateAttemptBudget(c_guard, max_replicate_attempts=22)
-            meta_llm, inner_llm = build_real_provider_llms(
+            meta_llm, inner_factory, outer_accountant, inner_accountants = build_real_provider_llms(
                 config=config,
                 replicate_budget=replicate_budget,
                 transport_factory=transport_factory,
             )
-
-    inner_llm = inner_llm or meta_llm
+    else:
+        if inner_llm is not None:
+            inner_factory = lambda _prog_id: inner_llm
+        else:
+            inner_factory = lambda _prog_id: meta_llm
+        outer_accountant = getattr(meta_llm, "usage_accountant", None) or ProviderUsageAccountant()
 
     # Instantiate task and evaluator
     size = config.task.sizes[0]
@@ -366,7 +380,7 @@ def run_experiment(
         res = run_full_moh(
             config=full_moh_config,
             meta_llm=meta_llm,
-            inner_llm=inner_llm,
+            inner_llm_factory=inner_factory,
             evaluator=evaluator,
             emit=emit_event,
         )
@@ -374,8 +388,35 @@ def run_experiment(
             status_label = "COMPLETED_VALID"
         elif res.work_counts.outer_programs_evaluated > 0:
             status_label = "COMPLETED_NO_VALID_UTILITY"
+            any_inner_gen_failed = any(
+                ev.inner_result.generated_count > 0 and ev.inner_result.evaluated_count == 0
+                for ev in res.outer_result.all_evaluated
+            )
+            any_cand_eval_failed = any(
+                ev.inner_result.evaluated_count > 0 and ev.inner_result.valid_evaluation_count == 0
+                for ev in res.outer_result.all_evaluated
+            )
+            if any_inner_gen_failed:
+                failure_stage = "inner_generation"
+                error_code = "provider_generation_failed"
+            elif any_cand_eval_failed:
+                first_cand_err = None
+                for ev in res.outer_result.all_evaluated:
+                    for cand_res in ev.inner_result.evaluations:
+                        if not cand_res.valid:
+                            first_cand_err = cand_res
+                            break
+                    if first_cand_err:
+                        break
+                failure_stage = first_cand_err.failure_stage if first_cand_err and first_cand_err.failure_stage else "candidate_execution"
+                error_code = first_cand_err.candidate_error_code if first_cand_err and first_cand_err.candidate_error_code else "candidate_evaluation_failed"
+            else:
+                failure_stage = "optimizer_execution"
+                error_code = "no_valid_utility_produced"
         else:
             status_label = "EXECUTION_FAILURE"
+            failure_stage = "outer_evolution"
+            error_code = "no_outer_programs_evaluated"
         best_utility = res.best_utility
         best_program_id = res.best_program.id if res.best_program else None
         work_counts = {
@@ -458,11 +499,37 @@ def run_experiment(
         },
         prompt_fingerprints=fingerprints,
         work_counts=work_counts,
-        token_counts={
-            "outer_input_tokens": getattr(meta_llm, "input_tokens", 0),
-            "outer_output_tokens": getattr(meta_llm, "output_tokens", 0),
-            "total_tokens": getattr(meta_llm, "total_tokens", 0),
-        },
+        token_counts=(
+            {
+                "outer_input_tokens": outer_accountant.totals().input_tokens,
+                "outer_output_tokens": outer_accountant.totals().output_tokens,
+                "outer_reasoning_tokens": outer_accountant.totals().reasoning_tokens,
+                "outer_total_tokens": outer_accountant.totals().total_tokens,
+                "inner_input_tokens": sum(a.totals().input_tokens for a in inner_accountants),
+                "inner_output_tokens": sum(a.totals().output_tokens for a in inner_accountants),
+                "inner_reasoning_tokens": sum(a.totals().reasoning_tokens for a in inner_accountants),
+                "inner_total_tokens": sum(a.totals().total_tokens for a in inner_accountants),
+                "combined_input_tokens": outer_accountant.totals().input_tokens + sum(a.totals().input_tokens for a in inner_accountants),
+                "combined_output_tokens": outer_accountant.totals().output_tokens + sum(a.totals().output_tokens for a in inner_accountants),
+                "combined_reasoning_tokens": outer_accountant.totals().reasoning_tokens + sum(a.totals().reasoning_tokens for a in inner_accountants),
+                "combined_total_tokens": outer_accountant.totals().total_tokens + sum(a.totals().total_tokens for a in inner_accountants),
+            }
+            if outer_accountant
+            else {
+                "outer_input_tokens": 0,
+                "outer_output_tokens": 0,
+                "outer_reasoning_tokens": 0,
+                "outer_total_tokens": 0,
+                "inner_input_tokens": 0,
+                "inner_output_tokens": 0,
+                "inner_reasoning_tokens": 0,
+                "inner_total_tokens": 0,
+                "combined_input_tokens": 0,
+                "combined_output_tokens": 0,
+                "combined_reasoning_tokens": 0,
+                "combined_total_tokens": 0,
+            }
+        ),
         status=status_label,
         failure_stage=failure_stage,
         error_code=error_code,
@@ -647,7 +714,13 @@ def run_campaign(
                 t_counts = m_dict.get("token_counts", {})
                 total_token_usage["outer_input_tokens"] += t_counts.get("outer_input_tokens", 0)
                 total_token_usage["outer_output_tokens"] += t_counts.get("outer_output_tokens", 0)
-                total_token_usage["outer_total_tokens"] += t_counts.get("total_tokens", 0)
+                total_token_usage["outer_reasoning_tokens"] += t_counts.get("outer_reasoning_tokens", 0)
+                total_token_usage["outer_total_tokens"] += t_counts.get("outer_total_tokens", t_counts.get("total_tokens", 0))
+
+                total_token_usage["inner_input_tokens"] += t_counts.get("inner_input_tokens", 0)
+                total_token_usage["inner_output_tokens"] += t_counts.get("inner_output_tokens", 0)
+                total_token_usage["inner_reasoning_tokens"] += t_counts.get("inner_reasoning_tokens", 0)
+                total_token_usage["inner_total_tokens"] += t_counts.get("inner_total_tokens", 0)
 
                 rep_attempts = replicate_budget.usage.attempts
                 total_provider_attempts["total_provider_attempts"] += rep_attempts
