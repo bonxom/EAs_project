@@ -484,7 +484,10 @@ def test_experiment_runner_known_good_inner_path(tmp_path: Path):
     assert m_dict["work_counts"]["inner_evaluate_requests"] > 0
 
 
-def test_multiple_inner_accountant_aggregation(tmp_path: Path):
+def test_multiple_inner_accountant_aggregation(monkeypatch, tmp_path: Path):
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.setenv("OPENAI_COMPAT_API_KEY", "sk-fake-compat-key")
+    monkeypatch.setenv("OPENAI_COMPAT_BASE_URL", "http://172.25.16.1:20128/v1")
     """Verify that multiple inner clients created via factory have their usage aggregated exactly."""
     cfg = ExperimentProtocolConfig(
         output_dir=tmp_path,
