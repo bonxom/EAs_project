@@ -25,6 +25,8 @@ def classify_candidate_failure(error_msg: str) -> tuple[str, str]:
         return "candidate_validation", "invalid_signature"
     if "source_limit" in msg:
         return "candidate_validation", "source_limit_exceeded"
+    if "candidate_contract" in msg or "contract" in msg or "malformed" in msg:
+        return "candidate_generation_validation", "candidate_contract_invalid"
     if "invalid_return" in msg or "invalid_result" in msg:
         return "candidate_execution", "invalid_result"
     if "timeout" in msg:

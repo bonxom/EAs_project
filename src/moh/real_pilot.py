@@ -16,6 +16,7 @@ from moh.core.seeds import derive_seed
 from moh.execution.heuristic_runner import HeuristicRunner
 from moh.execution.protocol import ExecutionLimits
 from moh.full_moh import FullMoHConfig, FullMoHResult, run_full_moh
+from moh.llm.base import GenerationError
 from moh.llm.budget import (
     ProviderAttemptBudget,
     ProviderAttemptLimits,
@@ -56,19 +57,39 @@ Requirements:
 - Do NOT include any explanations, prose, or commentary.
 """
 
+TEXT_KINDS = {"reflection"}
+CANDIDATE_KINDS = {"mutate", "crossover"}
+
+
+def parse_generation_kind(prompt: str) -> str:
+    lines = prompt.splitlines()
+    first_line = lines[0].strip() if lines else ""
+    if not first_line.startswith("KIND: "):
+        raise GenerationError("missing_prompt_kind")
+    kind = first_line[6:].strip()
+    if kind not in TEXT_KINDS and kind not in CANDIDATE_KINDS:
+        raise GenerationError("unsupported_generation_kind")
+    return kind
+
 
 class TaskCandidateLLMAdapter:
-    """Wraps an LLM client to prepend a task-specific candidate contract to generate prompts."""
+    """Wraps an LLM client to route generation requests by intent (TEXT vs CANDIDATE)."""
 
     def __init__(self, llm: Any, task_contract_prompt: str):
         self._llm = llm
         self._task_contract_prompt = task_contract_prompt
 
     def generate(self, prompt: str) -> str:
-        combined_prompt = (
-            f"{self._task_contract_prompt}\n\n[OPTIMIZER INSTRUCTION]\n{prompt}"
-        )
-        return self._llm.generate(combined_prompt)
+        kind = parse_generation_kind(prompt)
+        if kind in TEXT_KINDS:
+            return self._llm.generate(prompt)
+        elif kind in CANDIDATE_KINDS:
+            combined_prompt = (
+                f"{self._task_contract_prompt}\n\n[OPTIMIZER INSTRUCTION]\n{prompt}"
+            )
+            return self._llm.generate(combined_prompt)
+        else:
+            raise GenerationError("unsupported_generation_kind")
 
     def __getattr__(self, name: str) -> Any:
         return getattr(self._llm, name)

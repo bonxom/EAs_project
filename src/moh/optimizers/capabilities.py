@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from moh.core.models import OptimizerProgram
+from moh.llm.base import GenerationError
 from moh.optimizers.protocol import decode_message
 from moh.optimizers.runner import OptimizerProgramRunner, ProgramLimits
 
@@ -120,6 +121,13 @@ class OptimizerCapabilityController:
 
         try:
             text = self._llm.generate(prompt)
+        except GenerationError as exc:
+            return {
+                "type": "error",
+                "request_id": req_id,
+                "code": exc.code or "generation_failed",
+                "message": f"LLM generation failed: {exc}",
+            }
         except Exception as exc:  # noqa: BLE001
             return {
                 "type": "error",

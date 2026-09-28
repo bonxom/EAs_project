@@ -539,8 +539,8 @@ def test_multiple_inner_accountant_aggregation(monkeypatch, tmp_path: Path):
     client1 = inner_factory("o000001")
     client2 = inner_factory("o000002")
     
-    client1.generate("prompt 1")
-    client2.generate("prompt 2")
+    client1.generate("KIND: mutate\nprompt 1")
+    client2.generate("KIND: mutate\nprompt 2")
     
     assert len(inner_accts) == 2
     assert inner_accts[0].usage.total_tokens == 15
