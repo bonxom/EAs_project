@@ -540,11 +540,11 @@ def test_multiple_inner_accountant_aggregation(tmp_path: Path):
     client2.generate("prompt 2")
     
     assert len(inner_accts) == 2
-    assert inner_accts[0].totals().total_tokens == 15
-    assert inner_accts[1].totals().total_tokens == 15
+    assert inner_accts[0].usage.total_tokens == 15
+    assert inner_accts[1].usage.total_tokens == 15
     
-    total_inner_in = sum(a.totals().input_tokens for a in inner_accts)
-    total_inner_out = sum(a.totals().output_tokens for a in inner_accts)
+    total_inner_in = sum(a.usage.input_tokens for a in inner_accts)
+    total_inner_out = sum(a.usage.output_tokens for a in inner_accts)
     assert total_inner_in == 20
     assert total_inner_out == 10
 
@@ -595,13 +595,13 @@ def test_provider_failure_token_accounting():
         client.generate("prompt 1")
         
     assert budg.usage.attempts == 1
-    assert acct.totals().total_tokens == 0
+    assert acct.usage.total_tokens == 0
     
     # Second call succeeds
     res = client.generate("prompt 2")
     assert res == "success"
     assert budg.usage.attempts == 2
-    assert acct.totals().total_tokens == 50
+    assert acct.usage.total_tokens == 50
 
 
 def test_diversity_arithmetic_helper():

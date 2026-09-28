@@ -501,18 +501,18 @@ def run_experiment(
         work_counts=work_counts,
         token_counts=(
             {
-                "outer_input_tokens": outer_accountant.totals().input_tokens,
-                "outer_output_tokens": outer_accountant.totals().output_tokens,
-                "outer_reasoning_tokens": outer_accountant.totals().reasoning_tokens,
-                "outer_total_tokens": outer_accountant.totals().total_tokens,
-                "inner_input_tokens": sum(a.totals().input_tokens for a in inner_accountants),
-                "inner_output_tokens": sum(a.totals().output_tokens for a in inner_accountants),
-                "inner_reasoning_tokens": sum(a.totals().reasoning_tokens for a in inner_accountants),
-                "inner_total_tokens": sum(a.totals().total_tokens for a in inner_accountants),
-                "combined_input_tokens": outer_accountant.totals().input_tokens + sum(a.totals().input_tokens for a in inner_accountants),
-                "combined_output_tokens": outer_accountant.totals().output_tokens + sum(a.totals().output_tokens for a in inner_accountants),
-                "combined_reasoning_tokens": outer_accountant.totals().reasoning_tokens + sum(a.totals().reasoning_tokens for a in inner_accountants),
-                "combined_total_tokens": outer_accountant.totals().total_tokens + sum(a.totals().total_tokens for a in inner_accountants),
+                "outer_input_tokens": outer_accountant.usage.input_tokens,
+                "outer_output_tokens": outer_accountant.usage.output_tokens,
+                "outer_reasoning_tokens": outer_accountant.usage.reasoning_tokens,
+                "outer_total_tokens": outer_accountant.usage.total_tokens,
+                "inner_input_tokens": sum(a.usage.input_tokens for a in inner_accountants),
+                "inner_output_tokens": sum(a.usage.output_tokens for a in inner_accountants),
+                "inner_reasoning_tokens": sum(a.usage.reasoning_tokens for a in inner_accountants),
+                "inner_total_tokens": sum(a.usage.total_tokens for a in inner_accountants),
+                "combined_input_tokens": outer_accountant.usage.input_tokens + sum(a.usage.input_tokens for a in inner_accountants),
+                "combined_output_tokens": outer_accountant.usage.output_tokens + sum(a.usage.output_tokens for a in inner_accountants),
+                "combined_reasoning_tokens": outer_accountant.usage.reasoning_tokens + sum(a.usage.reasoning_tokens for a in inner_accountants),
+                "combined_total_tokens": outer_accountant.usage.total_tokens + sum(a.usage.total_tokens for a in inner_accountants),
             }
             if outer_accountant
             else {
