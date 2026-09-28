@@ -153,7 +153,7 @@ def improve_algorithm(api):
     elapsed = time.monotonic() - start_time
 
     assert res["status"] == "failed"
-    assert res["code"] == "timeout"
+    assert res["code"] == "optimizer_execution_timeout"
     assert elapsed < 2.0
 
 

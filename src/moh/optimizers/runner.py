@@ -24,6 +24,7 @@ class ProgramLimits:
     timeout_seconds: float = 5.0
     max_message_bytes: int = 1048576  # 1 MB
     max_output_bytes: int = 65536     # 64 KB
+    max_wall_seconds: float | None = None
 
     def __post_init__(self):
         if (
@@ -32,6 +33,12 @@ class ProgramLimits:
             or self.timeout_seconds <= 0
         ):
             raise ValueError("timeout_seconds must be positive and finite")
+        if self.max_wall_seconds is not None and (
+            type(self.max_wall_seconds) not in (int, float)
+            or not math.isfinite(self.max_wall_seconds)
+            or self.max_wall_seconds <= 0
+        ):
+            raise ValueError("max_wall_seconds must be positive and finite if provided")
         for limit in (self.max_message_bytes, self.max_output_bytes):
             if type(limit) is not int or limit <= 0:
                 raise ValueError("byte limits must be positive integers")
@@ -114,7 +121,14 @@ class OptimizerProgramRunner:
                 tempfile.TemporaryDirectory(prefix="moh-opt-worker-") as cwd,
                 selectors.DefaultSelector() as selector,
             ):
-                deadline = time.monotonic() + lim.timeout_seconds
+                now = time.monotonic()
+                deadline = now + lim.timeout_seconds
+                max_wall = (
+                    lim.max_wall_seconds
+                    if lim.max_wall_seconds is not None
+                    else max(lim.timeout_seconds + 300.0, lim.timeout_seconds * 100.0)
+                )
+                global_wall_deadline = now + max_wall
                 process = subprocess.Popen(
                     [
                         sys.executable,
@@ -166,11 +180,18 @@ class OptimizerProgramRunner:
                     selector.register(stream, event, kind)
 
                 while selector.get_map() and final_result is None and not error_code:
-                    remaining = deadline - time.monotonic()
-                    if remaining <= 0:
-                        error_code = "timeout"
-                        error_message = "execution timed out"
+                    now = time.monotonic()
+                    if now >= global_wall_deadline:
+                        error_code = "optimizer_wall_timeout"
+                        error_message = "global wall-clock timeout exceeded"
                         break
+                    if now >= deadline:
+                        error_code = "optimizer_execution_timeout"
+                        error_message = "optimizer-controlled execution budget exceeded"
+                        break
+
+                    remaining = min(deadline - now, global_wall_deadline - now)
+                    remaining = max(0.0, remaining)
 
                     for key, _ in selector.select(remaining):
                         if key.data in ("child_stdout", "child_stderr"):
@@ -213,14 +234,25 @@ class OptimizerProgramRunner:
                                     break
 
                                 # Handle capability request ("generate" or "evaluate")
+                                is_capability = msg_type in ("generate", "evaluate")
+                                cap_start = time.monotonic() if is_capability else 0.0
+
                                 try:
                                     resp_data = request_handler(msg)
+                                    if is_capability:
+                                        cap_duration = time.monotonic() - cap_start
+                                        deadline += cap_duration
                                     resp_bytes = (
                                         encode_message(resp_data) + "\n"
                                     ).encode("utf-8")
-                                    os.write(p2c_write, resp_bytes)
+                                    try:
+                                        os.write(p2c_write, resp_bytes)
+                                    except OSError:
+                                        pass
                                 except Exception as exc:  # noqa: BLE001
-                                    # Forward parent handler error as ErrorResponse to worker
+                                    if is_capability:
+                                        cap_duration = time.monotonic() - cap_start
+                                        deadline += cap_duration
                                     err_resp = (
                                         encode_message(
                                             {
@@ -241,9 +273,9 @@ class OptimizerProgramRunner:
 
                 if not error_code and final_result is None:
                     try:
-                        process.wait(timeout=max(0, deadline - time.monotonic()))
+                        process.wait(timeout=max(0.0, min(deadline - time.monotonic(), global_wall_deadline - time.monotonic())))
                     except subprocess.TimeoutExpired:
-                        error_code = "timeout"
+                        error_code = "optimizer_execution_timeout"
                         error_message = "execution timed out waiting for exit"
                     else:
                         if process.returncode != 0 and final_result is None:
