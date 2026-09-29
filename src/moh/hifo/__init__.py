@@ -1,0 +1,41 @@
+"""Dual-HiFo schema contracts."""
+
+from moh.hifo.models import (
+    CapabilityBudgetObservation,
+    CreditComponents,
+    CrossLevelExperience,
+    DiversityObservation,
+    EvidenceRef,
+    ForesightDecision,
+    ForesightMode,
+    ForesightState,
+    HiFoExperimentMode,
+    HiFoLevel,
+    InnerEvaluationPoint,
+    InnerTrajectorySummary,
+    InsightRecord,
+    InsightStatus,
+    OuterGenerationSummary,
+    ProgressObservation,
+    to_json_dict,
+)
+
+__all__ = [
+    "CapabilityBudgetObservation",
+    "CreditComponents",
+    "CrossLevelExperience",
+    "DiversityObservation",
+    "EvidenceRef",
+    "ForesightDecision",
+    "ForesightMode",
+    "ForesightState",
+    "HiFoExperimentMode",
+    "HiFoLevel",
+    "InnerEvaluationPoint",
+    "InnerTrajectorySummary",
+    "InsightRecord",
+    "InsightStatus",
+    "OuterGenerationSummary",
+    "ProgressObservation",
+    "to_json_dict",
+]
