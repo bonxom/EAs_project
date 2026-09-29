@@ -1,0 +1,113 @@
+{
+  "schema_version": 1,
+  "freeze_name": "full_moh_dev_baseline_v1",
+  "baseline_level": "development_sanity",
+  "implementation_identity": {
+    "checkpoint_tag": "full-moh-real-e2e-v1",
+    "tag_object_sha256": "985c3ea243c7c8b0e4abc85798b21a90b9984344",
+    "peeled_commit_sha256": "28d4d7fe29cd2341dbb9c70336d2a49cc01a7407",
+    "branch": "full-moh"
+  },
+  "campaign_identity": {
+    "campaign_id": "campaign_full_moh_5faa7660",
+    "campaign_root": "outputs/sanity_campaign",
+    "replicates": [
+      "run_full_moh_5faa7660_rep00",
+      "run_full_moh_368b2eba_rep01",
+      "run_full_moh_190c157a_rep02"
+    ],
+    "campaign_status": "SANITY_CAMPAIGN_COMPLETE",
+    "scientific_classification": "M7BM_N3_SANITY_VALID"
+  },
+  "config_identity": {
+    "config_path": "configs/full_moh_sanity.yaml",
+    "canonical_config_semantic_hash": "5faa7660a6494103f4b814b9d10c3d062baae9d58ff2dbd26884739af7cc0aa7",
+    "config_file_byte_size": 809,
+    "config_file_content_sha256": "522afaa2613f62ce934808dcbd5a865cea55337728d6ee630d9bc8bb228be9bc"
+  },
+  "problem_protocol": {
+    "problem_type": "TSP10",
+    "instances_per_evaluation": 3,
+    "root_seed": 42
+  },
+  "outer_topology": {
+    "mu": 2,
+    "generations": 2,
+    "replicates": 3
+  },
+  "budget_protocol": {
+    "inner_max_generate": 5,
+    "inner_max_evaluate": 5
+  },
+  "model_protocol": {
+    "requested_model": "ag/gemini-3.6-flash-low",
+    "provider_api_compatibility": "openai_compatible",
+    "provider_api_mode": "chat_completions",
+    "outer_max_output_tokens": 2048,
+    "inner_max_output_tokens": 2048
+  },
+  "timeout_protocol": {
+    "provider_http_timeout_seconds": 30.0,
+    "optimizer_compute_timeout_seconds": 5.0,
+    "evaluator_timeout_seconds": 5.0,
+    "global_wall_timeout_seconds": 500.0,
+    "sdk_retries": 0,
+    "application_attempts_per_logical_request": 1
+  },
+  "generation_routing": {
+    "reflection": "TEXT",
+    "mutation": "CANDIDATE",
+    "crossover": "CANDIDATE"
+  },
+  "candidate_contract": {
+    "type": "strict_candidate_contract",
+    "allow_scraping": false,
+    "allow_repair": false,
+    "allow_hidden_retry": false
+  },
+  "utility_semantics": {
+    "definition": "max valid numeric inner evaluation score",
+    "finite_negative_valid": true,
+    "none_utility_rule": "utility is None only when no valid numeric evaluation exists",
+    "tie_breaking": "exact score tie keeps first valid occurrence"
+  },
+  "outer_selection_semantics": {
+    "type": "steady_state_mu_plus_one",
+    "pop_replacement": "parent population + one offspring per generation",
+    "ranking": "numeric utility ranks above None, higher numeric utility is better",
+    "tie_breaking": "exact numeric tie broken deterministically by program.id"
+  },
+  "execution_accounting_semantics": {
+    "all_evaluated_rule": "all_evaluated records every optimizer actually executed, in exact execution order",
+    "admitted_counts_rule": "generated_count and evaluated_count refer to admitted logical capability counts",
+    "reservation_rule": "capability budget is reserved before dependency execution",
+    "failure_accounting": "failures after admission still count"
+  },
+  "provider_usage_semantics": {
+    "input_tokens": "prompt tokens",
+    "output_tokens": "completion tokens including reasoning",
+    "reasoning_tokens": "subset of output_tokens",
+    "total_tokens": "input_tokens + output_tokens",
+    "reasoning_tokens_rule": "reasoning_tokens <= output_tokens",
+    "attempt_accounting": "ProviderAttemptUsage counts application attempts to configured endpoint only"
+  },
+  "artifact_event_semantics": {
+    "physical_file_rule": "physical candidate artifact existence does NOT imply a generate event or evaluate event",
+    "authoritative_ledger": "raw event ledger is authoritative"
+  },
+  "test_environment": {
+    "runtime": "Linux / WSL2",
+    "uv_path": "/home/ducanh/.local/bin/uv",
+    "python_executable": "/home/ducanh/projects/EAs_project/.venv/bin/python",
+    "sys_platform": "linux",
+    "os_name": "posix",
+    "platform_system": "Linux",
+    "pytest_result": "564 passed",
+    "pytest_failures": 0,
+    "pytest_exit_code": 0,
+    "ruff_result": "All checks passed",
+    "ruff_exit_code": 0
+  },
+  "paper_gate": "closed",
+  "hifo_status": "unimplemented"
+}

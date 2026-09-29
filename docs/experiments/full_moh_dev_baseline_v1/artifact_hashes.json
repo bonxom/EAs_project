@@ -1,0 +1,68 @@
+{
+  "schema_version": 1,
+  "canonical_config_semantic_hash": "5faa7660a6494103f4b814b9d10c3d062baae9d58ff2dbd26884739af7cc0aa7",
+  "artifacts": [
+    {
+      "artifact_role": "campaign_manifest",
+      "path": "outputs/sanity_campaign/campaigns/campaign_full_moh_5faa7660/campaign_manifest.json",
+      "byte_size": 2033,
+      "sha256": "392456ac1e26c289fd2290a26ec7372fc5d1fbcce04f9c6d2f58f0f626d37720"
+    },
+    {
+      "artifact_role": "replicate_manifest",
+      "path": "outputs/sanity_campaign/run_full_moh_5faa7660_rep00/manifest.json",
+      "byte_size": 4100,
+      "sha256": "cda72b0ea9675526a84cba7dddbfa269066768fcf21ae7630749fbff67e34db1"
+    },
+    {
+      "artifact_role": "replicate_trajectory",
+      "path": "outputs/sanity_campaign/run_full_moh_5faa7660_rep00/trajectory.json",
+      "byte_size": 7062,
+      "sha256": "9319ddad6df122c64df922ea2adb30db8b354a7b61c9ca69e3c594140f5773c6"
+    },
+    {
+      "artifact_role": "replicate_manifest",
+      "path": "outputs/sanity_campaign/run_full_moh_368b2eba_rep01/manifest.json",
+      "byte_size": 4547,
+      "sha256": "bbe9660deccf93de3b58b3832141702f18375f5b34af61aa3f063d3b6fcb5e6f"
+    },
+    {
+      "artifact_role": "replicate_trajectory",
+      "path": "outputs/sanity_campaign/run_full_moh_368b2eba_rep01/trajectory.json",
+      "byte_size": 4572,
+      "sha256": "00be106705ab0be3ca1a1a2e9bda21ec5bb86408bd5d913188567aa87b42f1fb"
+    },
+    {
+      "artifact_role": "replicate_manifest",
+      "path": "outputs/sanity_campaign/run_full_moh_190c157a_rep02/manifest.json",
+      "byte_size": 4323,
+      "sha256": "6af8fe7004e7fb8632adaf3ed3616026bf4f01ab180ac651a7b2c7bb4a7133ee"
+    },
+    {
+      "artifact_role": "replicate_trajectory",
+      "path": "outputs/sanity_campaign/run_full_moh_190c157a_rep02/trajectory.json",
+      "byte_size": 4776,
+      "sha256": "e3b03a2292e4e9a5d9f5482bbe6e21f2b41a7e96a83544b4cb40fd8fc3089e4d"
+    },
+    {
+      "artifact_role": "static_baseline_candidate",
+      "path": "outputs/sanity_campaign/run_full_moh_5faa7660_rep00/candidates/a937ae6a1159aa3088dedd97824c56cb5954ff3270f37cde6f0a505b8428e723.py",
+      "byte_size": 406,
+      "sha256": "a937ae6a1159aa3088dedd97824c56cb5954ff3270f37cde6f0a505b8428e723"
+    },
+    {
+      "artifact_role": "campaign_config_file",
+      "path": "configs/full_moh_sanity.yaml",
+      "byte_size": 809,
+      "sha256": "522afaa2613f62ce934808dcbd5a865cea55337728d6ee630d9bc8bb228be9bc"
+    }
+  ],
+  "external_evidence": [
+    {
+      "artifact_role": "historical_campaign_execution_log",
+      "path": "/home/ducanh/moh_runtime_evidence/m7bm_full_moh_n3_campaign.out",
+      "byte_size": 1346,
+      "sha256": "37049bd05f6313cf815d282e8c3a230a87a1401c0cd872cfca9fe297ac53f168"
+    }
+  ]
+}

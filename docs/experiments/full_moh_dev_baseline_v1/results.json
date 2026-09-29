@@ -1,0 +1,169 @@
+{
+  "schema_version": 1,
+  "campaign_id": "campaign_full_moh_5faa7660",
+  "replicate_run_ids": [
+    "run_full_moh_5faa7660_rep00",
+    "run_full_moh_368b2eba_rep01",
+    "run_full_moh_190c157a_rep02"
+  ],
+  "campaign_status": "SANITY_CAMPAIGN_COMPLETE",
+  "scientific_classification": "M7BM_N3_SANITY_VALID",
+  "generate_metrics": {
+    "inner_generate_requests": 27,
+    "text_requests": 9,
+    "candidate_intent_requests": 18,
+    "valid_provider_candidate_generations": 17,
+    "invalid_provider_candidate_generations": 1,
+    "candidate_generation_success_rate": "17 / 18"
+  },
+  "evaluation_metrics": {
+    "inner_evaluate_requests": 17,
+    "valid_numeric_evaluations": 14,
+    "invalid_evaluations": 3,
+    "task_instance_evaluations": 51
+  },
+  "utility_coverage": {
+    "optimizer_executions": 12,
+    "optimizers_with_numeric_utility": 10,
+    "optimizers_with_none_utility": 2,
+    "numeric_coverage_fraction": "10 / 12"
+  },
+  "k_distribution": {
+    "k0": 2,
+    "k1": 6,
+    "k2": 4,
+    "k_ge_3": 0,
+    "mean_k": 1.1666666667,
+    "median_k": 1.0,
+    "max_k": 2
+  },
+  "offspring_metrics": {
+    "offspring_total": 6,
+    "offspring_with_numeric_utility": 4,
+    "immediate_survival": 2,
+    "final_survival": 2
+  },
+  "winners": {
+    "rep0": {
+      "winner": "o000002",
+      "utility": -3.0954547423176586
+    },
+    "rep1": {
+      "winner": "o000002",
+      "utility": -3.0954547423176586
+    },
+    "rep2": {
+      "winner": "o000002",
+      "utility": -3.0954547423176586
+    }
+  },
+  "failure_taxonomy": {
+    "candidate_contract_invalid": 1,
+    "invalid_return": 1,
+    "evaluator_exception": 2,
+    "provider_generation_failed": 0,
+    "unsupported_generation_kind": 0,
+    "optimizer_execution_timeout": 0,
+    "optimizer_wall_timeout": 0,
+    "provider_transport_failure": 0
+  },
+  "provider_attempts": {
+    "rep0": {
+      "outer": 2,
+      "inner": 8,
+      "total": 10
+    },
+    "rep1": {
+      "outer": 2,
+      "inner": 10,
+      "total": 12
+    },
+    "rep2": {
+      "outer": 2,
+      "inner": 9,
+      "total": 11
+    },
+    "campaign": {
+      "outer": 6,
+      "inner": 27,
+      "total": 33
+    },
+    "hard_ceiling": 66,
+    "realized_fraction": 0.5,
+    "realized_percentage": "50.0%"
+  },
+  "token_usage": {
+    "outer": {
+      "input": 15164,
+      "output": 2250,
+      "reasoning": 196,
+      "total": 17414
+    },
+    "inner": {
+      "input": 73489,
+      "output": 16492,
+      "reasoning": 7385,
+      "total": 89981
+    },
+    "combined": {
+      "input": 88653,
+      "output": 18742,
+      "reasoning": 7581,
+      "total": 107395
+    }
+  },
+  "a937_forensic_correction": {
+    "candidate_hash": "a937ae6a1159aa3088dedd97824c56cb5954ff3270f37cde6f0a505b8428e723",
+    "classification": "STATIC_BASELINE_CANDIDATE",
+    "generated_by_rep0_o000004": false,
+    "evaluated_by_rep0_o000004": false,
+    "prior_attribution": "REPORT_SCRIPT_MISATTRIBUTION",
+    "canonical_flow": "reflection TEXT -> mutation candidate 985e1137... -> evaluate 985e1137... -> evaluator exception -> CapabilityError worker termination -> utility None"
+  },
+  "artifact_inventory": {
+    "rep0_physical_candidates": 5,
+    "rep1_physical_candidates": 7,
+    "rep2_physical_candidates": 6,
+    "physical_candidate_files_total": 18,
+    "provider_generated_candidate_events_valid": 17,
+    "static_baseline_candidate_files": 1,
+    "unique_candidate_source_hashes": 15
+  },
+  "test_evidence": {
+    "runtime": "Linux / WSL2",
+    "uv": "/home/ducanh/.local/bin/uv",
+    "python": "/home/ducanh/projects/EAs_project/.venv/bin/python",
+    "collected": 564,
+    "passed": 564,
+    "failed": 0,
+    "duration_seconds": 97.02,
+    "pytest_exit_code": 0,
+    "ruff_result": "All checks passed",
+    "ruff_exit_code": 0,
+    "execution_evidence_log_sha256": "106bf8813ac72e7c8ac6f63a4a75504be3927f3ac6edeb37626c0b50f8beb689"
+  },
+  "runtime_log_qualification": {
+    "historical_log_path": "/home/ducanh/moh_runtime_evidence/m7bm_full_moh_n3_campaign.out",
+    "qualification": "Historical summary counters in the runtime log (e.g. inner_evaluate_requests=18, task_instance_evaluations=54, provider subtotals=0) are un-reconciled diagnostic outputs. Reconciled event-ledger accounting is canonical."
+  },
+  "forensic_corrections": {
+    "winner_linkage": "Historical o000001 winner prose corrected to o000002 (REPORT_ONLY_LABEL_ERROR).",
+    "candidate_intent_count": "Reconciled candidate intent requests from 19 to 18.",
+    "text_requests": "Reconciled reflection TEXT requests from 8 to 9.",
+    "evaluate_requests": "Reconciled inner evaluate requests from 18 to 17.",
+    "valid_evaluations": "Reconciled valid numeric evaluations from historical 15/16 to 14.",
+    "task_instance_evaluations": "Reconciled task instance evaluations from 54 to 51.",
+    "k_distribution": "Reconciled k distribution to {0:2, 1:6, 2:4, >=3:0}.",
+    "offspring_survival": "Reconciled offspring survival from 3/6 to 2/6.",
+    "a937_attribution": "Reconciled static candidate a937 misattribution: a937 was a static baseline file, not generated or evaluated by Rep0 o000004."
+  },
+  "hifo_raw_signal_readiness": {
+    "outer_foresight_population_utility_trajectory": "available",
+    "inner_foresight_chronological_candidate_evaluation_trajectory": "available",
+    "outer_hindsight_optimizer_source_to_utility": "available",
+    "inner_hindsight_candidate_source_origin_to_score_error": "available",
+    "cross_level_linkage": "available",
+    "hifo_algorithm_implementation": "unimplemented"
+  },
+  "paper_gate": "closed"
+}
