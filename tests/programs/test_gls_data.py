@@ -146,3 +146,18 @@ def test_trusted_local_pickle_conversion(tmp_path):
         command, capture_output=True, text=True, check=False, timeout=10
     )
     assert again.returncode != 0
+
+
+@pytest.mark.parametrize("dtype", [np.uint8, np.int8])
+def test_npz_accepts_valid_narrow_integer_distances(tmp_path, dtype):
+    data = arrays()
+    distances = np.full((3, 4, 4), 100, dtype=dtype)
+    for matrix in distances:
+        np.fill_diagonal(matrix, 0)
+    data["distance_matrix"] = distances
+    data["cost"] = np.full(3, 400)
+    path = tmp_path / "integer.npz"
+    np.savez(path, **data)
+    task = load_npz_task(path, (0,), (1,))
+    assert task.validation[0].optimal_cost == 400.0
+    assert task.validation[0].distances.dtype == np.float64

@@ -66,3 +66,10 @@ def test_reject_disconnected_route():
         route_to_tour(route)
     with pytest.raises(ValueError):
         route_to_tour(route.astype(float))
+
+
+@pytest.mark.parametrize("dtype", [np.uint8, np.int8])
+def test_tour_cost_does_not_overflow_narrow_integer_matrix(dtype):
+    distances = np.full((4, 4), 100, dtype=dtype)
+    np.fill_diagonal(distances, 0)
+    assert tour_cost(distances, (0, 1, 2, 3, 0)) == 400.0

@@ -41,7 +41,8 @@ def validate_tour(tour, size: int | None = None) -> tuple[int, ...]:
 def tour_cost(distances, tour) -> float:
     matrix = validate_distances(distances)
     cities = validate_tour(tour, len(matrix))
-    return float(sum(matrix[a, b] for a, b in pairwise(cities)))
+    # Promote each edge before addition: NumPy narrow integers otherwise overflow.
+    return sum(float(matrix[a, b]) for a, b in pairwise(cities))
 
 
 def tour_to_route(tour) -> np.ndarray:
