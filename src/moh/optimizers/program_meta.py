@@ -230,5 +230,10 @@ class ProgramMeta:
                 'label': f'round-{round_index:06d}',
                 'populations': {**task_populations, 'meta-optimizer': population},
                 'active': active, 'winner': population.best()})
+        # Local invocation failures may fall back to verified programs, but the
+        # deadline supplied to the whole search defines whether the run completed.
+        if not deadline.remaining():
+            return ProgramRunResult('failed', None, None, (), task_populations, (),
+                                    self.budget.counts)
         return ProgramRunResult('success', population.best(), active, population.members,
                                 task_populations, (), self.budget.counts)

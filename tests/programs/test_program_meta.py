@@ -270,6 +270,9 @@ def test_nested_deadline_kills_inner_process_and_rolls_back(tmp_path):
     with pytest.raises(ProcessLookupError):
         os.kill(int(pid_path.read_text()), 0)
     assert dict(result.task_populations) == original
+    assert result.status == 'success'
+    assert result.winner is not None
+    assert result.active is not None
     assert any(e['event'] == 'meta_round_finished' and e['status'] == 'failed' for e in events)
 
 
@@ -334,3 +337,33 @@ def test_evaluator_contains_cancelled_scope_but_propagates_infrastructure():
                         invocation_id='infra', deadline=deadline, scope=scope)
     assert populations[task.id].members == ()
     assert any(e['event'] == 'optimizer_evaluated' for e in events)
+
+
+@pytest.mark.parametrize('iterations, already_expired', [(1, False), (0, True)])
+def test_global_search_deadline_failure_preserves_task_populations(iterations, already_expired):
+    import time
+
+    sleeping_outer = BEST.replace('    item = population.get_best_solution(task)',
+                                  '    if task == "meta-optimizer":\n'
+                                  '        import time\n        time.sleep(60)\n'
+                                  '    item = population.get_best_solution(task)')
+    parts = fixture_parts(tasks=1)
+    supervisor, budget, optimizer, gls, factory, evaluator, events, emit, _ = parts
+    root_deadline = Deadline.after(20)
+    with supervisor.scope(root_deadline) as scope:
+        populations = {task.id: initialize_task_population(
+            task, gls, factory((task.id,)), budget, capacity=3, seed_attempts=0,
+            threshold=None, root_seed=42, deadline=root_deadline, scope=scope, emit=emit)
+            for task in evaluator.tasks}
+        search_deadline = (Deadline(time.monotonic() - 1) if already_expired
+                           else Deadline.after(0.8, parent=root_deadline))
+        result = ProgramMeta(optimizer, evaluator, budget, emit).search(
+            (OptimizerProgram('sleep-outer', sleeping_outer),), populations,
+            ProgramLLM(FakeLLM(42), batch_size=2), iterations=iterations, capacity=3,
+            root_seed=42, deadline=search_deadline, scope=scope)
+    assert result.status == 'failed'
+    assert result.winner is result.active is None
+    assert result.population == ()
+    assert dict(result.task_populations) == populations
+    assert result.counts == budget.counts
+    assert any(event['event'] == 'search_checkpoint' for event in events)
