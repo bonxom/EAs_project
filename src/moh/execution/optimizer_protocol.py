@@ -80,8 +80,9 @@ def validate_request(envelope, expected_id, request, limits):
     elif op in ('llm_prompt', 'llm_batch'):
         key = 'message' if op == 'llm_prompt' else 'messages'
         if (set(payload) != {'expertise', key, 'temperature'}
-                or not text(payload['expertise']) or not number(payload['temperature'])
-                or not 0 <= payload['temperature'] <= 2):
+                or not text(payload['expertise'])
+                or payload['temperature'] is not None and (
+                    not number(payload['temperature']) or not 0 <= payload['temperature'] <= 2)):
             raise CandidateFailure('protocol')
         if op == 'llm_prompt':
             if not text(payload[key]):

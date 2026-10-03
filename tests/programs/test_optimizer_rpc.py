@@ -260,3 +260,34 @@ def test_huge_integer_returned_score_is_candidate_failure():
 def test_huge_integer_callback_score_is_candidate_failure():
     source = 'def improve_algorithm(p,u,*args): return "i", "code", u("code")'
     assert invoke(source, lambda *args: 10**400).error == 'invalid_return'
+
+
+@pytest.mark.parametrize('method, message, operation', [
+    ('prompt', '"m"', 'llm_prompt'),
+    ('prompt_batch', '["m"]', 'llm_batch'),
+])
+def test_none_temperature_preserves_provider_default(method, message, operation):
+    calls = []
+
+    def dispatch(op, payload, deadline):
+        calls.append((op, payload))
+        return 'response' if op == 'llm_prompt' else ['response']
+
+    source = f'''def improve_algorithm(p,u,l,*args):
+    l.{method}("e", {message}, None)
+    return "i", "code", 0
+'''
+    assert invoke(source, dispatch).status == 'success'
+    assert len(calls) == 1
+    assert calls[0][0] == operation
+    assert calls[0][1]['temperature'] is None
+
+
+@pytest.mark.parametrize('method, message', [('prompt', '"m"'), ('prompt_batch', '["m"]')])
+@pytest.mark.parametrize('temperature', ['True', 'float("nan")', 'float("inf")', '-1', '3', '"1"'])
+def test_invalid_temperature_is_candidate_failure(method, message, temperature):
+    source = f'''def improve_algorithm(p,u,l,*args):
+    l.{method}("e", {message}, {temperature})
+    return "i", "code", 0
+'''
+    assert invoke(source, lambda *args: pytest.fail('invalid request was dispatched')).error == 'protocol'
