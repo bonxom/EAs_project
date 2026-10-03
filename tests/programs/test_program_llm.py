@@ -27,6 +27,28 @@ def test_reject_empty_or_ambiguous_code(value):
         extract_code(value)
 
 
+@pytest.mark.parametrize('language', ['python', 'json'])
+@pytest.mark.parametrize('other_language', ['', 'javascript', 'text'])
+@pytest.mark.parametrize('other_first', [False, True])
+def test_reject_additional_fence_regardless_of_label(language, other_language, other_first):
+    supported = f'```{language}\nx=1\n```'
+    other = f'```{other_language}\nignored content\n```'
+    response = '\n'.join([other, supported] if other_first else [supported, other])
+    with pytest.raises(GenerationError, match='missing_or_ambiguous_code'):
+        extract_code(response)
+
+
+@pytest.mark.parametrize('language', ['python', 'json'])
+def test_extract_single_supported_fence(language):
+    assert extract_code(f'Explanation\n```{language}\nx=1\n```\nAfterword') == 'x=1'
+
+
+@pytest.mark.parametrize('response', ['x=1', '```\nx=1\n```', '```javascript\nx=1\n```'])
+def test_reject_unfenced_or_unsupported_code(response):
+    with pytest.raises(GenerationError, match='missing_or_ambiguous_code'):
+        extract_code(response)
+
+
 def test_three_distinct_optimizer_sources():
     fake = FakeLLM(42)
     sources = [extract_code(fake.generate_request(LLMRequest('expert', OPTIMIZER_FORMAT)))

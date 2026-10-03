@@ -14,6 +14,10 @@ def extract_code(response):
     def parse(value):
         if not isinstance(value, str):
             raise GenerationError('invalid_response')
+        # Count every fence delimiter before filtering supported languages.
+        # Extra unlabeled/unsupported blocks make the response ambiguous too.
+        if value.count('```') != 2:
+            raise GenerationError('missing_or_ambiguous_code')
         blocks = re.findall(r'```(?:python|json)\s*\n(.*?)```', value, re.DOTALL)
         if len(blocks) != 1 or not blocks[0].strip():
             raise GenerationError('missing_or_ambiguous_code')
