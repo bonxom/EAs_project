@@ -1,0 +1,21 @@
+seed: 42
+output_dir: outputs
+outer_iterations: 2
+population_size: 3
+seed_attempts: 1
+tasks:
+  source: synthetic
+  sizes: [4, 6]
+  validation_count: 2
+  test_count: 1
+heuristic_llm:
+  provider: fake
+meta_llm:
+  provider: fake
+solver:
+  iterations: 3
+execution:
+  batch_size: 2
+budgets:
+  max_llm_calls: 100
+  max_heuristic_evaluations: 100

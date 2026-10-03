@@ -1,0 +1,34 @@
+# Replace both local NPZ paths before use. Data must include valid reference tours/costs.
+# To use real models, explicitly change each provider and supply its independent model.
+# No live run or download is performed by this template.
+seed: 42
+output_dir: outputs
+outer_iterations: 2
+population_size: 3
+seed_attempts: 1
+tasks:
+  source: npz
+  datasets:
+    - path: data/tsp100.npz
+      validation_indices: [0, 1, 2, 3, 4, 5, 6, 7]
+      test_indices: [8, 9, 10, 11, 12, 13, 14, 15, 16, 17]
+    - path: data/tsp200.npz
+      validation_indices: [0, 1, 2, 3, 4, 5, 6, 7]
+      test_indices: [8, 9, 10, 11, 12, 13, 14, 15, 16, 17]
+heuristic_llm:
+  provider: fake
+  # model: replace-with-heuristic-model-if-provider-is-real
+meta_llm:
+  provider: fake
+  # model: replace-with-meta-model-if-provider-is-real
+solver:
+  iterations: 1000
+execution:
+  batch_size: 2
+  run_timeout_seconds: 3600.0
+  optimizer_timeout_seconds: 300.0
+  heuristic_timeout_seconds: 60.0
+budgets:
+  # Positive caps are the default; zero means exhausted, null means unlimited.
+  max_llm_calls: 100
+  max_heuristic_evaluations: 100

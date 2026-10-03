@@ -4,7 +4,8 @@ import json
 import re
 import subprocess
 import sys
-from dataclasses import asdict, is_dataclass
+from collections.abc import Mapping
+from dataclasses import fields, is_dataclass
 from datetime import UTC, datetime
 from importlib.metadata import version
 from pathlib import Path
@@ -18,8 +19,8 @@ def to_json(value):
     if isinstance(value, BaseModel):
         return value.model_dump(mode="json")
     if is_dataclass(value):
-        return {k: to_json(v) for k, v in asdict(value).items()}
-    if isinstance(value, dict):
+        return {field.name: to_json(getattr(value, field.name)) for field in fields(value)}
+    if isinstance(value, Mapping):
         return {k: to_json(v) for k, v in value.items()}
     if isinstance(value, (tuple, list)):
         return [to_json(v) for v in value]
