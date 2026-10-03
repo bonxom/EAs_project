@@ -10,6 +10,24 @@
 
 **Spec:** `docs/superpowers/specs/2026-10-03-moh-implement-design.md` — người dùng đã duyệt trong hội thoại ngày 2026-10-03.
 
+## Trạng thái thực hiện
+
+Hoàn tất Tasks 1–10 bằng subagent, với review độc lập và regression cho các
+lỗi được phát hiện. Checklist bên dưới giữ nguyên nội dung kế hoạch ban đầu.
+
+- Pipeline CLI offline đã chạy thành công với hai vòng outer tự cải tiến,
+  hai task held-out thành công và checkpoint đầy đủ.
+- Hai lần chạy FakeLLM cho kết quả và semantic events giống nhau.
+- Source worker được giữ lại và đối chiếu SHA256; điểm và population IDs
+  được xác nhận bằng kết quả đánh giá của process cha.
+- Review toàn nhánh: approve sau khi sửa lỗi deadline toàn search và ranh giới
+  search/held-out bằng regression RED→GREEN.
+- Kiểm tra cuối: `uv run ruff check .` sạch; `uv run pytest -q`: **580 passed**.
+
+Đọc [hướng dẫn triển khai và đối chiếu upstream](../../moh-reproduction.md)
+để xem cấu trúc hiện tại, cách chạy và những khác biệt có chủ ý. Chưa merge
+hoặc push; kết quả này chưa xác nhận tái lập benchmark của paper.
+
 ## Global Constraints
 
 - Python 3.12, uv, Linux; giữ các chế độ mini-MoH và các tests cũ.
