@@ -205,3 +205,28 @@ def test_output_after_finish_is_bounded():
 
 def test_batch_size_available_to_generated_program():
     assert invoke('def improve_algorithm(p,u,l,*args):\n assert l.batch_size == 2\n return "i","code",0').status == 'success'
+
+
+def test_transport_accepts_runner_specific_tour_finish():
+    source = '''import os, sys
+os.write(int(sys.argv[1]), b'{"id":1,"op":"finish","payload":{"tour":[0,1,2,0]}}\\n')
+os._exit(0)
+'''
+    supervisor = ProcessSupervisor()
+    deadline = Deadline.after(3)
+    request = {'source': source, 'snapshot': {}, 'task': 'tsp4', 'function_format': '',
+               'seed': 1, 'batch_size': 2, 'result_bytes': 1048576,
+               'request_bytes': 1048576, 'source_bytes': 65536}
+    with supervisor.scope(deadline) as scope:
+        result = supervisor.exchange('moh.execution.optimizer_worker', request,
+                                     lambda *args: pytest.fail('unexpected callback'),
+                                     limits=ProgramLimits(), deadline=deadline, scope=scope)
+    assert result == {'tour': [0, 1, 2, 0]}
+
+
+def test_optimizer_runner_rejects_tour_only_finish():
+    source = '''import os, sys
+os.write(int(sys.argv[1]), b'{"id":1,"op":"finish","payload":{"tour":[0,1,2,0]}}\\n')
+os._exit(0)
+'''
+    assert invoke(source).error == 'protocol'
