@@ -1,4 +1,85 @@
-# Mini-MoH
+# MoH: tối ưu heuristic và chương trình optimizer
+
+Project nghiên cứu tối giản bằng Python 3.12, uv và Linux, lấy cảm hứng từ
+Meta-Optimization of Heuristics. Có hai chế độ với giao diện và fitness riêng:
+
+| Chế độ | Inner loop tìm gì? | Outer loop tìm gì? | Utility |
+| --- | --- | --- | --- |
+| Mini-MoH gốc (`configs/smoke.yaml`) | Code chọn thành phố tiếp theo | JSON `OptimizerSpec` | Âm độ dài tour trung bình, maximize |
+| MoH bằng chương trình (`configs/moh_smoke.yaml`) | Code dẫn hướng TSP-GLS | Code `improve_algorithm(...)` | Mean gap %, minimize |
+
+`LLMClient` cung cấp văn bản cho cả hai tầng. Optimizer là thành phần chọn cha,
+sinh ứng viên, gọi đánh giá và chọn kết quả; LLM không phải optimizer.
+
+## MoH bằng chương trình: bắt đầu đọc ở đâu?
+
+**Đọc `main.py → experiments/program_search.py → optimizers/program_meta.py →
+optimizers/program_inner.py → execution/optimizer_runner.py →
+execution/gls_runner.py → problems/tsp_gls/solver.py`.**
+[Xem hướng dẫn đầy đủ và đối chiếu upstream](docs/moh-reproduction.md).
+
+Heuristic định nghĩa `update_edge_distance(edge_distance, local_opt_tour,
+edge_n_used)` để thay đổi ma trận dẫn hướng GLS. Cost thật luôn tính từ khoảng
+cách gốc. Chương trình optimizer định nghĩa `improve_algorithm(population,
+utility, language_model, function_format, task)` và được dùng ở cả hai tầng:
+inner đánh giá heuristic; outer đánh giá optimizer bằng cách chạy nó ở inner.
+Outer chọn chương trình đã được cha chấm để dùng trong vòng tiếp theo, đồng
+thời lưu riêng chương trình tốt nhất từng gặp.
+
+```text
+src/moh/
+├── main.py                          # CLI
+├── program_config.py                # Cấu hình chế độ chương trình
+├── experiments/
+│   ├── program_search.py            # Ghép dữ liệu, LLM, hai tầng và held-out
+│   └── artifacts.py                 # Code .py, events và checkpoints
+├── core/{programs,program_population}.py
+├── optimizers/
+│   ├── program_meta.py              # Outer: tìm chương trình optimizer
+│   ├── program_inner.py             # Inner: chạy optimizer tìm heuristic
+│   ├── helpers.py                   # Extract code và idea
+│   └── seeds/                       # Nguồn seed đọc dưới dạng text
+├── execution/
+│   ├── optimizer_{runner,worker,protocol}.py
+│   ├── gls_{runner,worker}.py
+│   ├── process.py                   # Deadline, pipe và cleanup theo scope
+│   └── budgets.py                   # Giới hạn công việc chung
+├── problems/tsp_gls/                 # Dữ liệu, exact smoke, GLS, fitness
+├── prompts/{program_optimizer,gls_heuristic}.py
+└── llm/                             # Fake, recording và provider adapter
+```
+
+Các thành phần outer và CLI mới đang tích hợp; lệnh sau là giao diện dự kiến,
+chưa được xác nhận end-to-end ở thời điểm viết tài liệu này:
+
+```bash
+uv sync --locked
+uv run python -m moh.main --mode moh --config configs/moh_smoke.yaml
+```
+
+Smoke dùng FakeLLM, task 4/6 thành phố, optimum Held–Karp thật và validation/test
+khác seed. Synthetic chỉ hỗ trợ 4–12 thành phố. Dataset template
+`configs/moh_dataset.yaml` yêu cầu thay đường dẫn NPZ local và chọn các index
+validation/test không giao nhau; repo không cung cấp hoặc tự tải benchmark.
+Nếu có pickle upstream đáng tin cậy, chuyển đổi bằng:
+
+```bash
+uv run python tools/convert_moh_dataset.py --trusted-pickle /path/input.pkl --output /path/output.npz
+```
+
+**Pickle có thể thực thi mã khi đọc.** Chỉ chuyển file local có nguồn tin cậy;
+loader thí nghiệm dùng NPZ với `allow_pickle=False`. Đây là opt-in riêng của
+công cụ chuyển đổi, không phải cách loader tự đọc benchmark.
+
+GLS dùng Python/NumPy và số vòng cố định; deadline chứa lỗi/treo, không phải
+ngân sách benchmark tương đương 20 giây upstream. Generated code chạy trong
+worker, kể cả module-level code. Hệ thống chưa cung cấp OS sandbox cho mã thù
+địch. Không tuyên bố tái tạo kết quả paper hoặc tái lập response API thật.
+
+## Chế độ mini-MoH gốc
+
+Phần còn lại mô tả chế độ gốc; các điểm số, tên artifacts và cách khởi tạo dưới
+đây áp dụng cho `configs/smoke.yaml`. Chế độ này vẫn là cách chạy offline đã có.
 
 A minimal research implementation inspired by Meta-Optimization of Heuristics,
 using Euclidean TSP. Python 3.12, uv, and Linux are required.
@@ -9,7 +90,7 @@ optimizers. `LLMClient` supplies text; it is not an optimizer. V0 evolves constr
 optimizer specifications, not arbitrary optimizer Python programs, and makes no
 claim to reproduce paper results or outperform established baselines.
 
-## Hướng dẫn đọc code (tiếng Việt)
+### Hướng dẫn đọc code mini-MoH (tiếng Việt)
 
 **Bắt đầu từ `main.py`, rồi đọc `experiment.py` và `optimizers/inner.py`.**
 Các file trong `prompts/` chỉ tạo nội dung gửi đến LLM; đọc riêng chúng sẽ khó
@@ -326,9 +407,11 @@ future replay tooling; an automated replay command is outside v0. No live-provid
 validation was performed during implementation. Mocked tests do not establish
 account or model access.
 
-## Design
+## Design của mini-MoH gốc
 
 See the [specification](docs/superpowers/specs/2026-09-23-mini-moh-design.md) and
 [implementation plan](docs/superpowers/plans/2026-09-24-mini-moh-v0.md).
-Generated optimizer programs, hostile-code isolation, held-out evaluation,
-equal-budget comparisons, and upstream paper-result comparisons are follow-up work.
+The v0 design deferred generated optimizer programs and held-out evaluation;
+the program-based mode above develops those separately. Hostile-code isolation,
+equal-budget comparisons, and upstream paper-result comparisons remain outside
+the implemented research scope.
