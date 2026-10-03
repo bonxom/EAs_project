@@ -72,8 +72,8 @@ Additional adaptations from the same upstream revision:
   This is conceptual/contract adaptation, not a verbatim copy of all prompts.
 - `moh.py`, `utils/population.py` and `utils/run_logger.py` inform the approved
   orchestration design, parent populations/snapshots and artifact lineage.
-  The new outer/composition pipeline is still being integrated when these
-  notes are written; its complete runtime behavior has not yet been verified.
+  The outer/composition pipeline runs both levels with FakeLLM and retains
+  parent-verified program sources, evaluations and population checkpoints.
 
 Intentional orchestration/evaluation changes in the approved design:
 

@@ -2,9 +2,8 @@
 
 Tài liệu này mô tả chế độ MoH bằng chương trình theo
 [spec đã duyệt](superpowers/specs/2026-10-03-moh-implement-design.md).
-Các module dữ liệu, GLS, worker, LLM và inner đã được xây dựng; outer/composition
-và CLI còn đang tích hợp tại thời điểm viết. Những lệnh và artifacts end-to-end
-bên dưới là giao diện dự kiến, chưa phải báo cáo một run hoàn chỉnh.
+Pipeline ghép dữ liệu, GLS, worker, LLM, inner và outer, có CLI offline và
+artifacts để kiểm tra source, điểm số và các quyết định tìm kiếm.
 
 ## Hai tầng dùng cùng một giao diện
 
@@ -70,8 +69,7 @@ có thể tiếp tục bằng chương trình tốt nhất đã chấm.
 
 Tra records ở `core/programs.py` và quần thể ở `core/program_population.py`.
 Đọc `prompts/` và `llm/` sau khi hiểu luồng callback; chỉ đọc prompt không cho
-thấy ai giữ quần thể hoặc tính fitness. Các module mới ở bước 2–3 thuộc phần
-integration đang hoàn thiện.
+thấy ai giữ quần thể hoặc tính fitness.
 
 ## Điểm số và ai có quyền quyết định
 
@@ -103,7 +101,7 @@ lỗi. Calls/evaluations/instance attempts đã tiêu thụ vẫn được tính
 
 ## Dữ liệu và cách chạy
 
-Giao diện CLI dự kiến sau integration:
+Chạy CLI offline và kiểm tra repository:
 
 ```bash
 uv sync --locked
@@ -167,13 +165,19 @@ LLM tuần tự theo input order; kiểm tra budget trước công việc mới 
 cả ứng viên lỗi. Ngân sách GLS là số vòng cố định; timeout là failed, không lấy
 lời giải tại thời điểm máy tình cờ hết giờ làm một kết quả tái lập.
 
+Timeout của một ứng viên cho phép outer dùng best đã chấm để tiếp tục. Hết
+deadline toàn search trả kết quả failed; source và checkpoint đã ghi vẫn còn
+để audit. Sau khi search hoàn tất, held-out hết ngân sách hoặc deadline giữ
+nguyên winner và trạng thái search, đồng thời ghi `test_status="incomplete"`
+trong `run.json`. Điểm test không cập nhật quần thể validation.
+
 RNG được dẫn xuất từ root seed theo task/split/instance/search scope; Python và
 NumPy trong worker được seed. FakeLLM có cursor độc lập cho directions,
 heuristic programs và optimizer programs. Response mặc định là mẫu offline;
 FakeLLM không suy luận hay chứng minh chất lượng prompt. API provider thật
 không có bảo đảm response giống nhau với cùng seed.
 
-Artifacts schema 2 dự kiến gồm `config.yaml`, `run.json`, `events.jsonl`, code
+Artifacts schema 2 gồm `config.yaml`, `run.json`, `events.jsonl`, code
 `heuristics/<id>.py`, `optimizers/<id>.py` và checkpoint trong `populations/`.
 Đọc config/provenance trước, sau đó source và các events liên quan đánh giá,
 commit/rollback, active optimizer và global best. Khi so hai FakeLLM runs, so

@@ -49,8 +49,7 @@ src/moh/
 └── llm/                             # Fake, recording và provider adapter
 ```
 
-Các thành phần outer và CLI mới đang tích hợp; lệnh sau là giao diện dự kiến,
-chưa được xác nhận end-to-end ở thời điểm viết tài liệu này:
+Chạy toàn bộ pipeline offline với FakeLLM:
 
 ```bash
 uv sync --locked
