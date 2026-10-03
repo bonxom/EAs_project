@@ -340,6 +340,7 @@ không chỉ scaffold hoặc mock solver.
 
 ## 11. Trạng thái và bước tiếp theo
 
-Hướng thiết kế được duyệt; tài liệu này là spec để người dùng review. Chưa sửa
-product code. Sau khi spec được duyệt, viết implementation plan chia theo
-interfaces và tests, rồi chọn cách thực thi trước khi triển khai.
+Hướng thiết kế và spec đã được người dùng duyệt trong hội thoại ngày 2026-10-03.
+Chưa sửa product code. Implementation plan được viết tại
+`docs/superpowers/plans/2026-10-03-moh-implement.md`, chia theo interfaces và
+tests. Bước tiếp theo là review kế hoạch và chọn cách thực thi trước khi triển khai.
