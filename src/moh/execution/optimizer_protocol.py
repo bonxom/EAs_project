@@ -62,7 +62,7 @@ def validate_request(envelope, expected_id, request, limits):
         raise CandidateFailure('protocol')
     op, payload = envelope['op'], envelope['payload']
     if op == 'finish':
-        return op, validate_finish(payload, limits)
+        return op, payload
     if op == 'evaluate':
         if (set(payload) != {'source_code', 'idea', 'task'}
                 or not text(payload['source_code']) or not payload['source_code']

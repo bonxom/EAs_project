@@ -2,7 +2,7 @@
 from dataclasses import dataclass
 
 from moh.core.programs import OptimizerProgram
-from moh.execution.optimizer_protocol import OptimizerWorkerResult
+from moh.execution.optimizer_protocol import OptimizerWorkerResult, validate_finish
 from moh.execution.process import CandidateFailure, Deadline
 
 
@@ -40,6 +40,6 @@ class OptimizerRunner:
                 'moh.execution.optimizer_worker', payload, dispatch,
                 limits=self.limits, deadline=invocation, scope=scope,
             )
-            return OptimizerWorkerResult(**result)
+            return OptimizerWorkerResult(**validate_finish(result, self.limits))
         except CandidateFailure as exc:
             return OptimizerWorkerResult('failed', error=exc.code)
