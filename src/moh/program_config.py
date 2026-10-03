@@ -135,6 +135,7 @@ class ProgramConfig(StrictConfig):
     outer_iterations: NonnegativeInt = 2
     population_size: PositiveInt = 3
     seed_attempts: NonnegativeInt = 1
+    seed_threshold: StrictFloat | None = None
     tasks: ProgramTasksConfig = Field(default_factory=ProgramTasksConfig)
     weights: list[Weight] | None = None
     heuristic_llm: ProgramLLMConfig = Field(default_factory=ProgramLLMConfig)
@@ -142,6 +143,21 @@ class ProgramConfig(StrictConfig):
     solver: ProgramSolverConfig = Field(default_factory=ProgramSolverConfig)
     execution: ProgramExecutionConfig = Field(default_factory=ProgramExecutionConfig)
     budgets: ProgramBudgetConfig = Field(default_factory=ProgramBudgetConfig)
+
+    @field_validator("seed_threshold", mode="before")
+    @classmethod
+    def validate_seed_threshold(cls, value):
+        if value is None:
+            return None
+        if type(value) not in (int, float):
+            raise ValueError("seed threshold must be finite and nonnegative")
+        try:
+            number = float(value)
+        except OverflowError as exc:
+            raise ValueError("seed threshold must be finite and nonnegative") from exc
+        if not math.isfinite(number) or number < 0:
+            raise ValueError("seed threshold must be finite and nonnegative")
+        return number
 
     @field_validator("output_dir", mode="before")
     @classmethod

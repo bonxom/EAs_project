@@ -156,3 +156,15 @@ def test_additional_boundary_values(values):
 def test_budget_caps_reject_null(field):
     with pytest.raises(ValueError):
         ProgramConfig(budgets={field: None})
+
+
+def test_optional_seed_threshold():
+    assert ProgramConfig().seed_threshold is None
+    assert ProgramConfig(seed_threshold=0).seed_threshold == 0.0
+    assert ProgramConfig(seed_threshold=2.5).seed_threshold == 2.5
+
+
+@pytest.mark.parametrize("threshold", [True, -1.0, float("inf"), float("nan"), "1", 10**400])
+def test_invalid_seed_threshold(threshold):
+    with pytest.raises(ValueError):
+        ProgramConfig(seed_threshold=threshold)
