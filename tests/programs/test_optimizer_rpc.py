@@ -230,3 +230,33 @@ os.write(int(sys.argv[1]), b'{"id":1,"op":"finish","payload":{"tour":[0,1,2,0]}}
 os._exit(0)
 '''
     assert invoke(source).error == 'protocol'
+
+
+@pytest.mark.parametrize('method, message', [('prompt', '"m"'), ('prompt_batch', '["m"]')])
+@pytest.mark.parametrize('sign', ['', '-'])
+def test_huge_integer_temperature_is_candidate_failure(method, message, sign):
+    source = f'''def improve_algorithm(p,u,l,*args):
+    l.{method}("e", {message}, {sign}10**400)
+    return "i", "code", 0
+'''
+    assert invoke(source, lambda *args: pytest.fail('invalid request was dispatched')).error == 'protocol'
+
+
+@pytest.mark.parametrize('sign', ['', '-'])
+def test_forged_huge_integer_score_is_candidate_failure(sign):
+    source = f'''import json, os, sys
+payload = {{'status': 'success', 'idea': 'i', 'source_code': 'code',
+           'claimed_utility': {sign}10**400, 'error': None}}
+os.write(int(sys.argv[1]), (json.dumps({{'id': 1, 'op': 'finish', 'payload': payload}}) + '\\n').encode())
+os._exit(0)
+'''
+    assert invoke(source).error == 'invalid_return'
+
+
+def test_huge_integer_returned_score_is_candidate_failure():
+    assert invoke('def improve_algorithm(*args): return "i", "code", 10**400').error == 'invalid_return'
+
+
+def test_huge_integer_callback_score_is_candidate_failure():
+    source = 'def improve_algorithm(p,u,*args): return "i", "code", u("code")'
+    assert invoke(source, lambda *args: 10**400).error == 'invalid_return'

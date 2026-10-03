@@ -24,7 +24,13 @@ def text(value):
 
 
 def number(value):
-    return type(value) in (int, float) and math.isfinite(value)
+    if type(value) not in (int, float):
+        return False
+    try:
+        return math.isfinite(value)
+    except OverflowError:
+        # JSON integers can exceed the finite float range used for fitness.
+        return False
 
 
 def source_size(source):
