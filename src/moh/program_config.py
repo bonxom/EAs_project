@@ -124,9 +124,9 @@ class ProgramExecutionConfig(StrictConfig):
 
 
 class ProgramBudgetConfig(StrictConfig):
-    # Zero deliberately permits reproducible exhausted-budget runs; None is unlimited.
-    max_llm_calls: NonnegativeInt | None = 100
-    max_heuristic_evaluations: NonnegativeInt | None = 100
+    # Zero deliberately permits reproducible exhausted-budget runs.
+    max_llm_calls: NonnegativeInt = 100
+    max_heuristic_evaluations: NonnegativeInt = 100
 
 
 class ProgramConfig(StrictConfig):

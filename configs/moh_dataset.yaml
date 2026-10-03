@@ -29,6 +29,6 @@ execution:
   optimizer_timeout_seconds: 300.0
   heuristic_timeout_seconds: 60.0
 budgets:
-  # Positive caps are the default; zero means exhausted, null means unlimited.
+  # Positive integer caps are the default; zero means exhausted.
   max_llm_calls: 100
   max_heuristic_evaluations: 100

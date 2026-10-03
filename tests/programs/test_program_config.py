@@ -124,10 +124,6 @@ def test_weight_numeric_limits_and_round_trip():
         ProgramConfig.model_validate(config.model_dump()).model_dump()
         == config.model_dump()
     )
-    config = ProgramConfig(
-        budgets={"max_llm_calls": None, "max_heuristic_evaluations": None}
-    )
-    assert config.budgets.max_llm_calls is None
     with pytest.raises(ValueError):
         ProgramConfig(weights=[1e-300, 1e300])
 
@@ -154,3 +150,9 @@ def test_weight_numeric_limits_and_round_trip():
 def test_additional_boundary_values(values):
     with pytest.raises(ValueError):
         ProgramConfig(**values)
+
+
+@pytest.mark.parametrize("field", ["max_llm_calls", "max_heuristic_evaluations"])
+def test_budget_caps_reject_null(field):
+    with pytest.raises(ValueError):
+        ProgramConfig(budgets={field: None})
