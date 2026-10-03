@@ -234,3 +234,89 @@ def test_weighted_gap_requires_selected_successes_and_positive_weights():
             weighted_gap((outcome,), weights)
     with pytest.raises(ValueError):
         weighted_gap((TaskOutcome(result.task_id, None),), (1,))
+
+
+def test_gap_large_finite_values_avoid_intermediate_overflow():
+    assert gap_percent(1e308, 5e307) == pytest.approx(100)
+
+
+def extreme_task():
+    import numpy as np
+
+    from moh.problems.tsp_gls.task import GLSInstance, GLSTask
+    matrix = np.array([[0, 1, 1e308, 1], [1, 0, 1, 1e308],
+                       [1e308, 1, 0, 1], [1, 1e308, 1, 0]], dtype=float)
+    tour = (0, 1, 2, 3, 0)
+    return GLSTask('extreme', 4,
+                   tuple(GLSInstance(f'v{i}', np.zeros((4, 2)), matrix, 4, tour) for i in range(2)),
+                   (GLSInstance('t', np.zeros((4, 2)), matrix, 4, tour),), {})
+
+
+def forged_tour_source(tour):
+    return f'''import os, json, sys
+message = {{'id': 1, 'op': 'finish', 'payload': {{
+    'status': 'success', 'tour': {list(tour)!r}, 'error': None}}}}
+os.write(int(sys.argv[1]), (json.dumps(message) + '\\n').encode())
+os._exit(0)
+'''
+
+
+def test_real_worker_forged_tour_cost_overflow_fails_candidate():
+    result = evaluate(forged_tour_source((0, 2, 1, 3, 0)), task=extreme_task())
+    assert result.status == 'failed'
+    assert result.error == 'invalid_cost'
+    assert result.counts.instance_attempts == 1
+    assert result.counts.heuristic_evaluations == 1
+    assert result.utility is None
+    assert result.costs == result.gaps == result.tours == ()
+    assert evaluate().status == 'success'
+
+
+def test_real_worker_finite_cost_unrepresentable_gap_fails_candidate():
+    task = extreme_task()
+    # Only one huge edge means finite cost, but its gap percentage overflows.
+    import numpy as np
+
+    from moh.problems.tsp_gls.task import GLSInstance, GLSTask
+    matrix = task.validation[0].distances.copy()
+    matrix[1, 3] = matrix[3, 1] = 1
+    tour = (0, 1, 2, 3, 0)
+    task = GLSTask('extreme', 4,
+                   (GLSInstance('v', np.zeros((4, 2)), matrix, 4, tour),),
+                   (GLSInstance('t', np.zeros((4, 2)), matrix, 4, tour),), {})
+    result = evaluate(forged_tour_source((0, 2, 1, 3, 0)), task=task)
+    assert result.status == 'failed'
+    assert result.error == 'invalid_gap'
+    assert result.counts.instance_attempts == 1
+
+
+def test_real_worker_maximum_finite_gaps_have_finite_mean():
+    import sys
+
+    import numpy as np
+
+    from moh.problems.tsp_gls.task import GLSInstance, GLSTask
+    matrix = extreme_task().validation[0].distances.copy()
+    matrix[0, 2] = matrix[2, 0] = (sys.float_info.max / 100) * 4
+    matrix[1, 3] = matrix[3, 1] = 1
+    tour = (0, 1, 2, 3, 0)
+    task = GLSTask('extreme', 4,
+                   tuple(GLSInstance(f'v{i}', np.zeros((4, 2)), matrix, 4, tour) for i in range(3)),
+                   (GLSInstance('t', np.zeros((4, 2)), matrix, 4, tour),), {})
+    result = evaluate(forged_tour_source((0, 2, 1, 3, 0)), task=task)
+    assert result.status == 'success'
+    assert result.utility == sys.float_info.max
+    assert result.gaps == (sys.float_info.max,) * 3
+    assert result.counts.instance_attempts == 3
+
+
+def test_weighted_gap_maximum_finite_utilities_avoid_roundoff_overflow():
+    import sys
+
+    from moh.core.programs import GapEvaluation, ScoredProgram, TaskOutcome
+    from moh.problems.tsp_gls.evaluation import weighted_gap
+    evaluation = GapEvaluation('h', 'tsp4', 'validation', 'success', sys.float_info.max,
+                               (4,), (sys.float_info.max,), ((0, 1, 2, 3, 0),))
+    outcome = TaskOutcome('tsp4', ScoredProgram(Heuristic('h', IDENTITY_SOURCE), evaluation))
+    weights = (0.13436424411240122, 0.8474337369372327, 0.763774618976614)
+    assert weighted_gap((outcome,) * 3, weights) == sys.float_info.max

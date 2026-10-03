@@ -39,6 +39,17 @@ def _number(value: float, *, positive: bool = False) -> None:
         )
 
 
+def mean_fitness(values) -> float:
+    """Mean of nonempty finite nonnegative scores without overflowing their sum."""
+    values = tuple(values)
+    if not values:
+        raise ValueError("fitness mean requires nonempty values")
+    for value in values:
+        _number(value)
+    scale = max(values)
+    return scale * (math.fsum(value / scale for value in values) / len(values)) if scale else 0.0
+
+
 def _outcome(status: Status, utility: float | None, error: str | None) -> None:
     if status == "success":
         _number(utility)
@@ -116,7 +127,7 @@ class GapEvaluation:
             not self.gaps
             or not math.isclose(
                 self.utility,
-                math.fsum(gap / len(self.gaps) for gap in self.gaps),
+                mean_fitness(self.gaps),
                 rel_tol=1e-12,
                 abs_tol=1e-12,
             )

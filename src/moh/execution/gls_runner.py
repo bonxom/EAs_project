@@ -4,11 +4,11 @@ import math
 from dataclasses import asdict
 
 from moh.core.models import Heuristic, WorkCounts
-from moh.core.programs import GapEvaluation
+from moh.core.programs import GapEvaluation, mean_fitness
 from moh.core.seeds import derive_seed
 from moh.execution.optimizer_protocol import source_size
 from moh.execution.process import CandidateFailure, Deadline, encode_frame
-from moh.problems.tsp_gls.evaluation import gap_percent
+from moh.problems.tsp_gls.evaluation import GapOverflow, gap_percent
 from moh.problems.tsp_gls.task import GLSTask
 from moh.problems.tsp_gls.tour import tour_cost, validate_tour
 
@@ -76,8 +76,13 @@ class GLSRunner:
                     )
                 tour = _decode_tour(result, task.size)
                 cost = tour_cost(instance.distances, tour)
+                if not math.isfinite(cost):
+                    raise CandidateFailure('invalid_cost')
                 # Reference inconsistencies are infrastructure errors, not candidate failures.
-                gap = gap_percent(cost, instance.optimal_cost)
+                try:
+                    gap = gap_percent(cost, instance.optimal_cost)
+                except GapOverflow as exc:
+                    raise CandidateFailure('invalid_gap') from exc
                 costs.append(cost)
                 gaps.append(gap)
                 tours.append(tour)
@@ -85,6 +90,6 @@ class GLSRunner:
             error = exc.code
         return GapEvaluation(
             heuristic.id, task.id, split, 'failed' if error else 'success',
-            None if error else math.fsum(gap / len(gaps) for gap in gaps),
+            None if error else mean_fitness(gaps),
             tuple(costs), tuple(gaps), tuple(tours), error, WorkCounts(1, attempts, 0),
         )

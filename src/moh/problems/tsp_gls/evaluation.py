@@ -6,6 +6,10 @@ from moh.core.programs import TaskOutcome
 from moh.execution.optimizer_protocol import number
 
 
+class GapOverflow(ValueError):
+    """The computed percentage cannot be represented as a finite fitness."""
+
+
 def gap_percent(cost: float, optimal_cost: float) -> float:
     if not number(cost) or cost <= 0:
         raise ValueError('cost must be positive and finite')
@@ -14,9 +18,9 @@ def gap_percent(cost: float, optimal_cost: float) -> float:
     tolerance = 1e-8 * max(cost, optimal_cost) + 1e-10
     if cost < optimal_cost - tolerance:
         raise ValueError('reference optimum exceeds the computed tour cost')
-    gap = 100 * (max(cost, optimal_cost) - optimal_cost) / optimal_cost
+    gap = ((max(cost, optimal_cost) - optimal_cost) / optimal_cost) * 100
     if not math.isfinite(gap):
-        raise ValueError('gap must be finite')
+        raise GapOverflow('gap must be finite')
     return gap
 
 
@@ -32,5 +36,9 @@ def weighted_gap(outcomes: tuple[TaskOutcome, ...], weights: tuple[float, ...]) 
     scale = max(weights)
     normalized = tuple(weight / scale for weight in weights)
     total = math.fsum(normalized)
-    return math.fsum(outcome.selected.utility * (weight / total)
-                     for outcome, weight in zip(outcomes, normalized, strict=True))
+    utility_scale = max(outcome.selected.utility for outcome in outcomes)
+    if not utility_scale:
+        return 0.0
+    numerator = math.fsum((outcome.selected.utility / utility_scale) * weight
+                          for outcome, weight in zip(outcomes, normalized, strict=True))
+    return utility_scale * (numerator / total)

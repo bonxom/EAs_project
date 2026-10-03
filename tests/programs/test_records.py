@@ -151,3 +151,11 @@ def test_nested_lists_cannot_mutate_evaluation():
         (1.0,),
         ((0, 1, 2, 3, 0),),
     )
+
+
+def test_repeated_maximum_finite_gaps_have_finite_mean():
+    import sys
+    maximum = sys.float_info.max
+    record = GapEvaluation('h', 'tsp4', 'validation', 'success', maximum,
+                           (4.0,) * 3, (maximum,) * 3, ((0, 1, 2, 3, 0),) * 3)
+    assert record.utility == maximum
