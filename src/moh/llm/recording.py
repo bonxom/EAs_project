@@ -22,3 +22,21 @@ class RecordingLLM:
             "llm_called", {**self.scope, "call_id": call_id, "response": response}
         )
         return response
+
+    def generate_request(self, request):
+        self.calls += 1
+        call_id = self.calls
+        self.emit('llm_requested', {
+            **self.scope, 'call_id': call_id, 'expertise': request.expertise,
+            'message': request.message, 'temperature': request.temperature,
+            'timeout_seconds': request.timeout_seconds,
+        })
+        try:
+            response = self.client.generate_request(request)
+        except GenerationError as exc:
+            self.emit('llm_failed', {
+                **self.scope, 'call_id': call_id, 'error': str(exc)[:1024],
+            })
+            raise
+        self.emit('llm_called', {**self.scope, 'call_id': call_id, 'response': response})
+        return response

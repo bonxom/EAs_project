@@ -6,7 +6,7 @@ import time
 
 import openai
 
-from moh.llm.base import CallMetadata, GenerationError
+from moh.llm.base import CallMetadata, GenerationError, validate_response
 
 
 def validate_environment():
@@ -50,11 +50,28 @@ class OpenAILLMClient:
         )
 
     def generate(self, prompt):
+        return self._generate(prompt)
+
+    def generate_request(self, request):
+        duration = min(self.timeout, request.timeout_seconds or self.timeout)
+        return self._generate(request.message, request=request,
+                              expires_at=time.monotonic() + duration)
+
+    def _generate(self, prompt, *, request=None, expires_at=None):
         for attempt in range(1, 4):
             try:
-                response = self.transport.responses.create(
-                    model=self.model, input=prompt, timeout=self.timeout, store=False
-                )
+                timeout = self.timeout
+                if expires_at is not None:
+                    timeout = min(timeout, expires_at - time.monotonic())
+                    if timeout <= 0:
+                        raise GenerationError("timeout")
+                params = {"model": self.model, "input": prompt,
+                          "timeout": timeout, "store": False}
+                if request is not None:
+                    params["instructions"] = request.expertise
+                    if request.temperature is not None:
+                        params["temperature"] = request.temperature
+                response = self.transport.responses.create(**params)
             except openai.APIError as exc:
                 transient = isinstance(
                     exc, (openai.APIConnectionError, openai.RateLimitError)
@@ -69,7 +86,10 @@ class OpenAILLMClient:
                 )
                 if not transient or attempt == 3:
                     raise GenerationError(error) from None
-                self.sleep(0.25 * attempt)
+                delay = 0.25 * attempt
+                if expires_at is not None and delay >= expires_at - time.monotonic():
+                    raise GenerationError("timeout") from None
+                self.sleep(delay)
                 continue
             text = getattr(response, "output_text", None)
             usage = getattr(response, "usage", None)
@@ -102,6 +122,10 @@ class OpenAILLMClient:
                     )
                 )
                 raise GenerationError("malformed_response")
+            if request is not None:
+                if time.monotonic() >= expires_at:
+                    raise GenerationError("timeout")
+                validate_response(text)
             self.observer(
                 CallMetadata(
                     "openai",
