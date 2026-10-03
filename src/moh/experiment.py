@@ -185,3 +185,10 @@ def run_experiment(config):
             except (OSError, ValueError):
                 pass  # Preserve the original infrastructure error.
             raise
+
+
+def run_program_experiment(config):
+    """Lazy entry point for program-based MoH; legacy experiments stay independent."""
+    from moh.experiments.program_search import run_program_experiment as run
+
+    return run(config)

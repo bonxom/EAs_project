@@ -18,10 +18,28 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description="Mini-MoH two-level TSP search")
     parser.add_argument("--config", default="configs/smoke.yaml")
     parser.add_argument(
-        "--mode", choices=["experiment", "tsp-demo"], default="experiment"
+        "--mode", choices=["experiment", "tsp-demo", "moh"], default="experiment"
     )
     args = parser.parse_args(argv)
     try:
+        if args.mode == "moh":
+            from moh.experiment import run_program_experiment
+            from moh.program_config import load_program_config
+
+            result, path = run_program_experiment(load_program_config(args.config))
+            print(
+                json.dumps(
+                    {
+                        "status": result.status,
+                        "winner": result.winner.id if result.winner else None,
+                        "utility": result.winner.utility if result.winner else None,
+                        "objective": "mean_gap_percent",
+                        "run_dir": str(path),
+                    },
+                    allow_nan=False,
+                )
+            )
+            return 0 if result.status == "success" else 1
         config = load_config(args.config)
         if args.mode == "tsp-demo":
             task = TSPTask.create(20, config.instances_per_task, config.seed)
