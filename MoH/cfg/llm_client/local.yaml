@@ -1,0 +1,7 @@
+_target_: utils.llm_client.openai.OpenAIClient
+
+model: ag/gemini-3.7-flash-high
+temperature: 1.0
+batch_size: 5
+base_url: http://localhost:20128/v1
+api_key: ${oc.env:LOCAL_LLM_API_KEY}

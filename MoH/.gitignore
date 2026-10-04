@@ -1,0 +1,28 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+
+# Virtual environment
+.venv/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# Outputs
+outputs/
+cache/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Heavy data
+problems/*/data/
+
+# Generated heuristic populations
+problems/*/solution_*.json
