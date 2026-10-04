@@ -1,66 +1,68 @@
 import numpy as np
+
+
 def update_edge_distance(edge_distance, local_opt_tour, edge_n_used):
+    # Initialize updated distance matrix from a copy of the base distance matrix
     updated_edge_distance = edge_distance.copy()
     n = len(local_opt_tour)
-    if n < 4:
+    if n <= 1:
         return updated_edge_distance
-    u = np.asarray(local_opt_tour, dtype=int)
-    v = np.roll(u, -1)
-    p = np.roll(u, 1)
-    c = edge_distance[u, v]
-    tour_len = np.sum(c)
-    mean_c = tour_len / max(n, 1)
-    if mean_c <= 0.0:
-        mean_c = 1.0
-    d_uu = edge_distance[np.ix_(u, u)]
-    d_vv = edge_distance[np.ix_(v, v)]
-    delta_2opt = d_uu + d_vv - c[:, None] - c[None, :]
-    idx = np.arange(n)
-    diff = np.abs(idx[:, None] - idx[None, :])
-    diff = np.minimum(diff, n - diff)
-    valid_2opt = diff > 1
-    delta_2opt_clipped = np.maximum(delta_2opt, 0.0)
-    delta_2opt_masked = np.where(valid_2opt, delta_2opt_clipped, np.inf)
-    min_2opt = np.min(delta_2opt_masked, axis=1)
-    min_2opt = np.where(np.isinf(min_2opt), 0.0, min_2opt)
-    tau = 0.1 * mean_c + 1e-8
-    sterile_score_2opt = delta_2opt_clipped / (delta_2opt_clipped + tau)
-    n_valid_2opt = np.maximum(np.sum(valid_2opt, axis=1), 1)
-    s_2opt = np.sum(np.where(valid_2opt, sterile_score_2opt, 0.0), axis=1) / n_valid_2opt
-    d_uk = d_uu
-    d_kv = edge_distance[np.ix_(v, u)]
-    delta_remove = edge_distance[p, v] - edge_distance[p, u] - c
-    delta_node = d_uk + d_kv - c[:, None] + delta_remove[None, :]
-    valid_node = diff > 1
-    delta_node_clipped = np.maximum(delta_node, 0.0)
-    delta_node_masked = np.where(valid_node, delta_node_clipped, np.inf)
-    min_node = np.min(delta_node_masked, axis=1)
-    min_node = np.where(np.isinf(min_node), 0.0, min_node)
-    sterile_score_node = delta_node_clipped / (delta_node_clipped + tau)
-    n_valid_node = np.maximum(np.sum(valid_node, axis=1), 1)
-    s_node = np.sum(np.where(valid_node, sterile_score_node, 0.0), axis=1) / n_valid_node
-    r_score = (min_2opt + 0.5 * min_node) / mean_c
-    s_comb = 0.6 * s_2opt + 0.4 * s_node
-    raw_rigidity = (1.0 + r_score) * (1.0 + s_comb)
-    rigidity_inert = (
-        0.10 * np.roll(raw_rigidity, 2)
-        + 0.25 * np.roll(raw_rigidity, 1)
-        + 0.30 * raw_rigidity
-        + 0.25 * np.roll(raw_rigidity, -1)
-        + 0.10 * np.roll(raw_rigidity, -2)
+
+    # Step 1: Multi-Scale Topological Edge Density Initialization
+    # Compute localized k-nearest neighbor density metric for each node
+    k_nn = min(8, max(1, n - 1))
+    sorted_k_dists = np.partition(edge_distance, k_nn, axis=1)[:, 1 : k_nn + 1]
+    node_density = np.mean(sorted_k_dists, axis=1) + 1e-9
+    avg_density = np.mean(node_density)
+
+    # Step 2: Extract current tour edge characteristics
+    u_idx = local_opt_tour
+    v_idx = np.roll(local_opt_tour, -1)
+    tour_edge_distances = edge_distance[u_idx, v_idx]
+    tour_length = np.sum(tour_edge_distances)
+    avg_edge_distance = tour_length / n
+
+    tour_edge_penalties = np.maximum(
+        edge_n_used[u_idx, v_idx], edge_n_used[v_idx, u_idx]
     )
-    mean_inert = np.mean(rigidity_inert)
-    inertia_factor = rigidity_inert / (mean_inert + 1e-8) if mean_inert > 0 else np.ones(n)
-    p_counts = edge_n_used[u, v]
-    base_utility = c / (1.0 + p_counts)
-    gamma = 0.5
-    utility = base_utility * (1.0 + gamma * inertia_factor)
-    lambda_penalty = 0.3 * (tour_len / n)
-    max_util = np.max(utility)
-    penalize_indices = np.where(utility >= (max_util - 1e-6))[0]
-    for k in penalize_indices:
-        uid = u[k]
-        vid = v[k]
-        updated_edge_distance[uid, vid] += lambda_penalty
-        updated_edge_distance[vid, uid] += lambda_penalty
+
+    # Topological relative distance to detect bottleneck/inter-cluster bridge edges
+    topo_dist = (2.0 * tour_edge_distances) / (node_density[u_idx] + node_density[v_idx])
+    blended_cost = 0.65 * tour_edge_distances + 0.35 * avg_density * topo_dist
+
+    # Step 3: Multi-Feature Utility Scoring
+    utilities = blended_cost / (1.0 + 0.8 * tour_edge_penalties)
+    max_utility = np.max(utilities)
+
+    # Step 4: Deterministic Rank-Proportional Pareto Top-K Perturbation
+    sorted_order = np.argsort(-utilities)
+    k_perturb = min(max(2, n // 20), n)
+    top_indices = sorted_order[:k_perturb]
+
+    delta_penalty = np.zeros_like(edge_distance, dtype=float)
+    if max_utility > 1e-9:
+        for rank, idx in enumerate(top_indices):
+            util_val = utilities[idx]
+            if util_val >= 0.70 * max_utility:
+                rank_weight = np.exp(-rank / 1.5) * (util_val / max_utility)
+                u = u_idx[idx]
+                v = v_idx[idx]
+                delta_penalty[u, v] += rank_weight
+                delta_penalty[v, u] += rank_weight
+
+    # Step 5: Multi-Tier Memory Dynamics with Non-Linear Tabu Saturation
+    symmetrical_used = np.maximum(edge_n_used, edge_n_used.T)
+    evaporation_rate = 0.08
+    decayed_memory = symmetrical_used * (1.0 - evaporation_rate)
+    
+    # Dual-tier non-linear saturation for chronic bottleneck penalization
+    tabu_saturated_memory = (decayed_memory ** 0.88) + 0.35 * (decayed_memory ** 2) / (decayed_memory + 3.0)
+    effective_penalties = tabu_saturated_memory + delta_penalty
+
+    # Step 6: Scale and update edge distance matrix
+    alpha = 0.28
+    lambda_factor = alpha * avg_edge_distance
+    updated_edge_distance += lambda_factor * effective_penalties
+    np.fill_diagonal(updated_edge_distance, 0.0)
+
     return updated_edge_distance

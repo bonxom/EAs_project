@@ -1,11 +1,12 @@
-import os
-import json
-import time
-import logging
 import concurrent.futures
-from typing import Optional
-from random import random
+import json
+import logging
+import os
+import time
 from datetime import datetime
+from random import random
+from threading import Lock
+from uuid import uuid4
 
 logger = logging.getLogger(__name__)
 #   lm = hydra.utils.instantiate(cfg.llm_client)                                                                                      
@@ -14,12 +15,13 @@ logger = logging.getLogger(__name__)
 
 class BaseClient:
     def __init__(self, model: str, temperature: float = 1.0, batch_size: int = 5,
-                 cache_dir: Optional[str] = None) -> None:
+                 cache_dir: str | None = None) -> None:
         self.model = model
         self.temperature = temperature
         self.batch_size = batch_size
         self.cache_dir = cache_dir
         self._call_counter = 0
+        self._cache_lock = Lock()
         if cache_dir:
             os.makedirs(cache_dir, exist_ok=True)
 
@@ -42,22 +44,23 @@ class BaseClient:
     def _log_to_cache(self, messages: list[dict], temperature: float, response: str):
         if not self.cache_dir:
             return
-        self._call_counter += 1
+        with self._cache_lock:
+            self._call_counter += 1
+            call_id = self._call_counter
         record = {
-            "id": self._call_counter,
-            "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "id": call_id,
+            "timestamp": datetime.now().astimezone().isoformat(),
             "model": self.model,
             "temperature": temperature,
             "messages": messages,
             "response": response,
         }
-        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-        filename = f"{ts}_{self._call_counter:04d}.json"
+        filename = f"{call_id:04d}_{uuid4().hex}.json"
         path = os.path.join(self.cache_dir, filename)
         with open(path, "w") as f:
             json.dump(record, f, ensure_ascii=False, indent=2)
 
-    def prompt(self, expertise: str, message: str, temperature: Optional[float] = None) -> str:
+    def prompt(self, expertise: str, message: str, temperature: float | None = None) -> str:
         """
         Single prompt call
         Args:
@@ -65,7 +68,7 @@ class BaseClient:
             message: user message content
             temperature: sampling temperature (defaults to self.temperature)
         """
-        temperature = temperature or self.temperature
+        temperature = self.temperature if temperature is None else temperature
         messages = [
             {"role": "system", "content": expertise},
             {"role": "user", "content": message},
@@ -74,7 +77,7 @@ class BaseClient:
         self._log_to_cache(messages, temperature, response)
         return response
 
-    def prompt_batch(self, expertise: str, message_batch: list[str], temperature: Optional[float] = None) -> list[str]:
+    def prompt_batch(self, expertise: str, message_batch: list[str], temperature: float | None = None) -> list[str]:
         """
         Parallel batch prompt call.
         Args:
@@ -82,7 +85,10 @@ class BaseClient:
             message_batch: list of user messages
             temperature: sampling temperature (defaults to self.temperature)
         """
-        temperature = temperature or self.temperature
+        temperature = self.temperature if temperature is None else temperature
+
+        if not message_batch:
+            return []
 
         with concurrent.futures.ThreadPoolExecutor(max_workers=len(message_batch)) as executor:
             futures = {

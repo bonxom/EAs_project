@@ -1,25 +1,25 @@
-import os
 import copy
-import time
 import logging
+import math
+import os
 import subprocess
 import traceback
-from datetime import datetime
-from typing import Optional
 
 import numpy as np
-from tqdm import tqdm
 from omegaconf import DictConfig
-
+from tqdm import tqdm
+from utils.generated_improver import GeneratedImprover
 from utils.llm_client.base import BaseClient
-
-from utils.utils import (
-    read_file_as_str, extract_code,
-    extract_idea, clean_code,
-    find_txt_block, match_number,
-)
 from utils.population import Pop
 from utils.run_logger import RunLogger
+from utils.utils import (
+    clean_code,
+    extract_code,
+    extract_idea,
+    find_txt_block,
+    match_number,
+    read_file_as_str,
+)
 
 logger = logging.getLogger(__name__)
 # os.environ["CUDA_VISIBLE_DEVICES"] = "1"
@@ -35,7 +35,7 @@ class MoH:
         cfg: DictConfig,           # Hydra config 
         root_dir: str,             
         heu_llm: BaseClient,       # base LLM client 
-        meta_llm: Optional[BaseClient] = None,  # separate LLM for meta-level
+        meta_llm: BaseClient | None = None,  # separate LLM for meta-level
     ) -> None:
         self.cfg = cfg
         self.root_dir = root_dir
@@ -122,7 +122,7 @@ class MoH:
 
     def evaluate_heuristic(self, algorithm_str: str, problem_type: str, mode: str = "val") -> float:
         if not algorithm_str:
-            logger.info(f"algorithm_str is {repr(algorithm_str)}, returning")
+            logger.info(f"algorithm_str is {algorithm_str!r}, returning")
             return 1e6
         if "random" in algorithm_str:
             logger.info("random is used in algorithm")
@@ -297,13 +297,17 @@ class MoH:
 
     def get_improver(self, improve_str, subtask_str, subtask):
         try:
-            exec(improve_str, globals())
             subtask_pop_copy = copy.deepcopy(self.subtask_pop)
             utility = self._make_subtask_utility(subtask)
-            # exec'd code defines improve_algorithm in globals
-            new_idea, improved_algorithm_str, utility_val = improve_algorithm(
+            improver = GeneratedImprover(improve_str, self._optimizer_timeout(), getattr(self.cfg, "seed", 0))
+            evaluations_before = self._total_eval_calls
+            new_idea, improved_algorithm_str, utility_val = improver(
                 subtask_pop_copy, utility, self.heu_llm, subtask_str, subtask
             )
+            evaluation_count = self._total_eval_calls - evaluations_before
+            logger.info("Optimizer on %s: %d new heuristic evaluations", subtask, evaluation_count)
+            if evaluation_count == 0:
+                logger.warning("Optimizer on %s returned without evaluating a new heuristic", subtask)
             return new_idea, improved_algorithm_str, utility_val
         except Exception as e:
             logger.warning(f"get_improver failed: {e}")
@@ -312,7 +316,7 @@ class MoH:
 
     def meta_utility(self, improve_str: str, idea: str, task: str = None):
         if not improve_str:
-            logger.info(f"improve_str is {repr(improve_str)}, returning")
+            logger.info(f"improve_str is {improve_str!r}, returning")
             return 1e6
 
         # Save candidate improver code
@@ -398,6 +402,9 @@ class MoH:
 
         return expected_utility_val
 
+    def _optimizer_timeout(self):
+        return getattr(self.cfg, "optimizer_timeout", 3600)
+
     # =========================================================================
     # Core optimization loop 
     # =========================================================================
@@ -423,25 +430,30 @@ class MoH:
                 self.meta_prompts,
                 "meta-optimizer",
             )
-            if not new_utility:
-                raise ValueError("Utility is invalid or zero")
+            if new_utility is None or not math.isfinite(new_utility) or new_utility < 0:
+                raise ValueError("Utility must be finite and nonnegative")
+            if not new_algorithm_str:
+                raise ValueError("Candidate code is empty")
+            if clean_code(new_algorithm_str) == clean_code(self.improver_str):
+                logger.info("Optimizer unchanged; keeping previous optimizer")
+                return False, new_algorithm_str, previous_algo
+            if self.meta_utility_val is not None and new_utility >= self.meta_utility_val:
+                logger.info("Optimizer did not improve utility: %s >= %s", new_utility, self.meta_utility_val)
+                return False, new_algorithm_str, previous_algo
 
-            # Load before accepting so malformed code cannot replace a working optimizer.
-            candidate_code = compile(new_algorithm_str, "<candidate_improver>", "exec")
-            candidate_namespace = globals().copy()
-            candidate_namespace.pop("improve_algorithm", None)
-            exec(candidate_code, candidate_namespace)
-            candidate_improver = candidate_namespace.get("improve_algorithm")
-            if not callable(candidate_improver):
-                raise ValueError("Candidate must define a callable improve_algorithm")
+            # Validate module loading in a child before replacing a working optimizer.
+            compile(new_algorithm_str, "<candidate_improver>", "exec")
+            candidate_improver = GeneratedImprover(
+                new_algorithm_str, self._optimizer_timeout(), getattr(self.cfg, "seed", 0),
+            )
+            candidate_improver.validate()
 
             self.improver_pop.save_solution("meta-optimizer", new_idea, new_algorithm_str, new_utility)
             improvement_successful = True
             improve_algorithm_func = candidate_improver
 
-            if self.meta_utility_val > new_utility:
-                self.meta_utility_val = new_utility
-                self.improver_str = new_algorithm_str
+            self.meta_utility_val = new_utility
+            self.improver_str = new_algorithm_str
 
         except Exception as e:
             logger.warning(f"Improvement failed: {e}")
@@ -452,7 +464,9 @@ class MoH:
     def run_meta_optimizer(self):
         self.get_seed()
 
-        from problems.meta.seed_algorithm_improved import improve_algorithm as first_improver
+        from problems.meta.seed_algorithm_improved import (
+            improve_algorithm as first_improver,
+        )
         improver = first_improver
         previous_algorithm = improver
 
@@ -460,7 +474,11 @@ class MoH:
             self._cur_iter = cur_iter
             logger.info(f"Start iteration {cur_iter}")
 
+            evaluations_before = self._total_eval_calls
+
             improvement_successful, new_algorithm_str, improver = self.try_improvement(improver, previous_algorithm)
+            logger.info("Iteration %d: %d new heuristic evaluations", cur_iter,
+                        self._total_eval_calls - evaluations_before)
 
             accepted = False
             if improvement_successful and new_algorithm_str:

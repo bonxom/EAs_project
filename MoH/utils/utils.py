@@ -1,12 +1,23 @@
 
+import ast
+import io
+import json
+import logging
 import os
 import re
+import textwrap
+import tokenize
 import traceback
 
+logger = logging.getLogger(__name__)
 
 def code_only(code_string):
     """Remove # comments and redundant blank lines."""
-    code_without_comments = re.sub(r"#.*", "", code_string)
+    tokens = tokenize.generate_tokens(io.StringIO(code_string).readline)
+    code_without_comments = tokenize.untokenize(
+        token._replace(string="") if token.type == tokenize.COMMENT else token
+        for token in tokens
+    )
     cleaned_code = re.sub(r"\n\s*\n", "\n", code_without_comments)
     return cleaned_code.strip()
 
@@ -36,42 +47,52 @@ def find_braces(response):
 
 
 def extract_code(algorithm_str):
-    """Extract largest markdown code block."""
+    """Extract fenced code, or a complete raw Python/JSON response."""
     if isinstance(algorithm_str, str):
-        return find_largest_code_block_line_by_line(algorithm_str)
+        code = find_largest_code_block_line_by_line(algorithm_str)
+        if code is None:
+            logger.warning("No code extracted from LLM response (%d characters)", len(algorithm_str))
+        return code
     elif isinstance(algorithm_str, list):
         return [extract_code(s) for s in algorithm_str]
 
 
 def find_largest_code_block_line_by_line(text):
-    """Find the largest ``` code block in text."""
-    largest_block = ""
-    current_block = ""
-    nesting_level = 0
-    lines = text.split("\n")
-
-    for line in lines:
-        if line.startswith("```"):
-            if not line[3:].strip():  # closing delimiter
-                nesting_level -= 1
-                if nesting_level == 0:
-                    current_block += line + "\n"
-                    if len(current_block) > len(largest_block):
-                        largest_block = current_block
-                    current_block = ""
-                else:
-                    current_block += line + "\n"
-            else:  # opening delimiter
-                current_block += line + "\n"
-                nesting_level += 1
-        else:
-            if nesting_level > 0:
-                current_block += line + "\n"
-
-    if largest_block:
-        largest_block = "\n".join(largest_block.strip().split("\n")[1:-1])
-
-    return largest_block if largest_block else None
+    """Accept unlabeled/indented fences without treating prose as Python."""
+    blocks = []
+    fence = None
+    current = []
+    for line in text.splitlines():
+        marker = re.fullmatch(r"\s*(`{3,}|~{3,})([^`~]*)", line)
+        if fence is None and marker:
+            fence = marker.group(1)
+            current = []
+        elif fence is not None and line.strip() == fence:
+            block = textwrap.dedent("\n".join(current)).strip()
+            if block:
+                blocks.append(block)
+            fence = None
+        elif fence is not None:
+            current.append(line)
+    if blocks:
+        return max(blocks, key=len)
+    if fence is not None:
+        return None
+    raw = textwrap.dedent(text).strip()
+    try:
+        data = json.loads(raw)
+    except (json.JSONDecodeError, ValueError):
+        pass
+    else:
+        if isinstance(data, (dict, list)):
+            return raw
+    try:
+        tree = ast.parse(raw)
+    except (SyntaxError, ValueError):
+        return None
+    if any(isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)) for node in tree.body):
+        return raw
+    return None
 
 
 def find_txt_block(string):

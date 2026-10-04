@@ -3,5 +3,5 @@ _target_: utils.llm_client.openai.OpenAIClient
 model: gpt-4o
 # temperature: 1.0 gpt-4o-mini
 batch_size: 5
-cache_dir: cache
+cache_dir: logs/llm
 api_key: ${oc.env:OPENAI_API_KEY}   

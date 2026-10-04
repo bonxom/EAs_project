@@ -31,7 +31,27 @@ uv sync
 pip install -e .
 ```
 
-**Dependencies**: `numpy`, `tqdm`, `hydra-core`, `omegaconf`, `openai`, `numba`, `func-timeout` (see `pyproject.toml` for full list). Require Python >= 3.10.
+**Dependencies**: `numpy`, `tqdm`, `hydra-core`, `omegaconf`, `openai`, `numba`, `func-timeout` (see `pyproject.toml` for full list). Require Python >= 3.12.
+
+### Run diagnostics and checks
+
+From the repository root, run `uv run pytest -q` and `uv run ruff check .`.
+The root uv workspace installs the MoH dependencies and test tools.
+
+New runs retain raw LLM requests and responses in `logs/llm/heu/` and
+`logs/llm/meta/` under the run output directory. A configured `cache_dir`
+changes the base directory; each role still gets its own subdirectory.
+Extraction failures and the number of new heuristic evaluations per subtask
+and outer iteration are written to the run log.
+
+`accepted=True` now means the optimizer code changed and its returned utility
+strictly improved. Returning the existing optimizer or an equal/worse score
+keeps the previous optimizer and records `accepted=False`. A zero gap is valid.
+
+Generated optimizers load and execute in subprocesses. `optimizer_timeout`
+limits execution (default 3600 seconds); loading validation is capped at 90
+seconds. `seed` controls population selection and generated optimizer RNGs
+(default 0); external LLM responses and the GLS wall-clock budget can still vary.
 
 **Datas**: You can download them from [GoogleDrive](https://drive.google.com/file/d/1e4T8Yiz-qvHcChys2Tk841pbXumGVYu2/view?usp=sharing) and put data folder of each problem under `problems/<problem_name>`, the scripts to generate the data will also be updated in this repository soon.
 ## Configuration
