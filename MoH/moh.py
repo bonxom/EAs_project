@@ -318,6 +318,12 @@ class MoH:
         # Save candidate improver code
         self.run_logger.save_candidate_improver(improve_str, idea)
 
+        try:
+            compile(improve_str, "<candidate_improver>", "exec")
+        except (SyntaxError, TypeError, ValueError) as e:
+            logger.warning(f"Invalid improver code: {e}")
+            return 1e6
+
         if "language_model.prompt" not in improve_str and "language_model.prompt_batch" not in improve_str:
             logger.info("No language model prompt in improve_str, returning")
             self.run_logger.save_candidate_improver(improve_str, idea + " [rejected: no prompting step]")
@@ -420,8 +426,18 @@ class MoH:
             if not new_utility:
                 raise ValueError("Utility is invalid or zero")
 
+            # Load before accepting so malformed code cannot replace a working optimizer.
+            candidate_code = compile(new_algorithm_str, "<candidate_improver>", "exec")
+            candidate_namespace = globals().copy()
+            candidate_namespace.pop("improve_algorithm", None)
+            exec(candidate_code, candidate_namespace)
+            candidate_improver = candidate_namespace.get("improve_algorithm")
+            if not callable(candidate_improver):
+                raise ValueError("Candidate must define a callable improve_algorithm")
+
+            self.improver_pop.save_solution("meta-optimizer", new_idea, new_algorithm_str, new_utility)
             improvement_successful = True
-            self.improver_pop.save_solution("meta-optimizer", new_idea, self.improver_str, self.meta_utility_val)
+            improve_algorithm_func = candidate_improver
 
             if self.meta_utility_val > new_utility:
                 self.meta_utility_val = new_utility
@@ -453,13 +469,9 @@ class MoH:
                 self.improver_str = new_algorithm_str
                 self.algorithm_to_improve = new_algorithm_str
                 previous_algorithm = improver
-                exec(self.improver_str, globals())
-                improver = improve_algorithm
             else:
                 logger.info("Failed to improve algorithm, reverting to previous version")
-                best_solution = self.improver_pop.get_best_solution("meta-optimizer")["best_sol"]
-                exec(best_solution, globals())
-                improver = improve_algorithm
+                improver = previous_algorithm
 
             self.run_logger.log_meta_utility(cur_iter, self.meta_utility_val, accepted=accepted)
             self.run_logger.save_iteration(
