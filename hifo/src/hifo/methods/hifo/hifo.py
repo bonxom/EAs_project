@@ -1,9 +1,12 @@
 import numpy as np
 import json
 import random
+import sys
 import time
 
 from .hifo_interface_EC import InterfaceEC
+from ...utils.progress import sparkline, fmt_duration, fmt_gap
+from ...utils.tsp_reference import get_baseline, gap_percent
 
 class HiFo:
 
@@ -43,6 +46,12 @@ class HiFo:
         self.use_numba = paras.eva_numba_decorator
 
         self.use_hifo_prompt = kwargs.get('use_hifo_prompt', True)
+
+        self._reference_cost = None
+        if type(problem).__name__ == 'TSPCONST':
+            instance_data = getattr(problem, 'instance_data', None)
+            if instance_data:
+                self._reference_cost = get_baseline(instance_data, problem.problem_size)
         
         print("- HiFo parameters loaded -")
         
@@ -107,20 +116,29 @@ class HiFo:
 
         hifo_prompt_logs = []
         n_op = len(self.operators)
+        best_history = []
+        self._print_header()
+
+        # Freeze the operator status line unless stdout is an interactive terminal,
+        # so redirected logs do not end up full of carriage-return noise.
+        self._live_status = sys.stdout.isatty()
 
         for pop in range(n_start, self.n_pop):
+            iter_start = time.time()
+
             for i in range(n_op):
                 op = self.operators[i]
-                print(f" OP: {op}, [{i + 1} / {n_op}] ", end="|") 
+                if self._live_status:
+                    print(f"  op {op} [{i + 1}/{n_op}] ...".ljust(30), end="\r", flush=True)
                 op_w = self.operator_weights[i]
                 if (np.random.rand() < op_w):
                     parents, offsprings = interface_ec.get_algorithm(population, op)
                 self.add2pop(population, offsprings)
-                for off in offsprings:
-                    print(" Obj: ", off['objective'], end="|")
                 size_act = min(len(population), self.pop_size)
                 population = self.manage.population_management(population, size_act)
-                print()
+
+            if self._live_status:
+                print(f"  op {n_op} operators done".ljust(30), end="\r", flush=True)
 
             filename = self.output_path + "/results/pops/population_generation_" + str(pop + 1) + ".json"
             with open(filename, 'w') as f:
@@ -128,26 +146,56 @@ class HiFo:
 
             filename = self.output_path + "/results/pops_best/population_generation_" + str(pop + 1) + ".json"
             with open(filename, 'w') as f:
-                json.dump(population[0], f, indent=5)
+                json.dump(population[0] if population else None, f, indent=5)
+
+            best = population[0]["objective"] if population else None
+            if best is not None:
+                best_history.append(best)
+            diversity = interface_ec.diversity_history[-1] if interface_ec.diversity_history else None
+            gap = gap_percent(best, self._reference_cost)
+
+            if not population:
+                print("Warning: population is empty - no valid algorithm was generated or "
+                      "evaluated in this generation. Enable exp_debug_mode for details.")
+
+            self._print_iteration(pop + 1, best, gap, diversity, population,
+                                  time.time() - iter_start,
+                                  time.time() - time_start, best_history)
 
             if self.use_hifo_prompt:
                 hifo_prompt_log = {
                     "generation": pop + 1,
                     "timestamp": time.time(),
-                    "best_fitness": population[0]["objective"] if population else None,
-                    "diversity": interface_ec.diversity_history[-1] if interface_ec.diversity_history else None,
+                    "best_fitness": best,
+                    "gap_percent": round(gap, 4) if gap is not None else None,
+                    "objective_values": [ind["objective"] for ind in population],
+                    "diversity": diversity,
+                    "elapsed_s": round(time.time() - time_start, 1),
                     "current_insight_count": len(interface_ec.insight_pool.tips),
-                    "recent_insights": list(interface_ec.insight_pool.tips)[-3:] if interface_ec.insight_pool.tips else [],
+                    "top_insights": list(interface_ec.insight_pool.tips)[:2],
                     "navigator_guidance": interface_ec.navigator.last_guidance
                 }
                 hifo_prompt_logs.append(hifo_prompt_log)
-                
+
+                # Rewritten periodically so progress is readable while running,
+                # without rewriting the whole file on every single generation.
                 if (pop + 1) % 5 == 0 or pop + 1 == self.n_pop:
                     with open(self.hifo_prompt_log_path, 'w') as f:
-                        json.dump(hifo_prompt_logs, f, indent=4)
+                        json.dump(hifo_prompt_logs, f, indent=2)
 
-            print(f"--- {pop + 1} of {self.n_pop} populations finished. Time Cost: {((time.time()-time_start)/60):.1f} m")
-            print("Pop Objs: ", end=" ")
-            for i in range(len(population)):
-                print(str(population[i]['objective']) + " ", end="")
-            print()
+    def _print_header(self):
+        if self._reference_cost is not None:
+            print(f"Reference (nearest-neighbour) cost: {self._reference_cost:.5f}")
+            print("Gap < 0 means the evolved heuristic beats that reference.")
+        print(f"{'gen':>4} {'best':>9} {'gap':>8} {'div':>6} {'n':>3} "
+              f"{'iter':>7} {'total':>7} {'eta':>7}  progress (best, taller = better)")
+
+    def _print_iteration(self, gen, best, gap, diversity, population,
+                         iter_time, total_time, best_history):
+        remaining = self.n_pop - gen
+        eta = total_time / gen * remaining if gen else None
+        best_str = "   --   " if best is None else f"{best:9.5f}"
+        div_str = " -- " if diversity is None else f"{diversity:5.2f}"
+        print(f"{gen:>4} {best_str} {fmt_gap(gap)} {div_str} {len(population):>3} "
+              f"{fmt_duration(iter_time):>7} {fmt_duration(total_time):>7} {fmt_duration(eta):>7}  "
+              f"{sparkline(best_history)}")

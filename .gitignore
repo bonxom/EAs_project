@@ -6,3 +6,5 @@
 .DS_Store
 .vscode/
 output.log
+api_key.txt
+.env

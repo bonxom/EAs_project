@@ -95,9 +95,9 @@ paras = Paras()
 paras.set_paras(
     method = "hifo",               
     problem = "tsp_construct",          # Problem: 'tsp_construct', 'bp_online'
-    llm_api_endpoint = "api.deepseek.com", # Your API Endpoint
+    llm_api_endpoint = "https://api.deepseek.com/chat/completions", # Your API Endpoint
     llm_api_key = "sk-xxxxxxxx",        # Your API Key
-    llm_model = "deepseek-chat",        # Model Name
+    llm_model = "deepseek-flash",       # Model Name
     ec_pop_size = 8,                    # Population size
     ec_n_pop = 8,                      # Number of generations
     exp_n_proc = 4,                     # Parallel threads for evaluation
@@ -146,15 +146,45 @@ HiFo-Prompt supports both **remote APIs** and **local LLM deployment**.
 
 ### Option A: Remote API (Recommended)
 
-Supported protocols: OpenAI-compatible APIs (DeepSeek, Moonshot, ChatGPT, etc.).
+Supported protocols: OpenAI-compatible APIs (DeepSeek, Moonshot, ChatGPT, Gemini, etc.).
+
+`llm_api_endpoint` accepts either a bare host or a full URL. Prefer the **full URL**
+so the path is explicit; a bare host falls back to Aliyun's
+`/compatible-mode/v1/chat/completions`, which only fits DashScope-style providers.
 
 Modify `runHiFo.py`:
 
 ```python
-llm_api_endpoint = "api.openai.com" 
+# DeepSeek
+llm_api_endpoint = "https://api.deepseek.com/chat/completions"
+llm_api_key = "sk-xxxxxxxx"
+llm_model = "deepseek-flash"
+```
+
+```python
+# OpenAI (bare host, uses the default chat-completions path)
+llm_api_endpoint = "api.openai.com"
 llm_api_key = "your_key"
 llm_model = "gpt-4o"
 ```
+
+For providers whose OpenAI-compatible path differs, pass the full URL:
+
+```python
+llm_api_endpoint = "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions"
+llm_api_key = "your_key"
+llm_model = "gemini-2.5-flash"
+```
+
+> **Note**: This endpoint must be an OpenAI-compatible chat-completions URL.
+> Provider-native endpoints (e.g. Gemini's `/v1beta/models/<model>:generateContent`)
+> use a different request/response schema and are not supported.
+
+> **Note on quotas**: HiFo issues hundreds of LLM requests per run
+> (`ec_pop_size x len(ec_operators) x ec_n_pop`, plus the initial population).
+> Free tiers often allow only a few dozen requests per model per day, which
+> causes HTTP 429 errors mid-run. If that happens, the exact API error is now
+> printed; pick a model with enough quota or enable billing.
 
 ### Option B: Local LLM (vLLM / HuggingFace)
 

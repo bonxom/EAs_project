@@ -95,9 +95,9 @@ paras = Paras()
 paras.set_paras(
     method = "hifo",               
     problem = "tsp_construct",          # 问题类型: 'tsp_construct', 'bp_online'
-    llm_api_endpoint = "api.deepseek.com", # 您的 API 端点
+    llm_api_endpoint = "https://api.deepseek.com/chat/completions", # 您的 API 端点
     llm_api_key = "sk-xxxxxxxx",        # 您的 API 密钥
-    llm_model = "deepseek-chat",        # 模型名称
+    llm_model = "deepseek-flash",       # 模型名称
     ec_pop_size = 4,                    # 种群大小（推荐: 4-8）
     ec_n_pop = 10,                      # 进化代数
     exp_n_proc = 4,                     # 评估并行线程数
@@ -146,15 +146,44 @@ HiFo-Prompt 支持**远程 API** 和**本地 LLM 部署**两种方式。
 
 ### 方式 A：远程 API（推荐）
 
-支持协议：OpenAI 兼容 API（DeepSeek、Moonshot、ChatGPT 等）。
+支持协议：OpenAI 兼容 API（DeepSeek、Moonshot、ChatGPT、Gemini 等）。
+
+`llm_api_endpoint` 支持纯主机名或完整 URL。建议填写**完整 URL**，路径更明确；
+仅填写主机名时会回退到阿里云的 `/compatible-mode/v1/chat/completions`，
+只适用于 DashScope 风格的服务商。
 
 修改 `runHiFo.py`：
 
 ```python
-llm_api_endpoint = "api.openai.com" 
+# DeepSeek
+llm_api_endpoint = "https://api.deepseek.com/chat/completions"
+llm_api_key = "sk-xxxxxxxx"
+llm_model = "deepseek-flash"
+```
+
+```python
+# OpenAI（纯主机名，使用默认 chat-completions 路径）
+llm_api_endpoint = "api.openai.com"
 llm_api_key = "your_key"
 llm_model = "gpt-4o"
 ```
+
+对于 OpenAI 兼容路径不同的服务商，请填写完整 URL：
+
+```python
+llm_api_endpoint = "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions"
+llm_api_key = "your_key"
+llm_model = "gemini-2.5-flash"
+```
+
+> **注意**：该端点必须是 OpenAI 兼容的 chat-completions URL。
+> 服务商原生端点（例如 Gemini 的 `/v1beta/models/<model>:generateContent`）
+> 使用不同的请求/响应格式，不受支持。
+
+> **关于配额**：每次运行 HiFo 会发起数百次 LLM 请求
+> （`ec_pop_size x len(ec_operators) x ec_n_pop`，另加初始种群）。
+> 免费套餐通常每个模型每天仅允许几十次请求，会在运行中途触发 HTTP 429 错误。
+> 遇到该情况时会直接打印具体的 API 错误；请选择配额足够的模型或开通付费。
 
 ### 方式 B：本地 LLM（vLLM / HuggingFace）
 

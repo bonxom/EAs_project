@@ -1,6 +1,6 @@
-import re
 import time
 from ...llm.interface_LLM import InterfaceLLM
+from ...utils.parse_llm_response import extract_algorithm_and_code
 
 class Evolution():
 
@@ -93,51 +93,26 @@ The description must be inside a brace. Next, implement it in Python as a functi
 
         response = self.interface_llm.get_response(prompt_content)
 
-        algorithm = re.findall(r"\{(.*)\}", response, re.DOTALL)
-        if len(algorithm) == 0:
-            if 'python' in response:
-                algorithm = re.findall(r'^.*?(?=python)', response,re.DOTALL)
-            elif 'import' in response:
-                algorithm = re.findall(r'^.*?(?=import)', response,re.DOTALL)
-            else:
-                algorithm = re.findall(r'^.*?(?=def)', response,re.DOTALL)
-
-        code = re.findall(r"import.*return", response, re.DOTALL)
-        if len(code) == 0:
-            code = re.findall(r"def.*return", response, re.DOTALL)
+        parsed = extract_algorithm_and_code(response, self.prompt_func_outputs)
 
         n_retry = 1
-        while (len(algorithm) == 0 or len(code) == 0):
+        while parsed is None:
             if self.debug_mode:
                 print("Error: algorithm or code not identified, wait 1 seconds and retrying ... ")
 
             response = self.interface_llm.get_response(prompt_content)
+            parsed = extract_algorithm_and_code(response, self.prompt_func_outputs)
 
-            algorithm = re.findall(r"\{(.*)\}", response, re.DOTALL)
-            if len(algorithm) == 0:
-                if 'python' in response:
-                    algorithm = re.findall(r'^.*?(?=python)', response,re.DOTALL)
-                elif 'import' in response:
-                    algorithm = re.findall(r'^.*?(?=import)', response,re.DOTALL)
-                else:
-                    algorithm = re.findall(r'^.*?(?=def)', response,re.DOTALL)
-
-            code = re.findall(r"import.*return", response, re.DOTALL)
-            if len(code) == 0:
-                code = re.findall(r"def.*return", response, re.DOTALL)
-                
             if n_retry > 3:
                 break
-            n_retry +=1
+            n_retry += 1
 
-        algorithm = algorithm[0]
-        code = code[0] 
+        if parsed is None:
+            raise ValueError("Failed to extract algorithm and code from the LLM response.")
 
-        code_all = code+" "+", ".join(s for s in self.prompt_func_outputs) 
-
+        code_all, algorithm = parsed
 
         return [code_all, algorithm]
-
 
     def i1(self):
 

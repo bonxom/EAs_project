@@ -181,6 +181,8 @@ class InterfaceEC():
         return parents, offspring
 
     def get_offspring(self, pop, operator):
+        offspring = None
+        code = None
         try:
             p, offspring = self._get_alg(pop, operator)
             
@@ -220,6 +222,15 @@ class InterfaceEC():
             self.update_insight_feedback(offspring, pop)
 
         except Exception as e:
+            if self.debug:
+                print(f"Error while generating/evaluating offspring ({type(e).__name__}): {e}")
+                if code:
+                    print(f">>> failing generated code:\n{code}")
+
+            failed_insights = (offspring or {}).get('metadata', {}).get('insights', [])
+            if not isinstance(failed_insights, list):
+                failed_insights = []
+
             offspring = {
                 'algorithm': None,
                 'code': None,
@@ -227,11 +238,9 @@ class InterfaceEC():
                 'other_inf': None
             }
             p = None
-            
-            if 'metadata' in offspring and 'insights' in offspring['metadata']:
-                insights = offspring['metadata']['insights']
-                for tip in insights:
-                    self.insight_pool.update_tip_stats(tip, -0.8)
+
+            for tip in failed_insights:
+                self.insight_pool.update_tip_stats(tip, -0.8)
 
         return p, offspring
 
@@ -247,8 +256,6 @@ class InterfaceEC():
             if self.debug:
                 print(f"Error: {e}")
             print("Parallel time out .")
-            
-        time.sleep(2)
 
         out_p = []
         out_off = []

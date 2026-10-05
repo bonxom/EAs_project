@@ -1,0 +1,194 @@
+[
+  {
+    "generation": 1,
+    "timestamp": 1791214890.885962,
+    "best_fitness": 6.03277,
+    "gap_percent": -8.7034,
+    "objective_values": [
+      6.03277,
+      6.06709,
+      6.115,
+      6.12189,
+      6.13072,
+      6.16164,
+      6.18066,
+      6.19721
+    ],
+    "diversity": 1.0,
+    "elapsed_s": 131.5,
+    "current_insight_count": 15,
+    "top_insights": [
+      "Design adaptive hybrid meta-heuristics synergistically fusing multiple search paradigms and dynamically tune operator parameters based on search stage or problem features",
+      "Employ machine learning or pattern recognition to mine deep problem structures and optimal solution patterns then use learned insights to intelligently bias towards promising search regions or constructive choices"
+    ],
+    "navigator_guidance": null
+  },
+  {
+    "generation": 2,
+    "timestamp": 1791214981.7133281,
+    "best_fitness": 5.97286,
+    "gap_percent": -9.61,
+    "objective_values": [
+      5.97286,
+      6.03277,
+      6.0628,
+      6.06709,
+      6.09777,
+      6.11115,
+      6.115,
+      6.11627
+    ],
+    "diversity": 1.0,
+    "elapsed_s": 222.3,
+    "current_insight_count": 23,
+    "top_insights": [
+      "Design adaptive hybrid meta-heuristics synergistically fusing multiple search paradigms and dynamically tune operator parameters based on search stage or problem features",
+      "Employ machine learning or pattern recognition to mine deep problem structures and optimal solution patterns then use learned insights to intelligently bias towards promising search regions or constructive choices"
+    ],
+    "navigator_guidance": null
+  },
+  {
+    "generation": 3,
+    "timestamp": 1791215068.842931,
+    "best_fitness": 5.97286,
+    "gap_percent": -9.61,
+    "objective_values": [
+      5.97286,
+      6.03277,
+      6.05459,
+      6.0628,
+      6.06709,
+      6.09777,
+      6.10489,
+      6.10909
+    ],
+    "diversity": 1.0,
+    "elapsed_s": 309.4,
+    "current_insight_count": 30,
+    "top_insights": [
+      "Employ machine learning or pattern recognition to mine deep problem structures and optimal solution patterns then use learned insights to intelligently bias towards promising search regions or constructive choices",
+      "Explore objective function engineering by introducing auxiliary or surrogate objectives or by dynamically adjusting weights to reshape the search landscape aiding escape from local optima or guiding diverse exploration"
+    ],
+    "navigator_guidance": null
+  },
+  {
+    "generation": 4,
+    "timestamp": 1791215158.85283,
+    "best_fitness": 5.94008,
+    "gap_percent": -10.1061,
+    "objective_values": [
+      5.94008,
+      5.97286,
+      6.02594,
+      6.02965,
+      6.03277,
+      6.05459,
+      6.0628,
+      6.06709
+    ],
+    "diversity": 1.0,
+    "elapsed_s": 399.5,
+    "current_insight_count": 30,
+    "top_insights": [
+      "Pre-filter expansive candidate spaces using adaptive, density-normalized spatial heuristics and structural bounds before performing deeper evaluations.",
+      "Evaluate candidate decisions by combining immediate transition costs, multi-branch lookahead rollouts, and dynamic lower-bound estimations of remaining subproblems."
+    ],
+    "navigator_guidance": null
+  },
+  {
+    "generation": 5,
+    "timestamp": 1791215236.73475,
+    "best_fitness": 5.94008,
+    "gap_percent": -10.1061,
+    "objective_values": [
+      5.94008,
+      5.97286,
+      6.00088,
+      6.02594,
+      6.02965,
+      6.03277,
+      6.05459,
+      6.0628
+    ],
+    "diversity": 1.0,
+    "elapsed_s": 477.3,
+    "current_insight_count": 30,
+    "top_insights": [
+      "Couple shallow multi-branch rollouts or lookahead searches with deterministic lower-bound estimations to evaluate immediate decisions against anticipated future trajectories.",
+      "Combine instance-level structural lower bounds (such as relaxation or spanning tree estimates) with multi-branch lookahead simulations to evaluate candidate partial solutions."
+    ],
+    "navigator_guidance": null
+  },
+  {
+    "generation": 6,
+    "timestamp": 1791215318.437471,
+    "best_fitness": 5.94008,
+    "gap_percent": -10.1061,
+    "objective_values": [
+      5.94008,
+      5.94785,
+      5.95354,
+      5.97286,
+      5.98091,
+      6.00088,
+      6.02197,
+      6.02594
+    ],
+    "diversity": 1.0,
+    "elapsed_s": 559.0,
+    "current_insight_count": 30,
+    "top_insights": [
+      "Normalize local action costs using structural instance statistics to filter promising candidates before performing computationally intensive evaluations.",
+      "Evaluate candidate decisions by combining immediate step costs, multi-branch lookahead rollouts, and dynamic global relaxation bounds."
+    ],
+    "navigator_guidance": null
+  },
+  {
+    "generation": 7,
+    "timestamp": 1791215417.138614,
+    "best_fitness": 5.86998,
+    "gap_percent": -11.167,
+    "objective_values": [
+      5.86998,
+      5.93352,
+      5.94008,
+      5.94785,
+      5.95354,
+      5.97286,
+      5.98091,
+      6.00005
+    ],
+    "diversity": 0.9642857142857143,
+    "elapsed_s": 657.7,
+    "current_insight_count": 30,
+    "top_insights": [
+      "Employ multi-stage candidate pruning to aggressively filter the search space using computationally cheap heuristics before applying expensive lookahead evaluations.",
+      "Integrate structural lower bounds with forward simulation (such as beam search or rollouts) to balance immediate transition costs against long-term remaining problem estimation."
+    ],
+    "navigator_guidance": null
+  },
+  {
+    "generation": 8,
+    "timestamp": 1791215518.3770618,
+    "best_fitness": 5.86998,
+    "gap_percent": -11.167,
+    "objective_values": [
+      5.86998,
+      5.93352,
+      5.93552,
+      5.94008,
+      5.94785,
+      5.95354,
+      5.9704,
+      5.97286
+    ],
+    "diversity": 0.9642857142857143,
+    "elapsed_s": 759.0,
+    "current_insight_count": 30,
+    "top_insights": [
+      "Use multi-stage candidate pruning based on cheap local heuristics before applying computationally intensive global lower bounds or lookahead evaluations.",
+      "Combine regret-guided beam lookahead with fast structural relaxations (such as spanning trees or Lagrangian bounds) to accurately estimate the long-term cost of sequential decisions."
+    ],
+    "navigator_guidance": null
+  }
+]

@@ -26,7 +26,7 @@ class InterfaceLLM:
         else:
             print('remote llm api is used ...')
 
-            if self.api_key == None or self.api_endpoint ==None or self.api_key == 'xxx' or self.api_endpoint == 'xxx':
+            if not self.api_key or not self.api_endpoint or self.api_key == 'xxx' or self.api_endpoint == 'xxx':
                 print(">> Stop with wrong API setting: Set api_endpoint (e.g., api.chat...) and api_key (e.g., kx-...) !")
                 exit()
 
@@ -42,6 +42,9 @@ class InterfaceLLM:
 
         if res == None:
             print(">> Error in LLM API, wrong endpoint, key, model or local deployment!")
+            detail = getattr(self.interface_llm, "last_error", None)
+            if detail:
+                print(f"   {detail}")
             exit()
 
         # choose LLMs
