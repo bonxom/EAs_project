@@ -1,0 +1,5 @@
+[tool.uv.workspace]
+members = ["MoH"]
+
+[dependency-groups]
+dev = ["pytest", "ruff"]
