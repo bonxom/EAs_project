@@ -53,6 +53,15 @@ limits execution (default 3600 seconds); loading validation is capped at 90
 seconds. `seed` controls population selection and generated optimizer RNGs
 (default 0); external LLM responses and the GLS wall-clock budget can still vary.
 
+TSP-GLS validation samples 8 unique instances from
+`problems/tsp_gls/data/val/val_instance_data_sol_<size>.pkl` using the run seed.
+Every candidate in a run is evaluated on the same selected indices. Test mode
+evaluates the first 128 instances from
+`problems/tsp_gls/data/test/test_instance_data_sol_<size>.pkl`. Both modes require
+enough instances and log the data file, seed and selected indices. Evaluation
+uses at most 8 workers. Scores from older runs that used test data for validation
+must be recomputed before reusing their populations with the new validation split.
+
 **Datas**: You can download them from [GoogleDrive](https://drive.google.com/file/d/1e4T8Yiz-qvHcChys2Tk841pbXumGVYu2/view?usp=sharing) and put data folder of each problem under `problems/<problem_name>`, the scripts to generate the data will also be updated in this repository soon.
 ## Configuration
 

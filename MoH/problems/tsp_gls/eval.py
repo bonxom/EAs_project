@@ -11,16 +11,15 @@ Changes vs original:
   - Keeps ProcessPoolExecutor parallelism for instance solving (original pattern)
 """
 
-import random
-import pickle
-import time
-import sys
-import os
-import numpy as np
 import concurrent.futures
+import os
+import sys
+import time
 from concurrent.futures import ProcessPoolExecutor
-import func_timeout
 
+import func_timeout
+import numpy as np
+from dataset_selection import load_eval_dataset
 from gls import *
 from gpt import update_edge_distance
 
@@ -116,19 +115,11 @@ if __name__ == "__main__":
     root_dir = sys.argv[2]
     mode = sys.argv[3]     
     timeout = int(sys.argv[4]) if len(sys.argv) > 4 else 90
-
-    if mode == "test": # for test only
-        n_tests = 10
-        random_numbers = random.sample(range(100), 5)
-    else:
-        n_tests = 8
-        random_numbers = [i for i in range(n_tests)]
-
-    file_name = os.path.join(root_dir, f"problems/tsp_gls/data/test/test_instance_data_sol_{problem_size}.pkl")
-    print(f"[*] mode={mode}, data={file_name}")
-
-    with open(file_name, 'rb') as f:
-        tsp_data = pickle.load(f)
+    seed = int(sys.argv[5]) if len(sys.argv) > 5 else 0
+    tsp_data, random_numbers, file_name = load_eval_dataset(root_dir, problem_size, mode, seed)
+    n_tests = len(random_numbers)
+    print(f"[*] mode={mode}, data={file_name}, seed={seed}, n_instances={n_tests}")
+    print(f"[*] instance_indices={random_numbers}")
 
     cost_list = tsp_data['cost']
     dist_list = tsp_data['distance_matrix']
@@ -138,21 +129,25 @@ if __name__ == "__main__":
     params_list = []
     for idx in range(n_tests):
         data_idx = random_numbers[idx]
-        params = (idx, dist_list[data_idx], coord_list[data_idx],
+        params = (data_idx, dist_list[data_idx], coord_list[data_idx],
                   cost_list[data_idx], opt_tour_list[data_idx], problem_size)
         params_list.append(params)
 
     # ← from version_iclr: ProcessPoolExecutor parallel solving — preserved
     results = [(1e6, 1e6)] * n_tests
-    with ProcessPoolExecutor(max_workers=n_tests) as executor:
+    # Test evaluates 128 instances in batches rather than spawning 128 workers.
+    with ProcessPoolExecutor(max_workers=min(n_tests, os.cpu_count() or 1, 8)) as executor:
         futures = {executor.submit(worker_with_timeout, params, timeout): params
                    for params in params_list}
         concurrent.futures.wait(futures.keys())
-        unfinished_tasks = [(1e6, 1e6) for future, params in futures.items()
-                            if not future.done() or future.result() is None]
-        completed_tasks = [future.result() for future in futures.keys()
-                           if future.done() and future.result() is not None]
-        results = completed_tasks + unfinished_tasks
+        results = []
+        for future, params in futures.items():
+            try:
+                result = future.result()
+            except Exception as error:  # noqa: BLE001 -- penalize a failed instance and continue
+                print(f"[*] instance {params[0]} failed: {error}")
+                result = None
+            results.append(result if result is not None else (1e6, 1e6))
 
     gap = [1e6] * n_tests
     obj = [1e6] * n_tests
@@ -160,7 +155,7 @@ if __name__ == "__main__":
         obj[i], gap[i] = res
 
     for i in range(n_tests):
-        print(f"[*] instance {i}: obj={obj[i]:.4f}, gap={gap[i]:.4f}")
+        print(f"[*] instance {random_numbers[i]}: obj={obj[i]:.4f}, gap={gap[i]:.4f}")
 
     ave_gap = sum(gap) / n_tests
     print(f"[*] ave_gap on size {problem_size}: {ave_gap}")

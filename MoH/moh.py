@@ -114,7 +114,8 @@ class MoH:
             f.write("\n# ===== Eval Output =====\n")
             f.flush()
             process = subprocess.Popen(
-                ['python', '-u', eval_path, str(problem_size), self.root_dir, mode, str(self.cfg.timeout)],
+                ['python', '-u', eval_path, str(problem_size), self.root_dir, mode,
+                 str(self.cfg.timeout), str(getattr(self.cfg, "seed", 0))],
                 stdout=f, stderr=f
             )
         return process
