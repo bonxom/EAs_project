@@ -1,6 +1,6 @@
 problem_name: tsp_gls
 obj_type: min
-problem_size: [100, 200]
+problem_size: [20, 50, 100, 200]
 threshold: 
   100: 4
   200: 5
