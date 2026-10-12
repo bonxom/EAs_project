@@ -1,8 +1,8 @@
 import unittest
-from types import SimpleNamespace
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 from moh import MoH
+from omegaconf import OmegaConf
 from utils.generated_improver import GeneratedImprover
 from utils.population import Pop
 
@@ -31,7 +31,14 @@ class ImproverValidationTests(unittest.TestCase):
         self.optimizer.meta_utility_val = 5.0
         self.optimizer._total_eval_calls = 0
         self.optimizer.meta_llm = FakeLLM()
-        self.optimizer.cfg = SimpleNamespace(optimizer_timeout=10, timeout=10)
+        self.optimizer.cfg = OmegaConf.create(
+            {
+                "optimizer_timeout": 10,
+                "timeout": 10,
+                "seed": 0,
+                "problem": {"problem_size": [100]},
+            }
+        )
         self.optimizer.meta_prompts = "prompt"
         self.optimizer.run_logger = Mock()
         self.previous = Mock()
@@ -135,16 +142,19 @@ def improve_algorithm(population, utility, language_model, function_format, task
         self.assertEqual(result, ("new", "def heuristic():\n    return 1", 0.5))
         self.assertEqual(self.optimizer._total_eval_calls, 1)
 
-    def test_outer_loop_continues_after_rejection(self):
+    @patch("moh.export_checkpoint")
+    def test_outer_loop_continues_after_rejection(self, export_checkpoint):
         self.optimizer.get_seed = Mock()
         self.optimizer.iteration = 2
         self.optimizer.max_eval_calls = None
+        self.optimizer.run_logger.output_dir = "/tmp/moh-test-run"
         self.optimizer.try_improvement = Mock(return_value=(False, None, self.previous))
         self.optimizer.run_meta_optimizer()
         self.assertEqual(self.optimizer.try_improvement.call_count, 2)
         initial_improver = self.optimizer.try_improvement.call_args_list[0].args[0]
         self.assertIs(self.optimizer.try_improvement.call_args.args[0], initial_improver)
         self.assertEqual(self.optimizer.run_logger.save_iteration.call_count, 2)
+        export_checkpoint.assert_called_once()
 
 
 if __name__ == "__main__":

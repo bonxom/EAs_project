@@ -4,10 +4,12 @@ import math
 import os
 import subprocess
 import traceback
+from pathlib import Path
 
 import numpy as np
 from omegaconf import DictConfig
 from tqdm import tqdm
+from utils.checkpoint import export_checkpoint, redacted_config
 from utils.generated_improver import GeneratedImprover
 from utils.llm_client.base import BaseClient
 from utils.population import Pop
@@ -505,3 +507,15 @@ class MoH:
                 break
 
         logger.info("Finish all iterations")
+        export_checkpoint(
+            Path(self.run_logger.output_dir) / "checkpoint",
+            self.improver_str,
+            self.subtask_pop,
+            {
+                "training_sizes": list(self.cfg.problem.problem_size),
+                "seed": getattr(self.cfg, "seed", 0),
+                "source_run": self.run_logger.output_dir,
+                "training_meta_utility": self.meta_utility_val,
+                "config": redacted_config(self.cfg),
+            },
+        )
