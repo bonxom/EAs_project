@@ -55,12 +55,35 @@ seconds. `seed` controls population selection and generated optimizer RNGs
 
 TSP-GLS validation samples 8 unique instances from
 `problems/tsp_gls/data/val/val_instance_data_sol_<size>.pkl` using the run seed.
-Every candidate in a run is evaluated on the same selected indices. Test mode
-evaluates the first 128 instances from
+Every candidate in a run is evaluated on the same selected indices. Deployment
+test mode evaluates the first 100 instances by default from
 `problems/tsp_gls/data/test/test_instance_data_sol_<size>.pkl`. Both modes require
 enough instances and log the data file, seed and selected indices. Evaluation
 uses at most 8 workers. Scores from older runs that used test data for validation
 must be recomputed before reusing their populations with the new validation split.
+
+### Deploy a learned optimizer
+
+Convert a completed training run to an immutable checkpoint, then deploy that
+checkpoint separately. These commands use `uv` from the repository root:
+
+```bash
+uv run --directory MoH python -m utils.checkpoint --run /absolute/training/run --output /absolute/new/checkpoint
+uv run --directory MoH python deploy.py checkpoint=/absolute/new/checkpoint 'target_sizes=[500]' inference_iterations=1 evaluate_test=false
+uv run --directory MoH python deploy.py checkpoint=/absolute/new/checkpoint 'target_sizes=[500,1000]' inference_iterations=10 test_n_instances=128
+```
+
+The last two commands call the configured external LLM and can incur provider
+cost. The 128-instance command fails preflight unless every requested target has
+at least 128 test instances; bundled TSP500/TSP1000 data currently has 100.
+Use validation-only mode for wiring checks that must not read test data.
+
+Checkpoint utilities are training provenance only. Deployment builds fresh
+target populations, scores every candidate on target validation, freezes the
+validation winner, and evaluates that frozen heuristic on test once. Test scores
+never feed back into generation, ranking, or selection. Generated code,
+population snapshots, evaluator stdout, selected heuristics, `report.json`, and
+`report.csv` are stored in the Hydra deployment output directory.
 
 **Datas**: You can download them from [GoogleDrive](https://drive.google.com/file/d/1e4T8Yiz-qvHcChys2Tk841pbXumGVYu2/view?usp=sharing) and put data folder of each problem under `problems/<problem_name>`, the scripts to generate the data will also be updated in this repository soon.
 ## Configuration

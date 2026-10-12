@@ -1,0 +1,26 @@
+defaults:
+  - llm_client@heu: local
+  - override hydra/output: local
+  - override hydra/job_logging: colorlog
+  - override hydra/hydra_logging: colorlog
+  - _self_
+checkpoint: null
+target_sizes: [500, 1000]
+inference_iterations: 10
+population_size: 10
+seed_count: 5
+initialization_attempts: 25
+reference_count: 2
+val_n_instances: 8
+test_n_instances: 100
+max_evaluations_per_target: 1000
+seed: 0
+optimizer_timeout: 3600
+instance_timeout: 90
+evaluation_timeout: null
+workers: 8
+evaluate_test: true
+hydra:
+  job:
+    name: moh-deployment
+    chdir: true
