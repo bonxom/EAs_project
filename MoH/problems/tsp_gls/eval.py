@@ -138,10 +138,7 @@ def solve(params):
                 cur_route, cur_cost = best_route, best_cost
 
         int_route = [int(node) for node in route2tour(best_route)]
-        gap = (best_cost / optimal_cost - 1) * 100
-        if not check_valid_route(int_route, problem_size):
-            gap = 1e6
-        return float(best_cost), float(max(gap, 0))
+        return validated_result(best_cost, optimal_cost, int_route, problem_size)
     except Exception:  # noqa: BLE001 -- candidate failure becomes a penalty
         return None
 
@@ -152,6 +149,13 @@ def worker_with_timeout(params, timeout):
     except func_timeout.FunctionTimedOut:
         print(f"Task {params[0]} timed out.")
         return None
+
+
+def validated_result(best_cost, optimal_cost, route, problem_size):
+    if not check_valid_route(route, problem_size):
+        return None
+    gap = (best_cost / optimal_cost - 1) * 100
+    return float(best_cost), float(max(gap, 0))
 
 
 def summarize_results(results):

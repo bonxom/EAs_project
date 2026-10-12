@@ -127,6 +127,35 @@ def test_solver_exception_returns_failed_marker(monkeypatch):
     assert eval_module.solve(params) is None
 
 
+def test_invalid_route_is_counted_as_failed_instance(monkeypatch):
+    from problems.tsp_gls import eval as eval_module
+
+    monkeypatch.setattr(eval_module, "check_valid_route", lambda route, size: False)
+    result = eval_module.summarize_results(
+        [eval_module.validated_result(10.0, 8.0, [0, 0], 2)]
+    )
+    assert result["failures"] == 1
+    assert result["mean_gap_pct"] == 1e6
+
+
+def test_randomized_heuristic_is_rejected_before_subprocess(tmp_path):
+    from utils.heuristic_evaluator import HeuristicEvaluator
+
+    root = _root(tmp_path)
+    randomized = (
+        "import random\n"
+        "def update_edge_distance(edge_distance, local_opt_tour, edge_n_used):\n"
+        "    return edge_distance * random.random()\n"
+    )
+    result = HeuristicEvaluator(root, tmp_path / "out").evaluate(
+        randomized, 500, "val"
+    )
+    assert result.status == "failed"
+    assert result.mean_gap_pct is None
+    assert "deterministic" in result.error
+    assert not (Path(result.stdout_path).parent / "result.json").exists()
+
+
 def test_failed_evaluator_does_not_return_success_score(tmp_path):
     from utils.heuristic_evaluator import HeuristicEvaluator
 

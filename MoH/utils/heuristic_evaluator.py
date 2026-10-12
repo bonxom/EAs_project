@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ast
 import hashlib
 import json
 import math
@@ -42,6 +43,33 @@ def _sha256_file(path: Path) -> str:
         for chunk in iter(lambda: source.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def _attribute_path(node) -> tuple[str, ...]:
+    parts = []
+    while isinstance(node, ast.Attribute):
+        parts.append(node.attr)
+        node = node.value
+    if isinstance(node, ast.Name):
+        parts.append(node.id)
+    return tuple(reversed(parts))
+
+
+def _validate_deterministic_source(code: str, filename: str) -> None:
+    tree = ast.parse(code, filename=filename)
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.Import, ast.ImportFrom)):
+            names = (
+                [alias.name for alias in node.names]
+                if isinstance(node, ast.Import)
+                else [node.module or ""]
+            )
+            if any(name.split(".")[0] in {"random", "secrets"} for name in names):
+                raise ValueError("Heuristic must be deterministic; random APIs are forbidden")
+        if isinstance(node, ast.Attribute):
+            path = _attribute_path(node)
+            if "random" in path or (path and path[0] == "secrets"):
+                raise ValueError("Heuristic must be deterministic; random APIs are forbidden")
 
 
 class HeuristicEvaluator:
@@ -162,7 +190,7 @@ class HeuristicEvaluator:
         stdout_path = run_dir / "stdout.txt"
         code_path.write_bytes(code_bytes)
         try:
-            compile(code, str(code_path), "exec")
+            _validate_deterministic_source(code, str(code_path))
             manifest = self.preflight([size], include_test=mode == "test")[size][mode]
         except (OSError, ValueError, SyntaxError, TypeError) as error:
             stdout_path.write_text(str(error), encoding="utf-8")

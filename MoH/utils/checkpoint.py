@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import ast
 import csv
 import hashlib
 import json
@@ -22,6 +23,11 @@ from utils.population import Pop
 SCHEMA_VERSION = 1
 _SECRET_MARKERS = ("api_key", "token", "secret", "password")
 _ITERATION_RE = re.compile(r"^iter_(\d+)\.json$")
+_VALIDATION_HEADER_RE = re.compile(
+    r"\[\*\] mode=val, data=(.+?), seed=(-?\d+), n_instances=(\d+)"
+)
+_INDICES_RE = re.compile(r"\[\*\] instance_indices=(\[[^\n]*\])")
+_DATASET_SIZE_RE = re.compile(r"val_instance_data_sol_(\d+)\.pkl$")
 
 
 @dataclass(frozen=True)
@@ -121,7 +127,12 @@ def _safe_relative_path(root: Path, raw_path: Any) -> Path:
 def _validation_provenance(metadata: dict, training_sizes: list[int]) -> dict:
     supplied = metadata.get("validation_provenance")
     if not isinstance(supplied, dict):
-        return {str(size): {"status": "unknown"} for size in training_sizes}
+        source_run = metadata.get("source_run")
+        supplied = (
+            _recover_validation_provenance(Path(source_run), training_sizes)
+            if source_run
+            else {}
+        )
     result = {}
     for size in training_sizes:
         entry = supplied.get(str(size), supplied.get(size, {"status": "unknown"}))
@@ -133,6 +144,59 @@ def _validation_provenance(metadata: dict, training_sizes: list[int]) -> dict:
                 entry["dataset_sha256"] = _sha256_file(path)
         result[str(size)] = entry
     return result
+
+
+def _recover_validation_provenance(run_dir: Path, training_sizes: list[int]) -> dict:
+    recovered = {}
+    logs_dir = run_dir / "logs"
+    for path in sorted(logs_dir.glob("*_val.txt")):
+        try:
+            text = path.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        header = _VALIDATION_HEADER_RE.search(text)
+        indices_match = _INDICES_RE.search(text)
+        if not header or not indices_match:
+            continue
+        dataset_path = Path(header.group(1))
+        size_match = _DATASET_SIZE_RE.search(dataset_path.name)
+        if not size_match:
+            continue
+        size = int(size_match.group(1))
+        if size not in training_sizes:
+            continue
+        try:
+            indices = ast.literal_eval(indices_match.group(1))
+        except (SyntaxError, ValueError):
+            continue
+        if not isinstance(indices, list) or not all(
+            isinstance(index, int) for index in indices
+        ):
+            continue
+        entry = {
+            "status": "known",
+            "dataset_path": str(dataset_path),
+            "seed": int(header.group(2)),
+            "n_instances": int(header.group(3)),
+            "indices": indices,
+        }
+        if dataset_path.is_file():
+            entry["dataset_sha256"] = _sha256_file(dataset_path)
+        recovered[str(size)] = entry
+    return recovered
+
+
+def _recover_run_config(run_dir: Path) -> tuple[dict, int]:
+    config_path = run_dir / ".hydra" / "config.yaml"
+    if not config_path.is_file():
+        return {}, 0
+    try:
+        cfg = OmegaConf.load(config_path)
+        config = redacted_config(cfg)
+        seed = int(config.get("seed", 0))
+    except (OSError, TypeError, ValueError, OmegaConfBaseException) as error:
+        raise ValueError("Legacy Hydra configuration is malformed") from error
+    return config, seed
 
 
 def export_checkpoint(
@@ -207,6 +271,7 @@ def export_checkpoint(
             "training_sizes": training_sizes,
             "seed": int(metadata.get("seed", 0)),
             "source_run": metadata.get("source_run"),
+            "config": metadata.get("config", {}),
             "validation_provenance": _validation_provenance(
                 metadata, training_sizes
             ),
@@ -358,6 +423,7 @@ def export_run_checkpoint(
     source_run = Path(run_dir)
     completed_iteration, snapshot_path = _latest_subtask_snapshot(source_run)
     code = _legacy_optimizer_code(source_run, completed_iteration)
+    config, seed = _recover_run_config(source_run)
     try:
         snapshot = json.loads(snapshot_path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as error:
@@ -385,10 +451,12 @@ def export_run_checkpoint(
         population,
         {
             "training_sizes": sorted(sizes),
+            "seed": seed,
+            "config": config,
             "source_run": str(source_run.resolve()),
-            "validation_provenance": {
-                str(size): {"status": "unknown"} for size in sizes
-            },
+            "validation_provenance": _recover_validation_provenance(
+                source_run, sizes
+            ),
         },
         elite_count=elite_count,
     )

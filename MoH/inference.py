@@ -72,6 +72,7 @@ def initialize_target_population(
         f"{heuristic_format}"
     )
     attempts = 0
+    budget_error = None
     for attempt in range(max_attempts):
         attempts = attempt + 1
         try:
@@ -95,8 +96,9 @@ def initialize_target_population(
             population.save_solution(task, idea, code, result.mean_gap_pct)
             if population.get_subtask_size(task) >= seed_count:
                 break
-        except _BudgetExhausted:
-            raise
+        except _BudgetExhausted as error:
+            budget_error = error
+            break
         except Exception as error:  # noqa: BLE001 -- candidate isolation boundary
             logger.warning("Target %s seed attempt %s failed: %s", size, attempt, error)
             continue
@@ -108,7 +110,13 @@ def initialize_target_population(
         "attempts": attempts,
         "partial": 0 < accepted < seed_count,
     }
+    if budget_error is not None:
+        population.initialization["early_stop_reason"] = (
+            "evaluation_budget_exhausted"
+        )
     if accepted == 0:
+        if budget_error is not None:
+            raise budget_error
         raise TargetInitializationError(
             f"Target {size} has no valid seed after {max_attempts} attempts"
         )
@@ -232,6 +240,7 @@ class InferenceRunner:
             )
         except _BudgetExhausted as error:
             raise TargetInitializationError(str(error)) from error
+        early_stop_reason = population.initialization.get("early_stop_reason")
 
         reference_llm = EliteReferenceLLM(
             self.llm,
@@ -278,6 +287,8 @@ class InferenceRunner:
             snapshot_paths.append(str(path))
 
         for iteration in range(self.iterations):
+            if early_stop_reason:
+                break
             child_seed = int.from_bytes(
                 hashlib.sha256(
                     f"{self.seed}:{size}:{iteration}".encode()

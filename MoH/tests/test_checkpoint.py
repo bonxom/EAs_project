@@ -185,6 +185,36 @@ def test_no_accepted_iteration_exports_seed(tmp_path):
     assert load_checkpoint(checkpoint_dir).code == OPTIMIZER
 
 
+def test_legacy_conversion_recovers_seed_config_and_validation_provenance(tmp_path):
+    from utils.checkpoint import export_run_checkpoint
+
+    run_dir = tmp_path / "run"
+    _write_legacy_run(run_dir, [(0, 2.0, False, "now")], sizes=(20,))
+    hydra_dir = run_dir / ".hydra"
+    hydra_dir.mkdir()
+    (hydra_dir / "config.yaml").write_text(
+        "seed: 73\nproblem:\n  problem_size: [20]\napi_key: hidden\n"
+    )
+    dataset = tmp_path / "val_instance_data_sol_20.pkl"
+    dataset.write_bytes(b"fixture dataset")
+    (run_dir / "logs" / "eval_iter0_s0_e1_val.txt").write_text(
+        f"[*] mode=val, data={dataset}, seed=73, n_instances=3\n"
+        "[*] instance_indices=[5, 2, 9]\n"
+    )
+    destination = export_run_checkpoint(run_dir, tmp_path / "checkpoint")
+    metadata_text = (destination / "metadata.json").read_text()
+    metadata = json.loads(metadata_text)
+    provenance = metadata["validation_provenance"]["20"]
+    assert metadata["seed"] == 73
+    assert metadata["config"]["seed"] == 73
+    assert "hidden" not in metadata_text
+    assert provenance["status"] == "known"
+    assert provenance["indices"] == [5, 2, 9]
+    assert provenance["dataset_sha256"] == hashlib.sha256(
+        dataset.read_bytes()
+    ).hexdigest()
+
+
 def test_checkpoint_records_optimizer_digest(tmp_path):
     from utils.checkpoint import export_checkpoint
 

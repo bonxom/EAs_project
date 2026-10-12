@@ -287,6 +287,27 @@ def test_budget_includes_initialization_and_never_overshoots(tmp_path):
     assert selected.metadata["early_stop_reason"] == "evaluation_budget_exhausted"
 
 
+def test_initialization_budget_exhaustion_keeps_valid_partial_population(tmp_path):
+    from inference import InferenceRunner
+
+    evaluator = FakeEvaluator({HEURISTIC: 4.0, BETTER: 1.0})
+    selected = InferenceRunner(
+        _checkpoint(),
+        FakeLLM([HEURISTIC, BETTER]),
+        evaluator,
+        tmp_path,
+        HEURISTIC,
+        iterations=3,
+        seed_count=5,
+        initialization_attempts=2,
+        max_evaluations=1,
+    ).run_target(500)
+    assert selected.code == HEURISTIC
+    assert len(evaluator.calls) == 1
+    assert selected.metadata["initialization"]["accepted"] == 1
+    assert selected.metadata["early_stop_reason"] == "evaluation_budget_exhausted"
+
+
 def test_iteration_seeds_are_stable_and_distinct(tmp_path):
     from inference import InferenceRunner
 
