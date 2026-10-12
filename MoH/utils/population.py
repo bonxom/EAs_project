@@ -2,10 +2,10 @@
 Population management with heap-based size limiting.
 """
 
-import json
 import heapq
-import os
+import json
 import logging
+import os
 
 import numpy as np
 
@@ -15,8 +15,9 @@ logger = logging.getLogger(__name__)
 
 
 class Pop:
-    def __init__(self, name_list, size):
+    def __init__(self, name_list, size, allow_equal_utility=False):
         self.size = size
+        self.allow_equal_utility = allow_equal_utility
         self.__population = {}
         for name in name_list:
             self.__population[name] = []
@@ -32,11 +33,11 @@ class Pop:
             logger.debug(f"Solution already exists in population for task {task_name}.")
             return False
         if solution is None or "def " not in solution or "return " not in solution:
-            logger.debug(f"Solution is not valid code.")
+            logger.debug("Solution is not valid code.")
             return False
 
         # For non-meta tasks: replace if same utility but shorter
-        if task_name != "meta-optimizer":
+        if task_name != "meta-optimizer" and not self.allow_equal_utility:
             for entry in self.__population[task_name]:
                 if entry["utility"] == utility:
                     if len(solution) < len(entry["best_sol"]):

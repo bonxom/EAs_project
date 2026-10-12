@@ -1,3 +1,6 @@
+import hashlib
+
+from utils.heuristic_evaluator import EvalResult
 from utils.population import Pop
 
 HEURISTIC = (
@@ -33,6 +36,59 @@ class FakeLLM:
         return [
             self.prompt(expertise, message, temperature) for message in message_batch
         ]
+
+
+class FakeEvaluator:
+    def __init__(self, scores=None, failed_codes=()):
+        self.scores = scores or {}
+        self.failed_codes = set(failed_codes)
+        self.calls = []
+        self.seed, self.val_count, self.test_count = 0, 8, 100
+        self.solver_settings = {
+            "workers": 8,
+            "instance_timeout": 90,
+            "time_limit": 20,
+            "iteration_limit": 1000,
+            "perturbation_moves": 1,
+        }
+
+    def preflight(self, sizes, include_test):
+        modes = ("val", "test") if include_test else ("val",)
+        return {
+            size: {
+                mode: {
+                    "dataset_path": f"fake/{mode}/{size}",
+                    "dataset_sha256": hashlib.sha256(
+                        f"{mode}:{size}".encode()
+                    ).hexdigest(),
+                    "indices": tuple(
+                        range(
+                            self.val_count if mode == "val" else self.test_count
+                        )
+                    ),
+                }
+                for mode in modes
+            }
+            for size in sizes
+        }
+
+    def evaluate(self, code, size, mode):
+        self.calls.append((code, size, mode))
+        failed = code in self.failed_codes
+        manifest = self.preflight([size], include_test=True)[size][mode]
+        return EvalResult(
+            size=size,
+            mode=mode,
+            mean_gap_pct=None if failed else self.scores.get(code, 1.0),
+            status="failed" if failed else "ok",
+            failures=0,
+            indices=manifest["indices"],
+            code_sha256=hashlib.sha256(code.encode()).hexdigest(),
+            dataset_sha256=manifest["dataset_sha256"],
+            elapsed_seconds=0.0,
+            stdout_path="fake",
+            error="fake failure" if failed else None,
+        )
 
 
 def training_population(sizes=(20, 50, 100, 200)):
