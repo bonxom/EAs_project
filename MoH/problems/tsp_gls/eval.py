@@ -1,104 +1,151 @@
-"""
-Task-level heuristic evaluation for TSP-GLS.
+"""Subprocess entrypoint for isolated TSP-GLS heuristic evaluation."""
 
-← from version_iclr/tasks/gls/secret_utility.py
-← restructured to ReEvo subprocess style (reevo/problems/tsp_gls/eval.py)
+from __future__ import annotations
 
-Changes vs original:
-  - No exec(): imports update_edge_distance from gpt.py via normal import
-  - No global state: no config, no population, no utility_call_counter
-  - Subprocess interface: receives params via sys.argv, prints result to stdout
-  - Keeps ProcessPoolExecutor parallelism for instance solving (original pattern)
-"""
-
+import argparse
 import concurrent.futures
+import hashlib
+import importlib.util
+import json
 import os
-import sys
 import time
 from concurrent.futures import ProcessPoolExecutor
+from pathlib import Path
 
 import func_timeout
 import numpy as np
-from dataset_selection import load_eval_dataset
-from gls import *
-from gpt import update_edge_distance
+
+try:
+    from .dataset_selection import load_eval_dataset
+    from .gls import (
+        check_valid_route,
+        local_search,
+        nearest_neighbor_2End,
+        relocate_o2a_all,
+        route2tour,
+        tour_cost_2End,
+        two_opt_o2a_all,
+    )
+except ImportError:  # Executed as a script by the evaluator parent.
+    from dataset_selection import load_eval_dataset
+    from gls import (
+        check_valid_route,
+        local_search,
+        nearest_neighbor_2End,
+        relocate_o2a_all,
+        route2tour,
+        tour_cost_2End,
+        two_opt_o2a_all,
+    )
+
+
+ITERATION_LIMIT = 1000
+PERTURBATION_MOVES = 1
+TIME_LIMIT = 20
+_UPDATE_EDGE_DISTANCE = None
+
+
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as source:
+        for chunk in iter(lambda: source.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _initialize_heuristic(path: str) -> None:
+    """Load generated code only inside an instance worker process."""
+    global _UPDATE_EDGE_DISTANCE
+    heuristic_path = Path(path)
+    module_name = f"deployment_heuristic_{os.getpid()}"
+    spec = importlib.util.spec_from_file_location(module_name, heuristic_path)
+    if spec is None or spec.loader is None:
+        raise ImportError(f"Cannot load heuristic from {heuristic_path}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    function = getattr(module, "update_edge_distance", None)
+    if not callable(function):
+        raise TypeError("Heuristic must define callable update_edge_distance")
+    _UPDATE_EDGE_DISTANCE = function
 
 
 def solve(params):
     idx, dis_matrix, coord, optimal_cost, opt_tour, problem_size = params
-    ite_max = 1000
-    perturbation_moves = 1
-    time_limit = 20
+    del idx, coord, opt_tour
     try:
+        if _UPDATE_EDGE_DISTANCE is None:
+            raise RuntimeError("Heuristic worker was not initialized")
         init_tour = nearest_neighbor_2End(dis_matrix, 0).astype(int)
         init_cost = tour_cost_2End(dis_matrix, init_tour)
-        nb = 100
-        nearest_indices = np.argsort(dis_matrix, axis=1)[:, 1:nb+1].astype(int)
+        nearest_indices = np.argsort(dis_matrix, axis=1)[:, 1:101].astype(int)
 
         edge_weight = dis_matrix
-        cur_route, cur_cost = local_search(init_tour, init_cost, edge_weight, nearest_indices, first_improvement=False)
+        cur_route, cur_cost = local_search(
+            init_tour,
+            init_cost,
+            edge_weight,
+            nearest_indices,
+            first_improvement=False,
+        )
         best_route, best_cost = cur_route, cur_cost
-
         length = len(dis_matrix[0])
-        n_pert = min(int(length / 10), 20)
-        iter_i = 0
         edge_penalty = np.zeros((length, length))
-        t = time.time()
+        started = time.time()
 
-        while iter_i < ite_max and time.time() < (time_limit + t):
-            for move in range(perturbation_moves):
-                cur_tour, best_tour = route2tour(cur_route), route2tour(best_route)
-
-                # ← this calls the function imported from gpt.py
-                edge_weight_guided = update_edge_distance(edge_weight, np.array(cur_tour), edge_penalty)
+        for iteration in range(ITERATION_LIMIT):
+            if time.time() >= TIME_LIMIT + started:
+                break
+            for _move in range(PERTURBATION_MOVES):
+                cur_tour = route2tour(cur_route)
+                edge_weight_guided = _UPDATE_EDGE_DISTANCE(
+                    edge_weight, np.array(cur_tour), edge_penalty
+                )
                 edge_weight_guided = np.asmatrix(edge_weight_guided)
                 edge_weight_gap = edge_weight_guided - edge_weight
 
-                for topid in range(5):
-                    max_indices = np.argmin(-edge_weight_gap, axis=None)
-                    rows, columns = np.unravel_index(max_indices, edge_weight_gap.shape)
-
-                    edge_penalty[rows, columns] += 1
-                    edge_penalty[columns, rows] += 1
-
-                    edge_weight_gap[rows, columns] = 0
-                    edge_weight_gap[columns, rows] = 0
-
-                    for id in [rows, columns]:
-                        delta, new_route = two_opt_o2a_all(cur_route, edge_weight_guided, nearest_indices, id)
+                for _top_id in range(5):
+                    max_index = np.argmin(-edge_weight_gap, axis=None)
+                    row, column = np.unravel_index(max_index, edge_weight_gap.shape)
+                    edge_penalty[row, column] += 1
+                    edge_penalty[column, row] += 1
+                    edge_weight_gap[row, column] = 0
+                    edge_weight_gap[column, row] = 0
+                    for node_id in (row, column):
+                        delta, new_route = two_opt_o2a_all(
+                            cur_route, edge_weight_guided, nearest_indices, node_id
+                        )
                         if delta < 0:
                             cur_cost = tour_cost_2End(edge_weight, new_route)
                             cur_route = new_route
-                        delta, new_route = relocate_o2a_all(cur_route, edge_weight_guided, nearest_indices, id)
+                        delta, new_route = relocate_o2a_all(
+                            cur_route, edge_weight_guided, nearest_indices, node_id
+                        )
                         if delta < 0:
                             cur_cost = tour_cost_2End(edge_weight, new_route)
                             cur_route = new_route
 
-            cur_route, cur_cost = local_search(cur_route, cur_cost, edge_weight, nearest_indices, first_improvement=False)
+            cur_route, cur_cost = local_search(
+                cur_route,
+                cur_cost,
+                edge_weight,
+                nearest_indices,
+                first_improvement=False,
+            )
             cur_cost = tour_cost_2End(edge_weight, cur_route)
-
             if cur_cost < best_cost:
                 best_route, best_cost = cur_route, cur_cost
-
-            iter_i += 1
-
-            if iter_i % 50 == 0:
+            if iteration % 50 == 49:
                 cur_route, cur_cost = best_route, best_cost
 
-        int_route = [int(i) for i in route2tour(best_route)]
+        int_route = [int(node) for node in route2tour(best_route)]
         gap = (best_cost / optimal_cost - 1) * 100
-        if check_valid_route(int_route, problem_size) == False:
+        if not check_valid_route(int_route, problem_size):
             gap = 1e6
-        if gap < 0:
-            gap = 0
-        return best_cost, gap
-    except Exception as e:
-        dis = 1e6
-        gap = (dis - optimal_cost) / optimal_cost
-        return dis, gap
+        return float(best_cost), float(max(gap, 0))
+    except Exception:  # noqa: BLE001 -- candidate failure becomes a penalty
+        return None
 
 
-# ← from version_iclr/tasks/gls/secret_utility.py: worker_with_timeout() — preserved
 def worker_with_timeout(params, timeout):
     try:
         return func_timeout.func_timeout(timeout, solve, args=(params,))
@@ -107,58 +154,133 @@ def worker_with_timeout(params, timeout):
         return None
 
 
+def summarize_results(results):
+    instances = []
+    failures = 0
+    for result in results:
+        if result is None:
+            objective, gap = 1e6, 1e6
+            status = "failed"
+            failures += 1
+        else:
+            objective, gap = result
+            if not np.isfinite(objective) or not np.isfinite(gap):
+                objective, gap = 1e6, 1e6
+                status = "failed"
+                failures += 1
+            else:
+                objective, gap = float(objective), float(gap)
+                status = "ok"
+        instances.append(
+            {"objective": objective, "gap_pct": gap, "status": status}
+        )
+    return {
+        "mean_gap_pct": sum(item["gap_pct"] for item in instances) / len(instances),
+        "failures": failures,
+        "instances": instances,
+    }
 
-if __name__ == "__main__":
+
+def _parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("problem_size", type=int)
+    parser.add_argument("root_dir", type=Path)
+    parser.add_argument("mode", choices=("val", "test"))
+    parser.add_argument("timeout", type=int, nargs="?", default=90)
+    parser.add_argument("seed", type=int, nargs="?", default=0)
+    parser.add_argument("--count", type=int)
+    parser.add_argument("--heuristic-path", type=Path)
+    parser.add_argument("--result-path", type=Path)
+    parser.add_argument("--workers", type=int, default=8)
+    return parser
+
+
+def main(argv=None) -> int:
+    args = _parser().parse_args(argv)
+    started = time.monotonic()
+    heuristic_path = args.heuristic_path or Path(__file__).with_name("gpt.py")
+    tsp_data, indices, dataset_path = load_eval_dataset(
+        args.root_dir,
+        args.problem_size,
+        args.mode,
+        args.seed,
+        args.count,
+    )
+    count = len(indices)
+    workers = min(max(args.workers, 1), count, os.cpu_count() or 1, 8)
     print("[*] Running ...")
+    print(
+        f"[*] mode={args.mode}, data={dataset_path}, seed={args.seed}, "
+        f"n_instances={count}"
+    )
+    print(f"[*] instance_indices={indices}")
 
-    problem_size = int(sys.argv[1])
-    root_dir = sys.argv[2]
-    mode = sys.argv[3]     
-    timeout = int(sys.argv[4]) if len(sys.argv) > 4 else 90
-    seed = int(sys.argv[5]) if len(sys.argv) > 5 else 0
-    tsp_data, random_numbers, file_name = load_eval_dataset(root_dir, problem_size, mode, seed)
-    n_tests = len(random_numbers)
-    print(f"[*] mode={mode}, data={file_name}, seed={seed}, n_instances={n_tests}")
-    print(f"[*] instance_indices={random_numbers}")
-
-    cost_list = tsp_data['cost']
-    dist_list = tsp_data['distance_matrix']
-    coord_list = tsp_data['coordinate']
-    opt_tour_list = tsp_data['optimal_tour']
-
-    params_list = []
-    for idx in range(n_tests):
-        data_idx = random_numbers[idx]
-        params = (data_idx, dist_list[data_idx], coord_list[data_idx],
-                  cost_list[data_idx], opt_tour_list[data_idx], problem_size)
-        params_list.append(params)
-
-    # ← from version_iclr: ProcessPoolExecutor parallel solving — preserved
-    results = [(1e6, 1e6)] * n_tests
-    # Test evaluates 128 instances in batches rather than spawning 128 workers.
-    with ProcessPoolExecutor(max_workers=min(n_tests, os.cpu_count() or 1, 8)) as executor:
-        futures = {executor.submit(worker_with_timeout, params, timeout): params
-                   for params in params_list}
-        concurrent.futures.wait(futures.keys())
+    params_list = [
+        (
+            data_index,
+            tsp_data["distance_matrix"][data_index],
+            tsp_data["coordinate"][data_index],
+            tsp_data["cost"][data_index],
+            tsp_data["optimal_tour"][data_index],
+            args.problem_size,
+        )
+        for data_index in indices
+    ]
+    with ProcessPoolExecutor(
+        max_workers=workers,
+        initializer=_initialize_heuristic,
+        initargs=(str(heuristic_path),),
+    ) as executor:
+        futures = {
+            executor.submit(worker_with_timeout, params, args.timeout): params
+            for params in params_list
+        }
+        concurrent.futures.wait(futures)
         results = []
         for future, params in futures.items():
             try:
                 result = future.result()
-            except Exception as error:  # noqa: BLE001 -- penalize a failed instance and continue
+            except Exception as error:  # noqa: BLE001 -- one candidate instance may fail
                 print(f"[*] instance {params[0]} failed: {error}")
                 result = None
-            results.append(result if result is not None else (1e6, 1e6))
+            results.append(result)
 
-    gap = [1e6] * n_tests
-    obj = [1e6] * n_tests
-    for i, res in enumerate(results):
-        obj[i], gap[i] = res
+    summary = summarize_results(results)
+    for index, instance in zip(indices, summary["instances"], strict=True):
+        print(
+            f"[*] instance {index}: obj={instance['objective']:.4f}, "
+            f"gap={instance['gap_pct']:.4f}"
+        )
+    elapsed = time.monotonic() - started
+    payload = {
+        "size": args.problem_size,
+        "mode": args.mode,
+        "mean_gap_pct": summary["mean_gap_pct"],
+        "status": "ok",
+        "failures": summary["failures"],
+        "indices": indices,
+        "code_sha256": _sha256_file(heuristic_path),
+        "dataset_sha256": _sha256_file(dataset_path),
+        "elapsed_seconds": elapsed,
+        "seed": args.seed,
+        "count": count,
+        "solver_settings": {
+            "workers": workers,
+            "instance_timeout": args.timeout,
+            "time_limit": TIME_LIMIT,
+            "iteration_limit": ITERATION_LIMIT,
+            "perturbation_moves": PERTURBATION_MOVES,
+        },
+        "instances": summary["instances"],
+    }
+    if args.result_path:
+        args.result_path.write_text(
+            json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+        )
+    print(f"[*] ave_gap on size {args.problem_size}: {summary['mean_gap_pct']}")
+    print(summary["mean_gap_pct"])
+    return 0
 
-    for i in range(n_tests):
-        print(f"[*] instance {random_numbers[i]}: obj={obj[i]:.4f}, gap={gap[i]:.4f}")
 
-    ave_gap = sum(gap) / n_tests
-    print(f"[*] ave_gap on size {problem_size}: {ave_gap}")
-
-    # ← ReEvo style: last line is the result, parent process reads this
-    print(ave_gap)
+if __name__ == "__main__":
+    raise SystemExit(main())
