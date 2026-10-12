@@ -62,28 +62,95 @@ enough instances and log the data file, seed and selected indices. Evaluation
 uses at most 8 workers. Scores from older runs that used test data for validation
 must be recomputed before reusing their populations with the new validation split.
 
-### Deploy a learned optimizer
+### Triển khai optimizer đã học
 
-Convert a completed training run to an immutable checkpoint, then deploy that
-checkpoint separately. These commands use `uv` from the repository root:
+Chạy các lệnh sau từ thư mục `MoH`. Khi virtual environment của dự án đã được
+kích hoạt, bắt đầu một training run dùng LLM local bằng lệnh:
 
 ```bash
-uv run --directory MoH python -m utils.checkpoint --run /absolute/training/run --output /absolute/new/checkpoint
-uv run --directory MoH python deploy.py checkpoint=/absolute/new/checkpoint 'target_sizes=[500]' inference_iterations=1 evaluate_test=false
-uv run --directory MoH python deploy.py checkpoint=/absolute/new/checkpoint 'target_sizes=[500,1000]' inference_iterations=10 test_n_instances=128
+export LOCAL_LLM_API_KEY="your-key"
+python main.py llm_client@heu=local llm_client@meta=local
 ```
 
-The last two commands call the configured external LLM and can incur provider
-cost. The 128-instance command fails preflight unless every requested target has
-at least 128 test instances; bundled TSP500/TSP1000 data currently has 100.
-Use validation-only mode for wiring checks that must not read test data.
+Log sẽ in ra đường dẫn tuyệt đối của Hydra `Workspace`. Lưu lại đường dẫn này
+sau khi training hoàn tất. Các training run mới tự động tạo một checkpoint bất
+biến bên trong workspace:
 
-Checkpoint utilities are training provenance only. Deployment builds fresh
-target populations, scores every candidate on target validation, freezes the
-validation winner, and evaluates that frozen heuristic on test once. Test scores
-never feed back into generation, ranking, or selection. Generated code,
-population snapshots, evaluator stdout, selected heuristics, `report.json`, and
-`report.csv` are stored in the Hydra deployment output directory.
+```bash
+TRAIN_RUN="/absolute/path/printed/as/Workspace"
+CHECKPOINT="$TRAIN_RUN/checkpoint"
+test -f "$CHECKPOINT/metadata.json"
+```
+
+Nếu training run cũ đã hoàn tất nhưng chưa có thư mục `checkpoint/`, chuyển đổi
+các artifact đã lưu bằng lệnh dưới đây. Thư mục output không được tồn tại trước:
+
+```bash
+python -m utils.checkpoint \
+  --run "$TRAIN_RUN" \
+  --output "$PWD/checkpoints/training-run-1"
+CHECKPOINT="$PWD/checkpoints/training-run-1"
+```
+
+Trước tiên, chạy một deployment nhỏ chỉ dùng validation trên TSP500. Bước này
+kiểm tra checkpoint, dữ liệu target, optimizer đã sinh, kết nối LLM và evaluator
+cô lập mà không đọc test split:
+
+```bash
+RUN_TAG="$(date +%Y%m%d_%H%M%S)"
+SMOKE_RUN="$PWD/outputs/deployment/tsp500-smoke-$RUN_TAG"
+
+python deploy.py \
+  checkpoint="$CHECKPOINT" \
+  'target_sizes=[500]' \
+  inference_iterations=1 \
+  evaluate_test=false \
+  seed=0 \
+  "hydra.run.dir=$SMOKE_RUN"
+```
+
+Sau đó, triển khai optimizer đã học độc lập trên TSP500 và TSP1000, rồi đánh giá
+heuristic được chọn của từng target trên test split:
+
+```bash
+DEPLOY_RUN="$PWD/outputs/deployment/tsp500-1000-$RUN_TAG"
+
+python deploy.py \
+  checkpoint="$CHECKPOINT" \
+  'target_sizes=[500,1000]' \
+  inference_iterations=10 \
+  val_n_instances=8 \
+  test_n_instances=100 \
+  workers=8 \
+  seed=0 \
+  "hydra.run.dir=$DEPLOY_RUN"
+```
+
+Deployment mặc định dùng `llm_client@heu=local`. Để dùng OpenAI, đặt biến môi
+trường `OPENAI_API_KEY` và thêm `llm_client@heu=openai` vào lệnh deployment.
+Cả hai lệnh deployment đều gọi LLM đã cấu hình và có thể phát sinh chi phí từ
+provider. Bộ dữ liệu TSP500/TSP1000 đi kèm hiện có 100 test instances, vì vậy
+giá trị `test_n_instances` lớn hơn 100 sẽ bị preflight từ chối trước khi gọi LLM.
+
+Checkpoint chỉ lưu optimizer và provenance của training. Khi deployment, hệ
+thống tạo population mới cho TSP500 và TSP1000, dùng các training elite đã lưu
+làm reference. Mọi candidate được chấm trên validation split của target;
+optimizer đã học được chạy theo số inference iterations yêu cầu. Heuristic có
+validation gap thấp nhất được đóng băng và chỉ được đánh giá một lần trên test.
+Nếu một target thất bại, lỗi sẽ được ghi nhận và target còn lại vẫn tiếp tục.
+Test score không được đưa ngược vào quá trình sinh, xếp hạng hoặc lựa chọn.
+
+Xem kết quả cuối bằng lệnh:
+
+```bash
+python -m json.tool "$DEPLOY_RUN/report.json"
+```
+
+`status=ok` nghĩa là inference và test evaluation đều thành công.
+`validation_gap_pct` và `test_gap_pct` càng thấp càng tốt. Generated code,
+population snapshots, stdout của evaluator, phản hồi LLM, heuristic được chọn,
+`report.json` và `report.csv` được lưu trong `$DEPLOY_RUN`. Hai target heuristic
+đã đóng băng nằm tại `heuristics/tsp500.py` và `heuristics/tsp1000.py`.
 
 **Datas**: You can download them from [GoogleDrive](https://drive.google.com/file/d/1e4T8Yiz-qvHcChys2Tk841pbXumGVYu2/view?usp=sharing) and put data folder of each problem under `problems/<problem_name>`, the scripts to generate the data will also be updated in this repository soon.
 ## Configuration
