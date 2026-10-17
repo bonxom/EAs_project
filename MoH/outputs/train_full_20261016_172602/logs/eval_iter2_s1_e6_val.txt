@@ -1,0 +1,93 @@
+# ===== Heuristic Code =====
+#{A bi-criterion Pareto dominance ranking on edge cost and recurrence is combined with graph Laplacian subtour dispersion to execute contiguous block penalization and reciprocal incident discounts.}
+
+import numpy as np
+
+def update_edge_distance(edge_distance, local_opt_tour, edge_n_used):
+    updated_edge_distance = np.copy(edge_distance)
+    n = len(local_opt_tour)
+    if n < 4:
+        return updated_edge_distance
+
+    u_idx = np.array(local_opt_tour, dtype=np.intp)
+    v_idx = np.roll(u_idx, -1)
+
+    costs = edge_distance[u_idx, v_idx].astype(np.float64)
+    used = edge_n_used[u_idx, v_idx].astype(np.float64)
+
+    # Bi-criterion Pareto dominance ranking: criterion 1 is edge length, criterion 2 is persistence (used count)
+    # Edge i dominates j if (costs[i] >= costs[j] and used[i] >= used[j]) with at least one strict inequality
+    # Number of edges dominating edge i gives its Pareto rank (lower rank = non-dominated / top frontier)
+    cost_diff = costs[:, None] - costs[None, :]
+    used_diff = used[:, None] - used[None, :]
+
+    dominates = ((cost_diff >= 0.0) & (used_diff >= 0.0)) & ((cost_diff > 0.0) | (used_diff > 0.0))
+    domination_count = np.sum(dominates, axis=0)  # Number of edges that dominate edge i
+
+    # Spectral / degree-based bottleneck dispersion along the tour ring
+    # Compute 1D discrete Laplacian on the tour recurrence profiles to detect high-density cyclic traps
+    left_used = np.roll(used, 1)
+    right_used = np.roll(used, -1)
+    laplacian_energy = (2.0 * used - left_used - right_used)
+
+    # Synthesize Pareto priority and dispersion into continuous edge tension
+    max_dom = np.max(domination_count) + 1.0
+    pareto_score = 1.0 - (domination_count / max_dom)
+    normalized_cost = (costs - np.min(costs)) / (np.ptp(costs) + 1e-8)
+    tension = pareto_score * 0.6 + normalized_cost * 0.4 + 0.1 * np.maximum(0.0, laplacian_energy / (np.max(used) + 1.0))
+
+    # Identify top tension seeds and expand into contiguous path sub-chains (block penalization)
+    k_seeds = max(1, n // 8)
+    seed_indices = np.argsort(tension)[-k_seeds:]
+
+    penalize_flags = np.zeros(n, dtype=bool)
+    block_radius = max(1, n // 16)
+    for s in seed_indices:
+        for offset in range(-block_radius, block_radius + 1):
+            penalize_flags[(s + offset) % n] = True
+
+    p_u = u_idx[penalize_flags]
+    p_v = v_idx[penalize_flags]
+    p_costs = costs[penalize_flags]
+    p_used = used[penalize_flags]
+    p_tension = tension[penalize_flags]
+
+    # Proportional additive block penalties scaled by persistence-damped cost and tension
+    penalties = (p_costs / (1.0 + np.sqrt(p_used + 1.0))) * (1.0 + p_tension)
+    updated_edge_distance[p_u, p_v] += penalties
+    updated_edge_distance[p_v, p_u] += penalties
+
+    # Reciprocal incentive discounting on lowest-frequency incident alternative edges
+    penalized_nodes = np.unique(np.concatenate((p_u, p_v)))
+    decay_ratio = 0.03
+    for u in penalized_nodes:
+        row_used = edge_n_used[u].astype(np.float64)
+        row_used[u] = np.inf  # avoid self-loop
+        min_used_val = np.min(row_used)
+        candidate_mask = (row_used == min_used_val)
+        candidate_mask[u] = False
+
+        if np.any(candidate_mask):
+            cand_indices = np.where(candidate_mask)[0]
+            # Select up to 3 closest unvisited/low-frequency candidates to carve escape trajectories
+            cand_dists = updated_edge_distance[u, cand_indices]
+            best_cand = cand_indices[np.argsort(cand_dists)[:3]]
+            discounts = updated_edge_distance[u, best_cand] * decay_ratio
+            updated_edge_distance[u, best_cand] -= discounts
+            updated_edge_distance[best_cand, u] = updated_edge_distance[u, best_cand]
+
+    return updated_edge_distance
+# ===== Eval Output =====
+[*] Running ...
+[*] mode=val, data=/home/ducanh/projects/EAs_project/MoH/problems/tsp_gls/data/val/val_instance_data_sol_50.pkl, seed=0, n_instances=8
+[*] instance_indices=[6, 9, 0, 2, 4, 3, 5, 1]
+[*] instance 6: obj=5.7136, gap=0.5983
+[*] instance 9: obj=5.9639, gap=0.0000
+[*] instance 0: obj=5.7783, gap=0.0000
+[*] instance 2: obj=5.8562, gap=0.8460
+[*] instance 4: obj=5.5821, gap=3.4387
+[*] instance 3: obj=5.8806, gap=2.1487
+[*] instance 5: obj=5.6187, gap=0.0000
+[*] instance 1: obj=5.1651, gap=0.0000
+[*] ave_gap on size 50: 0.8789575419157036
+0.8789575419157036

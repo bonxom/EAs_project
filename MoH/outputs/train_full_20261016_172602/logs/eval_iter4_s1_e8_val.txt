@@ -1,0 +1,99 @@
+# ===== Heuristic Code =====
+#{A vectorized guided local search mechanism that dampens high-utility tour edges via robust cost-frequency penalization and replaces node-wise loops with a vectorized 2-hop structural outer-product reward matrix discounting non-adjacent tour bridges to directly catalyze 2-opt and 3-opt escape moves.}#
+
+import numpy as np
+
+def update_edge_distance(edge_distance, local_opt_tour, edge_n_used):
+    updated_edge_distance = np.copy(edge_distance)
+    n = len(local_opt_tour)
+    if n < 4:
+        return updated_edge_distance
+
+    # Vectorized extraction of consecutive tour edges
+    u_idx = np.array(local_opt_tour, dtype=np.intp)
+    v_idx = np.roll(u_idx, -1)
+
+    costs = edge_distance[u_idx, v_idx].astype(np.float64)
+    used = edge_n_used[u_idx, v_idx].astype(np.float64)
+
+    # Cost-frequency utilities for tour edges
+    mean_cost = np.mean(costs)
+    std_cost = np.std(costs) + 1e-8
+    z_scores = (costs - mean_cost) / std_cost
+    weights = 1.0 / (1.0 + np.exp(-z_scores))
+    utilities = (costs * (1.0 + weights)) / (1.0 + used)
+
+    threshold = np.median(utilities)
+    max_util = np.max(utilities) + 1e-8
+    penalize_mask = utilities >= threshold
+
+    p_u = u_idx[penalize_mask]
+    p_v = v_idx[penalize_mask]
+    p_costs = costs[penalize_mask]
+    p_used = used[penalize_mask]
+    p_utils = utilities[penalize_mask]
+
+    # Apply symmetric penalties on prominent local optimum edges
+    penalties = (p_costs / (1.0 + np.sqrt(p_used + 1.0))) * (1.0 + p_utils / max_util)
+    updated_edge_distance[p_u, p_v] += penalties
+    updated_edge_distance[p_v, p_u] += penalties
+
+    # Vectorized 2-hop structural bridge reward calculation
+    # Identify penalized indices on the tour ring
+    pen_tour_indices = np.nonzero(penalize_mask)[0]
+    if len(pen_tour_indices) == 0:
+        return updated_edge_distance
+
+    # Compute node importance weights along the tour based on incident edge utilities
+    node_weights = np.zeros(n, dtype=np.float64)
+    np.add.at(node_weights, u_idx, utilities)
+    np.add.at(node_weights, v_idx, utilities)
+
+    # Normalize node weights to [0, 1] range for scaling bridge discounts
+    max_nw = np.max(node_weights) + 1e-8
+    norm_nw = node_weights / max_nw
+
+    # Vectorized outer-product reward matrix between tour nodes
+    # Only penalize bridges between separated fragments (exclude self, adjacent 1-hop edges)
+    discount_factor = 0.03
+    bridge_affinity = np.outer(norm_nw, norm_nw)
+
+    # Tour index distance matrix on ring to mask out immediate neighbors and self
+    idx_grid = np.arange(n)
+    idx_diff = np.abs(idx_grid[:, None] - idx_grid[None, :])
+    ring_dist = np.minimum(idx_diff, n - idx_diff)
+
+    # Candidate bridges must bridge between separated fragments (ring_dist >= 2)
+    # and favor unused or rarely used edges to escape cycles
+    non_adjacent_mask = ring_dist >= 2
+
+    # Map tour indices back to node IDs
+    # Bridge discount: proportional to bridge affinity and current distance, tempered by edge usage
+    sub_dist = updated_edge_distance[np.ix_(u_idx, u_idx)]
+    sub_used = edge_n_used[np.ix_(u_idx, u_idx)].astype(np.float64)
+
+    valid_bridge_mask = non_adjacent_mask & (sub_used == 0)
+    bridge_discount = discount_factor * sub_dist * bridge_affinity * valid_bridge_mask
+
+    # Symmetrically apply vectorized bridge discount
+    sub_dist_updated = sub_dist - bridge_discount
+    updated_edge_distance[np.ix_(u_idx, u_idx)] = np.minimum(sub_dist, sub_dist_updated)
+
+    # Ensure zero diagonal
+    np.fill_diagonal(updated_edge_distance, 0.0)
+
+    return updated_edge_distance
+# ===== Eval Output =====
+[*] Running ...
+[*] mode=val, data=/home/ducanh/projects/EAs_project/MoH/problems/tsp_gls/data/val/val_instance_data_sol_50.pkl, seed=0, n_instances=8
+[*] instance_indices=[6, 9, 0, 2, 4, 3, 5, 1]
+[*] instance 6: obj=5.7136, gap=0.5983
+[*] instance 9: obj=5.9639, gap=0.0000
+[*] instance 0: obj=5.7783, gap=0.0000
+[*] instance 2: obj=5.8071, gap=0.0000
+[*] instance 4: obj=5.5109, gap=2.1181
+[*] instance 3: obj=5.8123, gap=0.9633
+[*] instance 5: obj=5.6187, gap=0.0000
+[*] instance 1: obj=5.1651, gap=0.0000
+[*] ave_gap on size 50: 0.45997120251349277
+0.45997120251349277

@@ -1,0 +1,78 @@
+# ===== Heuristic Code =====
+#{A structural Guided Local Search reconstruction that applies dynamic matrix-wide exponential penalty evaporation combined with an entrapment-detection frequency reset and variance-scaled utility penalization.}#
+
+import numpy as np
+
+def update_edge_distance(edge_distance, local_opt_tour, edge_n_used):
+    updated_edge_distance = np.copy(edge_distance)
+    n = len(local_opt_tour)
+    if n <= 1:
+        return updated_edge_distance
+
+    u_idx = np.array(local_opt_tour, dtype=np.intp)
+    v_idx = np.roll(u_idx, -1)
+
+    costs = edge_distance[u_idx, v_idx].astype(np.float64)
+    used = edge_n_used[u_idx, v_idx].astype(np.float64)
+
+    # Global structural evaporation of perceived distance expansions
+    # Evaporate excess perceived edge distances towards base edge cost structure
+    excess_mask = edge_n_used > 0
+    if np.any(excess_mask):
+        evaporation_factor = 0.985
+        updated_edge_distance[excess_mask] *= evaporation_factor
+
+    # Compute utilities: GLS utility = cost / (1 + count)
+    utilities = costs / (1.0 + used)
+    max_util = np.max(utilities)
+    min_util = np.min(utilities)
+    spread = max_util - min_util
+
+    # Entrapment detection: if utility spread is extremely compressed,
+    # the search is stagnating in deeply penalized basins.
+    mean_used = np.mean(used)
+    if spread / (max_util + 1e-12) < 0.05 and mean_used > 3.0:
+        # Dynamic reset attenuation for over-saturated edges in local tour
+        dampening = 0.85
+        updated_edge_distance[u_idx, v_idx] *= dampening
+        updated_edge_distance[v_idx, u_idx] = updated_edge_distance[u_idx, v_idx]
+
+    # Target the edges with maximum utility (guided local search principle)
+    threshold = max_util - 0.25 * spread
+    penalize_mask = utilities >= threshold
+
+    p_u = u_idx[penalize_mask]
+    p_v = v_idx[penalize_mask]
+    p_costs = costs[penalize_mask]
+    p_used = used[penalize_mask]
+
+    # Adaptive penalty scaled by base tour length statistics and edge frequency
+    tour_length = np.sum(costs)
+    avg_edge_cost = tour_length / float(n)
+    penalty_scale = 0.3 * (avg_edge_cost / (1.0 + np.sqrt(p_used)))
+
+    # Apply symmetric updates ensuring non-negativity
+    penalties = np.maximum(0.0, penalty_scale)
+    updated_edge_distance[p_u, p_v] += penalties
+    updated_edge_distance[p_v, p_u] = updated_edge_distance[p_u, p_v]
+
+    # Ensure non-negative and symmetric representation
+    np.maximum(updated_edge_distance, 0.0, out=updated_edge_distance)
+    updated_edge_distance = 0.5 * (updated_edge_distance + updated_edge_distance.T)
+    np.fill_diagonal(updated_edge_distance, 0.0)
+
+    return updated_edge_distance
+# ===== Eval Output =====
+[*] Running ...
+[*] mode=val, data=/home/ducanh/projects/EAs_project/MoH/problems/tsp_gls/data/val/val_instance_data_sol_50.pkl, seed=0, n_instances=8
+[*] instance_indices=[6, 9, 0, 2, 4, 3, 5, 1]
+[*] instance 6: obj=5.7136, gap=0.5983
+[*] instance 9: obj=6.0108, gap=0.7860
+[*] instance 0: obj=5.8546, gap=1.3193
+[*] instance 2: obj=5.8274, gap=0.3500
+[*] instance 4: obj=5.5821, gap=3.4387
+[*] instance 3: obj=5.8975, gap=2.4424
+[*] instance 5: obj=5.6187, gap=0.0000
+[*] instance 1: obj=5.3071, gap=2.7501
+[*] ave_gap on size 50: 1.4606105966959189
+1.4606105966959189

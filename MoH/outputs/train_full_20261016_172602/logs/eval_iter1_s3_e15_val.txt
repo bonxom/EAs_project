@@ -1,0 +1,74 @@
+# ===== Heuristic Code =====
+#{Self-adaptive guided local search penalty mechanism that dynamically calibrates steepness, stagnation scaling, and density-aware percentile thresholds derived directly from tour edge dispersion and usage statistics.}
+
+import numpy as np
+
+def update_edge_distance(edge_distance, local_opt_tour, edge_n_used):
+    updated_edge_distance = np.copy(edge_distance)
+    n = len(local_opt_tour)
+
+    # Identify adjacent tour edges
+    u_idx = local_opt_tour
+    v_idx = np.roll(local_opt_tour, -1)
+
+    tour_lengths = edge_distance[u_idx, v_idx]
+    mean_len = np.mean(tour_lengths)
+    std_len = np.std(tour_lengths)
+
+    # Adaptive normalization and sharpness based on coefficient of variation
+    cv = std_len / (mean_len + 1e-8)
+    alpha = np.clip(2.0 + 4.0 * cv, 2.0, 8.0)
+
+    # Relative edge length standardized by local tour dispersion
+    z_scores = (tour_lengths - mean_len) / (std_len + 1e-8)
+    base_rank = 1.0 / (1.0 + np.exp(-alpha * z_scores))
+
+    # Dynamic stagnation tracking via edge usage distribution
+    usages = edge_n_used[u_idx, v_idx]
+    max_usage = np.max(usages)
+    mean_usage = np.mean(usages)
+
+    # Recency/frequency feedback: heavily penalize persistent edges proportionally to mean tour length
+    # Using a reactive scaling factor that intensifies when search cycles in the same subspace
+    stagnation_factor = 1.0 + np.log1p(mean_usage) / (1.0 + np.exp(-cv))
+    usage_attenuation = 1.0 / (1.0 + usages / (mean_usage + 1.0))
+
+    # Adaptive k-NN density estimation scaling dynamically with problem size n
+    k = max(2, min(int(np.sqrt(n)), 15))
+    sorted_dists = np.partition(edge_distance, k, axis=1)[:, 1:k + 1]
+    local_scale = np.mean(sorted_dists, axis=1) + 1e-8
+    edge_density = 0.5 * (1.0 / local_scale[u_idx] + 1.0 / local_scale[v_idx])
+    edge_density_norm = edge_density / (np.mean(edge_density) + 1e-8)
+
+    # Dynamic thresholding: adapt cutoff quantile based on stagnation depth
+    # Higher stagnation targets a broader set of edges (lower percentile threshold)
+    dynamic_quantile = np.clip(75.0 - 15.0 * np.tanh(mean_usage / 5.0), 50.0, 80.0)
+    adaptive_cutoff = np.percentile(tour_lengths, dynamic_quantile)
+    high_impact_mask = tour_lengths >= adaptive_cutoff
+
+    # Penalties scaled in dimensional units of distance to remain scale-invariant
+    penalty_magnitude = mean_len * (0.15 + 0.10 * np.tanh(stagnation_factor - 1.0))
+    penalties = penalty_magnitude * base_rank * edge_density_norm * usage_attenuation
+
+    # Apply progressive boost to top bottleneck edges
+    penalties[high_impact_mask] *= (1.2 + 0.8 * (tour_lengths[high_impact_mask] / (adaptive_cutoff + 1e-8)))
+
+    # Symmetrically augment penalties in the distance matrix
+    np.add.at(updated_edge_distance, (u_idx, v_idx), penalties)
+    np.add.at(updated_edge_distance, (v_idx, u_idx), penalties)
+
+    return updated_edge_distance
+# ===== Eval Output =====
+[*] Running ...
+[*] mode=val, data=/home/ducanh/projects/EAs_project/MoH/problems/tsp_gls/data/val/val_instance_data_sol_200.pkl, seed=0, n_instances=8
+[*] instance_indices=[6, 9, 0, 2, 4, 3, 5, 1]
+[*] instance 6: obj=10.6574, gap=2.0250
+[*] instance 9: obj=10.9442, gap=2.6367
+[*] instance 0: obj=11.4240, gap=4.9448
+[*] instance 2: obj=11.2247, gap=2.5295
+[*] instance 4: obj=11.0756, gap=2.1059
+[*] instance 3: obj=10.8628, gap=2.4615
+[*] instance 5: obj=11.2230, gap=3.1189
+[*] instance 1: obj=11.4238, gap=3.6246
+[*] ave_gap on size 200: 2.9308551776747156
+2.9308551776747156

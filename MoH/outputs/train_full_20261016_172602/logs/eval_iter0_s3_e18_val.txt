@@ -1,0 +1,75 @@
+# ===== Heuristic Code =====
+# {Synthesizes frequency-adapted global/local penalties with a density-gradient-aware progressive boost that dampens penalties on bottleneck bridge edges connecting disparate density zones while aggressively penalizing redundant long edges in dense regions.}
+
+import numpy as np
+
+def update_edge_distance(edge_distance, local_opt_tour, edge_n_used):
+    updated_edge_distance = np.copy(edge_distance)
+    n = len(local_opt_tour)
+    if n < 3:
+        return updated_edge_distance
+
+    # Calculate k-nearest neighbor density for nodes efficiently
+    k = min(5, n - 1)
+    k_nn_dists = np.partition(edge_distance, kth=k, axis=1)[:, 1:k+1]
+    k_nn_avg = np.mean(k_nn_dists, axis=1)
+    density = 1.0 / (k_nn_avg + 1e-6)
+    density_norm = density / (np.mean(density) + 1e-6)
+
+    # Tour edge indices and metrics
+    u_idx = local_opt_tour
+    v_idx = np.roll(local_opt_tour, -1)
+    tour_lengths = edge_distance[u_idx, v_idx]
+    usage = edge_n_used[u_idx, v_idx]
+
+    # Global relative length and rank penalty
+    mean_len = np.mean(tour_lengths) + 1e-6
+    rel_lengths = tour_lengths / mean_len
+    rank_penalty = 1.0 / (1.0 + np.exp(-4.0 * (rel_lengths - 1.0)))
+
+    # Usage factor and localized cluster density
+    usage_factor = 1.0 / (1.0 + 0.3 * usage)
+    density_mean = 0.5 * (density_norm[u_idx] + density_norm[v_idx])
+    local_penalty = rel_lengths * usage_factor * density_mean
+
+    # Blend global and local penalty based on average edge history
+    freq_mean = np.mean(usage)
+    w_global = 0.6 / (1.0 + 0.1 * freq_mean)
+    w_local = 1.0 - w_global
+    base_penalty = (w_global * rank_penalty + w_local * local_penalty) * usage_factor
+
+    # Density gradient: edges between disparate density zones are topological bridges
+    density_diff = np.abs(density_norm[u_idx] - density_norm[v_idx])
+    bridge_attenuation = 1.0 / (1.0 + 0.8 * density_diff)
+
+    # Modulated upper-quartile threshold and progressive boost
+    p75 = np.percentile(tour_lengths, 75)
+    max_len = np.max(tour_lengths)
+    spread = max_len - p75 + 1e-6
+
+    high_mask = tour_lengths >= p75
+    density_weight = np.clip(density_mean[high_mask], 0.5, 1.5)
+    progressive_boost = 1.0 + 0.6 * ((tour_lengths[high_mask] - p75) / spread) * density_weight * bridge_attenuation[high_mask]
+
+    final_penalty = base_penalty.copy()
+    final_penalty[high_mask] *= progressive_boost
+
+    # Symmetrically apply penalties to distance matrix
+    np.add.at(updated_edge_distance, (u_idx, v_idx), final_penalty)
+    np.add.at(updated_edge_distance, (v_idx, u_idx), final_penalty)
+
+    return updated_edge_distance
+# ===== Eval Output =====
+[*] Running ...
+[*] mode=val, data=/home/ducanh/projects/EAs_project/MoH/problems/tsp_gls/data/val/val_instance_data_sol_200.pkl, seed=0, n_instances=8
+[*] instance_indices=[6, 9, 0, 2, 4, 3, 5, 1]
+[*] instance 6: obj=10.4460, gap=0.0019
+[*] instance 9: obj=10.7119, gap=0.4579
+[*] instance 0: obj=10.9192, gap=0.3073
+[*] instance 2: obj=10.9844, gap=0.3342
+[*] instance 4: obj=10.8775, gap=0.2800
+[*] instance 3: obj=10.6247, gap=0.2151
+[*] instance 5: obj=10.9392, gap=0.5110
+[*] instance 1: obj=11.0614, gap=0.3378
+[*] ave_gap on size 200: 0.30565273721000763
+0.30565273721000763

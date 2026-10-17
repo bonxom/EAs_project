@@ -1,0 +1,115 @@
+# ===== Heuristic Code =====
+#{This algorithm integrates a multi-tier memory structure tracking recency-decayed usage and cumulative long-term visit frequency, dynamically detecting search stagnation through utility variance to trigger an entropy-maximizing perturbation burst that strongly discounts unvisited k-nearest neighbor edges while amplifying penalties on persistent edges.}#
+
+import numpy as np
+
+def update_edge_distance(edge_distance, local_opt_tour, edge_n_used):
+    updated_edge_distance = np.copy(edge_distance)
+    num_nodes = len(local_opt_tour)
+    tour = np.asarray(local_opt_tour, dtype=int)
+
+    u_idx = tour
+    v_idx = np.roll(tour, -1)
+    w_idx = np.roll(tour, -2)
+
+    # Tiered memory separation: Integer floor tracks persistent long-term count, fractional part tracks short-term recency
+    long_term_visits = np.floor(edge_n_used)
+    short_term_recency = edge_n_used - long_term_visits
+    short_term_recency *= 0.90
+
+    d_uv = edge_distance[u_idx, v_idx]
+    d_vw = edge_distance[v_idx, w_idx]
+    d_uw = edge_distance[u_idx, w_idx]
+
+    detour_ratio = (d_uv + d_vw) / (d_uw + 1e-8)
+    denom = 2.0 * d_uv * d_vw + 1e-8
+    cos_turn = np.clip((d_uv**2 + d_vw**2 - d_uw**2) / denom, -1.0, 1.0)
+    acute_deficit = 1.0 - cos_turn
+    geom_inefficiency = detour_ratio * (1.0 + 0.5 * acute_deficit)
+
+    base_dist = d_uv
+    recency_vals = short_term_recency[u_idx, v_idx]
+    long_term_vals = long_term_visits[u_idx, v_idx]
+
+    # Combined multi-tier memory frequency term
+    effective_freq = 0.65 * recency_vals + 0.35 * np.log1p(long_term_vals)
+    local_geom_factor = 0.5 * (geom_inefficiency + np.roll(geom_inefficiency, 1))
+    utilities = (base_dist / (1.0 + effective_freq)) * (1.0 + 0.35 * local_geom_factor)
+
+    # Detect stagnation via utility dispersion
+    mean_util = np.mean(utilities)
+    util_var = np.var(utilities) / (mean_util**2 + 1e-8)
+    stagnation_detected = util_var < 0.08
+
+    k = max(1, int(np.ceil((0.20 if stagnation_detected else 0.14) * num_nodes)))
+    top_k_indices = np.argsort(utilities)[-k:]
+
+    global_mean_dist = np.mean(edge_distance)
+    adaptive_lambda = (0.45 if stagnation_detected else 0.30) * global_mean_dist
+
+    # Update multi-tier memory and apply GLS edge penalties
+    for idx in top_k_indices:
+        u, v = u_idx[idx], v_idx[idx]
+        long_term_visits[u, v] += 1.0
+        long_term_visits[v, u] += 1.0
+        short_term_recency[u, v] += 1.0
+        short_term_recency[v, u] += 1.0
+
+        # Dual-frequency penalty scaling
+        freq_penalty = 1.0 + np.sqrt(short_term_recency[u, v]) + 0.5 * np.log1p(long_term_visits[u, v])
+        geom_weight = 1.0 + 0.5 * local_geom_factor[idx]
+        penalty = adaptive_lambda * freq_penalty * geom_weight
+
+        updated_edge_distance[u, v] += penalty
+        updated_edge_distance[v, u] += penalty
+
+    # Recombine tiered memory back into edge_n_used
+    edge_n_used[:] = long_term_visits + np.clip(short_term_recency, 0.0, 0.9999)
+
+    # Shortcut bypass discounting based on geometric detour
+    high_detour_indices = np.argsort(detour_ratio)[-k:]
+    for idx in high_detour_indices:
+        u, w = u_idx[idx], w_idx[idx]
+        total_freq = long_term_visits[u, w] + short_term_recency[u, w]
+        if total_freq < 1.0:
+            discount = 0.12 * global_mean_dist * (1.0 / (1.0 + total_freq))
+            updated_edge_distance[u, w] = max(1e-6, updated_edge_distance[u, w] - discount)
+            updated_edge_distance[w, u] = updated_edge_distance[u, w]
+
+    # Entropy-maximizing perturbation burst when stagnated
+    if stagnation_detected:
+        # Boost penalties on the top-decile persistent edges overall
+        persist_threshold = np.percentile(long_term_visits, 90.0)
+        if persist_threshold > 0:
+            persist_mask = (long_term_visits >= persist_threshold) & (long_term_visits > 0)
+            updated_edge_distance[persist_mask] += 0.20 * global_mean_dist
+
+        # Heavily discount unvisited low-cost candidate edges for stagnation escape
+        candidate_k = min(5, max(2, num_nodes // 10))
+        sorted_neighbors = np.argsort(edge_distance, axis=1)[:, 1:candidate_k + 1]
+        row_indices = np.arange(num_nodes)[:, None]
+        unvisited_mask = (long_term_visits[row_indices, sorted_neighbors] == 0) & (short_term_recency[row_indices, sorted_neighbors] < 0.1)
+
+        for i in range(num_nodes):
+            valid_targets = sorted_neighbors[i, unvisited_mask[i]]
+            if len(valid_targets) > 0:
+                burst_discount = 0.18 * global_mean_dist
+                for j in valid_targets:
+                    updated_edge_distance[i, j] = max(1e-6, updated_edge_distance[i, j] - burst_discount)
+                    updated_edge_distance[j, i] = updated_edge_distance[i, j]
+
+    return updated_edge_distance
+# ===== Eval Output =====
+[*] Running ...
+[*] mode=val, data=/home/ducanh/projects/EAs_project/MoH/problems/tsp_gls/data/val/val_instance_data_sol_100.pkl, seed=0, n_instances=8
+[*] instance_indices=[6, 9, 0, 2, 4, 3, 5, 1]
+[*] instance 6: obj=7.7596, gap=0.0000
+[*] instance 9: obj=8.0673, gap=0.2977
+[*] instance 0: obj=8.0001, gap=0.0000
+[*] instance 2: obj=8.0900, gap=0.1994
+[*] instance 4: obj=7.8131, gap=0.0000
+[*] instance 3: obj=7.3713, gap=0.0000
+[*] instance 5: obj=7.6365, gap=0.0000
+[*] instance 1: obj=7.5570, gap=0.0000
+[*] ave_gap on size 100: 0.062147168078144355
+0.062147168078144355

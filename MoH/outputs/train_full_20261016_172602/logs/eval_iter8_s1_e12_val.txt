@@ -1,0 +1,65 @@
+# ===== Heuristic Code =====
+#{A fully vectorized Guided Local Search penalty strategy that calculates utility via cost and frequency, selectively penalizes upper-quantile tour edges with bounded variance-scaled penalties, and concurrently discounts unvisited incident edges using matrix broadcast masking.}#
+
+import numpy as np
+
+def update_edge_distance(edge_distance, local_opt_tour, edge_n_used):
+    updated_edge_distance = np.copy(edge_distance)
+    n_nodes = edge_distance.shape[0]
+
+    u_idx = np.asarray(local_opt_tour, dtype=np.intp)
+    v_idx = np.roll(u_idx, -1)
+
+    costs = edge_distance[u_idx, v_idx].astype(np.float64)
+    used = edge_n_used[u_idx, v_idx].astype(np.float64)
+
+    # Utility formulation: higher cost with lower usage yields higher utility to penalize
+    utilities = costs / (1.0 + used)
+
+    threshold = np.percentile(utilities, 60.0)
+    penalize_mask = utilities >= threshold
+
+    p_u = u_idx[penalize_mask]
+    p_v = v_idx[penalize_mask]
+    p_costs = costs[penalize_mask]
+    p_used = used[penalize_mask]
+
+    # Deterministic, variance-scaled penalty magnitude
+    std_cost = np.std(costs)
+    mean_cost = np.mean(costs)
+    base_scale = std_cost if std_cost > 1e-8 else (mean_cost * 0.1 + 1e-8)
+
+    penalties = (base_scale * 0.5 + 0.1 * p_costs) / np.sqrt(1.0 + p_used)
+
+    # Apply symmetric penalties on the selected tour edges
+    updated_edge_distance[p_u, p_v] += penalties
+    updated_edge_distance[p_v, p_u] += penalties
+
+    # Vectorized discount for unused edges incident to penalized nodes
+    penalized_nodes = np.unique(np.concatenate((p_u, p_v)))
+    if penalized_nodes.size > 0:
+        node_mask = np.zeros(n_nodes, dtype=bool)
+        node_mask[penalized_nodes] = True
+
+        # Incident to at least one penalized node and currently unvisited
+        incident_unused = (node_mask[:, None] | node_mask[None, :]) & (edge_n_used == 0)
+        np.fill_diagonal(incident_unused, False)
+
+        decay_factor = 0.015
+        updated_edge_distance[incident_unused] -= edge_distance[incident_unused] * decay_factor
+
+    return updated_edge_distance
+# ===== Eval Output =====
+[*] Running ...
+[*] mode=val, data=/home/ducanh/projects/EAs_project/MoH/problems/tsp_gls/data/val/val_instance_data_sol_50.pkl, seed=0, n_instances=8
+[*] instance_indices=[6, 9, 0, 2, 4, 3, 5, 1]
+[*] instance 6: obj=5.7136, gap=0.5983
+[*] instance 9: obj=6.0516, gap=1.4712
+[*] instance 0: obj=5.8546, gap=1.3193
+[*] instance 2: obj=5.8071, gap=0.0000
+[*] instance 4: obj=5.5821, gap=3.4387
+[*] instance 3: obj=5.8230, gap=1.1483
+[*] instance 5: obj=5.6187, gap=0.0000
+[*] instance 1: obj=5.3071, gap=2.7501
+[*] ave_gap on size 50: 1.3407377689298061
+1.3407377689298061

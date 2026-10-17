@@ -1,0 +1,63 @@
+# ===== Heuristic Code =====
+#{This algorithm combines a vectorized z-score guided utility calculation with a continuous 75th-percentile sigmoidal soft-gating function and square-root usage penalties, subtly rewarding unexplored incident edges on penalized vertices.}#
+
+import numpy as np
+
+def update_edge_distance(edge_distance, local_opt_tour, edge_n_used):
+    updated_edge_distance = np.copy(edge_distance)
+
+    u_idx = np.array(local_opt_tour, dtype=np.intp)
+    v_idx = np.roll(u_idx, -1)
+
+    costs = edge_distance[u_idx, v_idx].astype(np.float64)
+    used = edge_n_used[u_idx, v_idx].astype(np.float64)
+
+    mean_cost = np.mean(costs)
+    std_cost = np.std(costs) + 1e-8
+    z_scores = (costs - mean_cost) / std_cost
+    weights = 1.0 / (1.0 + np.exp(-z_scores))
+    utilities = (costs * (1.0 + weights)) / (1.0 + used)
+
+    q75 = np.percentile(utilities, 75)
+    iqr = q75 - np.percentile(utilities, 25)
+    tau = max(iqr / 2.0, 1e-6)
+
+    # Continuous sigmoidal soft-gating centered around q75
+    gate = 1.0 / (1.0 + np.exp(-np.clip((utilities - q75) / tau, -30.0, 30.0)))
+
+    max_util = np.max(utilities) + 1e-8
+    base_penalties = (costs / (1.0 + np.sqrt(used + 1.0))) * (1.0 + utilities / max_util)
+    penalties = base_penalties * gate
+
+    # Apply continuous penalties to tour edges
+    updated_edge_distance[u_idx, v_idx] += penalties
+    updated_edge_distance[v_idx, u_idx] += penalties
+
+    # Minor exploration incentive for untouched edges of heavily penalized nodes
+    active_nodes_mask = gate > 0.05
+    if np.any(active_nodes_mask):
+        penalized_nodes = np.unique(np.concatenate((u_idx[active_nodes_mask], v_idx[active_nodes_mask])))
+        decay_ratio = 0.015
+        for u in penalized_nodes:
+            unused_mask = (edge_n_used[u] == 0)
+            unused_mask[u] = False
+            if np.any(unused_mask):
+                current_vals = updated_edge_distance[u, unused_mask]
+                updated_edge_distance[u, unused_mask] -= current_vals * decay_ratio
+                updated_edge_distance[unused_mask, u] = updated_edge_distance[u, unused_mask]
+
+    return updated_edge_distance
+# ===== Eval Output =====
+[*] Running ...
+[*] mode=val, data=/home/ducanh/projects/EAs_project/MoH/problems/tsp_gls/data/val/val_instance_data_sol_50.pkl, seed=0, n_instances=8
+[*] instance_indices=[6, 9, 0, 2, 4, 3, 5, 1]
+[*] instance 6: obj=5.7136, gap=0.5983
+[*] instance 9: obj=5.9639, gap=0.0000
+[*] instance 0: obj=5.7783, gap=0.0000
+[*] instance 2: obj=5.8071, gap=0.0000
+[*] instance 4: obj=5.5821, gap=3.4387
+[*] instance 3: obj=5.8123, gap=0.9633
+[*] instance 5: obj=5.6187, gap=0.0000
+[*] instance 1: obj=5.1651, gap=0.0000
+[*] ave_gap on size 50: 0.6250460055538226
+0.6250460055538226

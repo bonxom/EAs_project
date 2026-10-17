@@ -1,0 +1,65 @@
+# ===== Heuristic Code =====
+#{Selectively penalize local optimum tour edges based on their relative deviation from the 1-tree/k-nearest-neighbor lower bound and triangle-inequality slack, prioritizing bridge edges that induce suboptimal chords while scaling penalties by frequency.}#
+
+import numpy as np
+
+def update_edge_distance(edge_distance, local_opt_tour, edge_n_used):
+    updated_edge_distance = np.copy(edge_distance)
+    n = edge_distance.shape[0]
+    if n <= 3:
+        return updated_edge_distance
+
+    # Compute k-nearest-neighbor threshold to exploit metric sparsity
+    k = min(max(3, int(np.sqrt(n))), n - 1)
+    sorted_dists = np.sort(edge_distance, axis=1)
+    knn_radii = sorted_dists[:, k]
+
+    # Identify tour edges and compute basic statistics
+    tour_edges = [(local_opt_tour[i], local_opt_tour[(i + 1) % n]) for i in range(n)]
+    tour_lengths = np.array([edge_distance[u, v] for u, v in tour_edges])
+    avg_tour_edge = np.mean(tour_lengths) if tour_lengths.size > 0 else 1.0
+
+    # Evaluate structural edge vulnerability using MST/1-tree lower-bound surrogate & metric slack
+    # An edge (u, v) is a poor structural fit if its length exceeds both u and v's k-NN ball,
+    # or if alternative 2-hop paths (triangle inequality violation/slack) are tight.
+    utilities = np.zeros(n)
+    for i, (u, v) in enumerate(tour_edges):
+        d_uv = edge_distance[u, v]
+        # Metric slack surrogate: check if d_uv strongly exceeds the neighborhood lower bound
+        lb_uv = 0.5 * (knn_radii[u] + knn_radii[v])
+        metric_excess = max(0.0, d_uv - lb_uv)
+
+        # Chord tightness: check adjacent shortcuts along the tour ring
+        prev_node = local_opt_tour[(i - 1) % n]
+        next_node = local_opt_tour[(i + 2) % n]
+        shortcut_slack = (edge_distance[prev_node, v] + edge_distance[u, next_node]) - 2.0 * d_uv
+
+        # Guided Local Search utility with structural bridge/chord weighting
+        structural_weight = 1.0 + (metric_excess / (avg_tour_edge + 1e-8)) + max(0.0, -shortcut_slack) / (avg_tour_edge + 1e-8)
+        utilities[i] = (d_uv * structural_weight) / (1.0 + edge_n_used[u, v])
+
+    max_util = np.max(utilities) if utilities.size > 0 else 0.0
+    if max_util > 0.0:
+        util_threshold = 0.80 * max_util
+        base_penalty = 0.35 * avg_tour_edge
+        for i, (u, v) in enumerate(tour_edges):
+            if utilities[i] >= util_threshold:
+                penalty = (base_penalty * (utilities[i] / max_util)) / (1.0 + edge_n_used[u, v])
+                updated_edge_distance[u, v] += penalty
+                updated_edge_distance[v, u] += penalty
+
+    return updated_edge_distance
+# ===== Eval Output =====
+[*] Running ...
+[*] mode=val, data=/home/ducanh/projects/EAs_project/MoH/problems/tsp_gls/data/val/val_instance_data_sol_20.pkl, seed=0, n_instances=8
+[*] instance_indices=[6, 9, 0, 2, 4, 3, 5, 1]
+[*] instance 6: obj=3.7045, gap=0.0000
+[*] instance 9: obj=4.1442, gap=0.0000
+[*] instance 0: obj=3.6827, gap=0.0000
+[*] instance 2: obj=3.8184, gap=0.0000
+[*] instance 4: obj=3.8385, gap=0.0000
+[*] instance 3: obj=3.6971, gap=0.0000
+[*] instance 5: obj=3.4281, gap=0.0000
+[*] instance 1: obj=3.6958, gap=0.0000
+[*] ave_gap on size 20: 1.2218318606871392e-06
+1.2218318606871392e-06

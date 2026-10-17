@@ -1,0 +1,90 @@
+# ===== Heuristic Code =====
+#{A guided local search matrix modification with bounded potential fields that normalizes edge inflation against baseline costs and applies periodic recalibration to reset over-penalized edges.}#
+
+import numpy as np
+
+def update_edge_distance(edge_distance, local_opt_tour, edge_n_used):
+    updated_edge_distance = np.copy(edge_distance)
+    num_nodes = len(local_opt_tour)
+    tour = np.asarray(local_opt_tour)
+
+    u_idx = tour
+    v_idx = np.roll(tour, -1)
+    w_idx = np.roll(tour, -2)
+
+    # Smooth frequency decay to prevent long-term lock-in
+    edge_n_used *= 0.95
+
+    # Calculate triplet geometric inefficiency
+    d_uv = edge_distance[u_idx, v_idx]
+    d_vw = edge_distance[v_idx, w_idx]
+    d_uw = edge_distance[u_idx, w_idx]
+
+    detour_ratio = (d_uv + d_vw) / (d_uw + 1e-8)
+    denom = 2.0 * d_uv * d_vw + 1e-8
+    cos_turn = np.clip((d_uv**2 + d_vw**2 - d_uw**2) / denom, -1.0, 1.0)
+    acute_deficit = 1.0 - cos_turn
+    geom_inefficiency = detour_ratio * (1.0 + 0.5 * acute_deficit)
+
+    local_geom_factor = 0.5 * (geom_inefficiency + np.roll(geom_inefficiency, 1))
+
+    # GLS utility metric balancing edge length, past usage, and geometric bottlenecking
+    base_dist = d_uv
+    base_freq = edge_n_used[u_idx, v_idx]
+    utilities = (base_dist / (1.0 + base_freq)) * (1.0 + 0.35 * local_geom_factor)
+
+    # Determine scale based on average tour edge length as a tight proxy for MST scale
+    tour_scale = np.mean(d_uv) + 1e-8
+
+    # Recalibrate: if cumulative usage indicates stagnation, pull over-penalized edges back towards base
+    max_freq = np.max(edge_n_used)
+    if max_freq > 8.0:
+        over_inflated = edge_n_used > 5.0
+        edge_n_used[over_inflated] *= 0.5
+
+    # Select top-k bottleneck edges to penalize
+    k = max(1, int(np.ceil(0.12 * num_nodes)))
+    top_k_indices = np.argsort(utilities)[-k:]
+
+    # Apply bounded potential field: distance inflation is strictly bounded relative to base edge cost
+    for idx in top_k_indices:
+        u, v = u_idx[idx], v_idx[idx]
+        edge_n_used[u, v] += 1.0
+        edge_n_used[v, u] += 1.0
+
+        freq = edge_n_used[u, v]
+        geom_weight = 1.0 + 0.4 * local_geom_factor[idx]
+
+        # Bounded saturation function (tanh) preventing additive explosion
+        bounded_inflation = 0.50 * edge_distance[u, v] * np.tanh(0.25 * freq * geom_weight)
+        updated_edge_distance[u, v] += bounded_inflation
+        updated_edge_distance[v, u] += bounded_inflation
+
+    # Reward prospective shortcut edges (u, w) where detour is high and edge is under-visited
+    high_detour_indices = np.argsort(detour_ratio)[-k:]
+    for idx in high_detour_indices:
+        u, w = u_idx[idx], w_idx[idx]
+        freq = edge_n_used[u, w]
+        if freq < 1.0:
+            # Bounded discount anchored to tour scale, preserving triangle inequality viability
+            max_discount = 0.25 * edge_distance[u, w]
+            discount = min(max_discount, 0.08 * tour_scale / (1.0 + freq))
+            new_dist = max(1e-6, updated_edge_distance[u, w] - discount)
+            updated_edge_distance[u, w] = new_dist
+            updated_edge_distance[w, u] = new_dist
+
+    return updated_edge_distance
+# ===== Eval Output =====
+[*] Running ...
+[*] mode=val, data=/home/ducanh/projects/EAs_project/MoH/problems/tsp_gls/data/val/val_instance_data_sol_100.pkl, seed=0, n_instances=8
+[*] instance_indices=[6, 9, 0, 2, 4, 3, 5, 1]
+[*] instance 6: obj=8.0185, gap=3.3363
+[*] instance 9: obj=8.1138, gap=0.8765
+[*] instance 0: obj=8.1650, gap=2.0616
+[*] instance 2: obj=8.3048, gap=2.8601
+[*] instance 4: obj=7.9931, gap=2.3037
+[*] instance 3: obj=7.5327, gap=2.1883
+[*] instance 5: obj=7.7267, gap=1.1808
+[*] instance 1: obj=7.7273, gap=2.2533
+[*] ave_gap on size 100: 2.1326057039699586
+2.1326057039699586

@@ -1,0 +1,67 @@
+# ===== Heuristic Code =====
+#{Identify contiguous high-utility edge segments along the tour using vectorized 1D circular convolution and apply block-level scaled penalties to entire sub-paths to effectively dislodge search from deep local basins.}
+
+import numpy as np
+
+def update_edge_distance(edge_distance, local_opt_tour, edge_n_used):
+    updated_edge_distance = np.copy(edge_distance)
+    n = len(local_opt_tour)
+    if n < 4:
+        return updated_edge_distance
+
+    u_idx = local_opt_tour
+    v_idx = np.roll(local_opt_tour, -1)
+
+    tour_lengths = edge_distance[u_idx, v_idx]
+    tour_counts = edge_n_used[u_idx, v_idx]
+
+    # Compute base edge utilities balancing length against prior penalty accumulation
+    edge_utilities = tour_lengths / (1.0 + tour_counts)
+
+    # Identify contiguous sub-paths by evaluating windowed segmental utility scores
+    # Window size scales with tour size to capture correlated sequences of inefficient edges
+    w = max(2, min(5, n // 8))
+    kernel = np.ones(w, dtype=np.float64)
+    extended_utils = np.concatenate([edge_utilities, edge_utilities[:w - 1]])
+    window_scores = np.convolve(extended_utils, kernel, mode='valid')
+
+    # Identify the highest-cost contiguous segment
+    best_start = int(np.argmax(window_scores))
+    segment_indices = (np.arange(best_start, best_start + w)) % n
+
+    # Also capture individual peak utility edges above a relative threshold
+    max_utility = np.max(edge_utilities)
+    peak_mask = edge_utilities >= (0.95 * max_utility)
+
+    # Combine sub-path segment and individual peak edges into a combined penalty mask
+    combined_mask = np.zeros(n, dtype=bool)
+    combined_mask[segment_indices] = True
+    combined_mask = combined_mask | peak_mask
+
+    # Calculate non-uniform penalties scaled by edge length and normalized utilities
+    avg_length = np.mean(tour_lengths)
+    base_penalties = 0.35 * avg_length * (1.0 + edge_utilities / (max_utility + 1e-12))
+
+    sel_u = u_idx[combined_mask]
+    sel_v = v_idx[combined_mask]
+    penalties = base_penalties[combined_mask]
+
+    # Apply symmetric updates to the distance matrix
+    updated_edge_distance[sel_u, sel_v] += penalties
+    updated_edge_distance[sel_v, sel_u] += penalties
+
+    return updated_edge_distance
+# ===== Eval Output =====
+[*] Running ...
+[*] mode=val, data=/home/ducanh/projects/EAs_project/MoH/problems/tsp_gls/data/val/val_instance_data_sol_20.pkl, seed=0, n_instances=8
+[*] instance_indices=[6, 9, 0, 2, 4, 3, 5, 1]
+[*] instance 6: obj=3.7045, gap=0.0000
+[*] instance 9: obj=4.1442, gap=0.0000
+[*] instance 0: obj=3.6827, gap=0.0000
+[*] instance 2: obj=3.8184, gap=0.0000
+[*] instance 4: obj=3.8385, gap=0.0000
+[*] instance 3: obj=3.6971, gap=0.0000
+[*] instance 5: obj=3.4281, gap=0.0000
+[*] instance 1: obj=3.6958, gap=0.0000
+[*] ave_gap on size 20: 1.2218318606871392e-06
+1.2218318606871392e-06

@@ -1,0 +1,85 @@
+# ===== Heuristic Code =====
+import numpy as np
+
+def update_edge_distance(edge_distance, local_opt_tour, edge_n_used):
+    updated_edge_distance = np.copy(edge_distance)
+    n = len(local_opt_tour)
+    if n < 5:
+        return updated_edge_distance
+
+    # Ordered tour indices across an asymmetric 4-hop window: p2 -> p -> u -> v -> w -> w2
+    u = np.asarray(local_opt_tour)
+    v = np.roll(u, -1)
+    p = np.roll(u, 1)
+    p2 = np.roll(u, 2)
+    w = np.roll(u, -2)
+    w2 = np.roll(u, -3)
+
+    tour_lens = edge_distance[u, v]
+    usage = edge_n_used[u, v]
+
+    # Precomputed k-NN scale estimation per node (excluding self-distance)
+    k = min(6, n - 1)
+    k_nn_dists = np.partition(edge_distance, k, axis=1)[:, 1:k]
+    node_scale = np.mean(k_nn_dists, axis=1) + 1e-6
+    cluster_scale = np.sqrt(node_scale[u] * node_scale[v])
+    bridging_ratio = tour_lens / cluster_scale
+
+    # Asymmetric 4-hop neighborhood context and local curvature deviation
+    left_context = 0.65 * edge_distance[p, u] + 0.35 * edge_distance[p2, p]
+    right_context = 0.65 * edge_distance[v, w] + 0.35 * edge_distance[w, w2]
+    local_adj_mean = 0.5 * (left_context + right_context) + 1e-6
+    slack_ratio = tour_lens / local_adj_mean
+
+    # Global normalization metrics
+    mean_l = np.mean(tour_lens) + 1e-6
+    rel_global = tour_lens / mean_l
+
+    # Composite topology score capturing structural bridge bottlenecks
+    bridge_weight = np.tanh(bridging_ratio - 1.0)
+    topology_score = 0.45 * rel_global + 0.35 * slack_ratio + 0.20 * (bridge_weight + 1.0)
+
+    # Adaptive Otsu bimodal thresholding to dynamically separate bridge edges from intra-cluster edges
+    num_bins = 64
+    counts, bin_edges = np.histogram(topology_score, bins=num_bins)
+    bin_centers = 0.5 * (bin_edges[:-1] + bin_edges[1:])
+    p_norm = counts / float(n)
+
+    omega = np.cumsum(p_norm)
+    mu = np.cumsum(p_norm * bin_centers)
+    mu_t = mu[-1]
+
+    denom = omega * (1.0 - omega)
+    valid = denom > 1e-7
+    sigma_b_squared = np.zeros_like(denom)
+    sigma_b_squared[valid] = ((mu_t * omega[valid] - mu[valid]) ** 2) / denom[valid]
+
+    best_idx = np.argmax(sigma_b_squared)
+    otsu_threshold = bin_centers[best_idx]
+
+    # Memory-guided usage dampening and Otsu-boosted penalty allocation
+    usage_factor = 1.0 / (1.0 + 0.35 * usage)
+    penalties = topology_score * usage_factor
+
+    boost_mask = topology_score >= otsu_threshold
+    penalties[boost_mask] *= 1.40
+
+    # Symmetric penalty update on the edge distance matrix
+    np.add.at(updated_edge_distance, (u, v), penalties)
+    np.add.at(updated_edge_distance, (v, u), penalties)
+
+    return updated_edge_distance
+# ===== Eval Output =====
+[*] Running ...
+[*] mode=val, data=/home/ducanh/projects/EAs_project/MoH/problems/tsp_gls/data/val/val_instance_data_sol_200.pkl, seed=0, n_instances=8
+[*] instance_indices=[6, 9, 0, 2, 4, 3, 5, 1]
+[*] instance 6: obj=10.4458, gap=0.0000
+[*] instance 9: obj=10.6814, gap=0.1720
+[*] instance 0: obj=10.8857, gap=0.0000
+[*] instance 2: obj=11.0173, gap=0.6347
+[*] instance 4: obj=10.9086, gap=0.5668
+[*] instance 3: obj=10.6191, gap=0.1622
+[*] instance 5: obj=10.9052, gap=0.1993
+[*] instance 1: obj=11.1093, gap=0.7717
+[*] ave_gap on size 200: 0.31332806614473574
+0.31332806614473574

@@ -1,0 +1,71 @@
+# ===== Heuristic Code =====
+#{A stagnation-aware guided local search penalty scheme that replaces linear counter decay with an exponential basin-frequency attenuation and recency-stagnation amplification to aggressively disrupt persistent attractor edges while preserving lightly visited transitions.}
+
+import numpy as np
+
+def update_edge_distance(edge_distance, local_opt_tour, edge_n_used):
+    updated_edge_distance = np.copy(edge_distance)
+    n = len(local_opt_tour)
+
+    # 1. Neighborhood density estimation via k-nearest neighbors
+    sorted_dists = np.sort(edge_distance, axis=1)
+    k_nn_avg = np.mean(sorted_dists[:, 1:min(6, n)], axis=1)
+    node_density = 1.0 / (k_nn_avg + 1e-6)
+    node_density = node_density / np.mean(node_density)
+
+    # Tour edges
+    u_idx = local_opt_tour
+    v_idx = np.roll(local_opt_tour, -1)
+    tour_edge_lengths = edge_distance[u_idx, v_idx]
+    avg_tour_length = np.mean(tour_edge_lengths)
+    relative_length = tour_edge_lengths / (avg_tour_length + 1e-6)
+
+    # 2. Global length penalty via smooth sigmoid ranking
+    rank_penalty = 1.0 / (1.0 + np.exp(-4.0 * (relative_length - 1.0)))
+
+    # 3. Ruin-and-Recreate: Stagnation-aware recency-frequency exponential decay
+    used_counts = edge_n_used[u_idx, v_idx].astype(np.float64)
+    mean_used = np.mean(used_counts)
+    max_used = np.max(used_counts) if len(used_counts) > 0 else 0.0
+
+    # Basin stagnation factor: escalates when max/mean visits are elevated across the current tour
+    stagnation_ratio = mean_used / (max_used + 1.0)
+    basin_pressure = 1.0 + np.tanh(stagnation_ratio * (mean_used / (1.0 + np.std(used_counts))))
+
+    # Exponential tabu-like memory decay: fast escape for transient edges, escalated penalty for persistent cycles
+    decay_rate = 0.25 / basin_pressure
+    usage_factor = np.exp(-decay_rate * used_counts) * (1.0 + 0.5 * np.tanh(used_counts / (mean_used + 1e-6)))
+
+    # 4. Local density-aware penalty
+    density_factor = 0.5 * (node_density[u_idx] + node_density[v_idx])
+    local_penalty = relative_length * usage_factor * density_factor
+
+    # 5. Adaptive global-local balance
+    w_global = 0.6 / (1.0 + 0.08 * mean_used)
+    w_local = 1.0 - w_global
+    combined_penalty = w_global * rank_penalty + w_local * local_penalty
+
+    # Enhanced punishment on longest bottleneck edges
+    threshold = np.percentile(tour_edge_lengths, 75)
+    high_penalty_mask = tour_edge_lengths >= threshold
+    combined_penalty[high_penalty_mask] *= 1.5
+
+    # Symmetric application of penalty
+    np.add.at(updated_edge_distance, (u_idx, v_idx), combined_penalty)
+    np.add.at(updated_edge_distance, (v_idx, u_idx), combined_penalty)
+
+    return updated_edge_distance
+# ===== Eval Output =====
+[*] Running ...
+[*] mode=val, data=/home/ducanh/projects/EAs_project/MoH/problems/tsp_gls/data/val/val_instance_data_sol_200.pkl, seed=0, n_instances=8
+[*] instance_indices=[6, 9, 0, 2, 4, 3, 5, 1]
+[*] instance 6: obj=10.4509, gap=0.0489
+[*] instance 9: obj=10.6630, gap=0.0000
+[*] instance 0: obj=10.8879, gap=0.0201
+[*] instance 2: obj=10.9860, gap=0.3487
+[*] instance 4: obj=10.8691, gap=0.2027
+[*] instance 3: obj=10.6134, gap=0.1087
+[*] instance 5: obj=10.9226, gap=0.3589
+[*] instance 1: obj=11.0666, gap=0.3847
+[*] ave_gap on size 200: 0.1840962502494603
+0.1840962502494603

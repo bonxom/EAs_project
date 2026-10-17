@@ -1,0 +1,70 @@
+# ===== Heuristic Code =====
+#{Replaces uniform endpoint density averaging with an asymmetric harmonic-min density tension metric that amplifies penalties on edges bridging dense clusters to sparse peripheries while maintaining global-local logistic rank penalties and top-quartile escalation.}#
+
+import numpy as np
+
+def update_edge_distance(edge_distance, local_opt_tour, edge_n_used):
+    updated_edge_distance = np.copy(edge_distance)
+    n = len(local_opt_tour)
+
+    # Compute normalized k-NN local density for all nodes
+    k = min(6, n)
+    sorted_dists = np.sort(edge_distance, axis=1)
+    k_nn_avg = np.mean(sorted_dists[:, 1:k], axis=1)
+    node_density = 1.0 / (k_nn_avg + 1e-6)
+    node_density = node_density / np.mean(node_density)
+
+    # Extract consecutive tour edges
+    u_idx = local_opt_tour
+    v_idx = np.roll(local_opt_tour, -1)
+    tour_edge_lengths = edge_distance[u_idx, v_idx]
+    avg_tour_length = np.mean(tour_edge_lengths)
+    relative_length = tour_edge_lengths / (avg_tour_length + 1e-6)
+
+    # Global logistic rank penalty
+    rank_penalty = 1.0 / (1.0 + np.exp(-4.0 * (relative_length - 1.0)))
+
+    # Usage decay factor
+    usage_factor = 1.0 / (1.0 + 0.3 * edge_n_used[u_idx, v_idx])
+
+    # Asymmetric harmonic-min density tension
+    d_u = node_density[u_idx]
+    d_v = node_density[v_idx]
+    d_max = np.maximum(d_u, d_v)
+    d_min = np.minimum(d_u, d_v)
+    harmonic_mean_density = 2.0 * d_u * d_v / (d_u + d_v + 1e-6)
+    tension_ratio = d_max / (d_min + 1e-6)
+    asymmetric_density_factor = harmonic_mean_density * np.sqrt(tension_ratio)
+
+    local_penalty = relative_length * usage_factor * asymmetric_density_factor
+
+    # Adaptive weighting between global and local penalties
+    freq_mean = np.mean(edge_n_used[u_idx, v_idx])
+    w_global = 0.6 / (1.0 + 0.1 * freq_mean)
+    w_local = 1.0 - w_global
+    combined_penalty = w_global * rank_penalty + w_local * local_penalty
+
+    # Top-quartile selective amplification
+    threshold = np.percentile(tour_edge_lengths, 75)
+    high_penalty_mask = tour_edge_lengths >= threshold
+    combined_penalty[high_penalty_mask] *= 1.5
+
+    # Symmetric in-place addition to edge distance matrix
+    np.add.at(updated_edge_distance, (u_idx, v_idx), combined_penalty)
+    np.add.at(updated_edge_distance, (v_idx, u_idx), combined_penalty)
+
+    return updated_edge_distance
+# ===== Eval Output =====
+[*] Running ...
+[*] mode=val, data=/home/ducanh/projects/EAs_project/MoH/problems/tsp_gls/data/val/val_instance_data_sol_200.pkl, seed=0, n_instances=8
+[*] instance_indices=[6, 9, 0, 2, 4, 3, 5, 1]
+[*] instance 6: obj=10.4482, gap=0.0228
+[*] instance 9: obj=10.6987, gap=0.3344
+[*] instance 0: obj=10.9053, gap=0.1800
+[*] instance 2: obj=10.9798, gap=0.2923
+[*] instance 4: obj=10.8822, gap=0.3229
+[*] instance 3: obj=10.6187, gap=0.1589
+[*] instance 5: obj=10.9161, gap=0.2994
+[*] instance 1: obj=11.1147, gap=0.8212
+[*] ave_gap on size 200: 0.30398322859408744
+0.30398322859408744

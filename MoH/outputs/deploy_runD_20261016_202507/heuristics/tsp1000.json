@@ -1,0 +1,81 @@
+{
+  "code_sha256": "e7bf0d5323244f0c607467dcea645097a21fde8deda1ec3ffde0f9311b05ed01",
+  "idea": "Replace the fragile 1-hop chord irreplaceability with a k-nearest neighbor alternative opportunity cost that contrasts tour edge lengths against low-order static geometric neighbor distances to shield structurally constrained edges and amplify escape on densely connected ones.",
+  "selection_metadata": {
+    "early_stop_reason": null,
+    "evaluation_count": 48,
+    "initialization": {
+      "accepted": 5,
+      "attempts": 5,
+      "partial": false,
+      "requested": 5
+    },
+    "iteration_errors": [],
+    "iterations_completed": 10,
+    "reference_code_hashes": [
+      "00bbc95ef7762f94c7419c28b6b1ed29d42715aa711c08cfbbe9b8db65b4c9fb",
+      "7308f07d4ebfb4ea8900a0ca224cb8b6eb5bd685887bc09c813fb4b57b721eec"
+    ],
+    "reference_source_sizes": [
+      100,
+      200
+    ],
+    "snapshots": [
+      "/home/ducanh/projects/EAs_project/MoH/outputs/deploy_runD_20261016_202507/populations/tsp1000/iter_000.json",
+      "/home/ducanh/projects/EAs_project/MoH/outputs/deploy_runD_20261016_202507/populations/tsp1000/iter_001.json",
+      "/home/ducanh/projects/EAs_project/MoH/outputs/deploy_runD_20261016_202507/populations/tsp1000/iter_002.json",
+      "/home/ducanh/projects/EAs_project/MoH/outputs/deploy_runD_20261016_202507/populations/tsp1000/iter_003.json",
+      "/home/ducanh/projects/EAs_project/MoH/outputs/deploy_runD_20261016_202507/populations/tsp1000/iter_004.json",
+      "/home/ducanh/projects/EAs_project/MoH/outputs/deploy_runD_20261016_202507/populations/tsp1000/iter_005.json",
+      "/home/ducanh/projects/EAs_project/MoH/outputs/deploy_runD_20261016_202507/populations/tsp1000/iter_006.json",
+      "/home/ducanh/projects/EAs_project/MoH/outputs/deploy_runD_20261016_202507/populations/tsp1000/iter_007.json",
+      "/home/ducanh/projects/EAs_project/MoH/outputs/deploy_runD_20261016_202507/populations/tsp1000/iter_008.json",
+      "/home/ducanh/projects/EAs_project/MoH/outputs/deploy_runD_20261016_202507/populations/tsp1000/iter_009.json"
+    ],
+    "validation": {
+      "code_sha256": "e7bf0d5323244f0c607467dcea645097a21fde8deda1ec3ffde0f9311b05ed01",
+      "dataset_sha256": "d547996b8786b97096b9af70647aa7eb245709be555038e63babbeb76bd030e8",
+      "elapsed_seconds": 30.830801253001482,
+      "error": null,
+      "failures": 0,
+      "indices": [
+        6,
+        9,
+        0,
+        2,
+        4,
+        3,
+        5,
+        1
+      ],
+      "mean_gap_pct": 2.574245575373704,
+      "mode": "val",
+      "size": 1000,
+      "status": "ok",
+      "stdout_path": "/home/ducanh/projects/EAs_project/MoH/outputs/deploy_runD_20261016_202507/evaluations/tsp1000-val-sj6qwgxz/stdout.txt"
+    }
+  },
+  "size": 1000,
+  "validation": {
+    "code_sha256": "e7bf0d5323244f0c607467dcea645097a21fde8deda1ec3ffde0f9311b05ed01",
+    "dataset_sha256": "d547996b8786b97096b9af70647aa7eb245709be555038e63babbeb76bd030e8",
+    "elapsed_seconds": 30.830801253001482,
+    "error": null,
+    "failures": 0,
+    "indices": [
+      6,
+      9,
+      0,
+      2,
+      4,
+      3,
+      5,
+      1
+    ],
+    "mean_gap_pct": 2.574245575373704,
+    "mode": "val",
+    "size": 1000,
+    "status": "ok",
+    "stdout_path": "/home/ducanh/projects/EAs_project/MoH/outputs/deploy_runD_20261016_202507/evaluations/tsp1000-val-sj6qwgxz/stdout.txt"
+  }
+}

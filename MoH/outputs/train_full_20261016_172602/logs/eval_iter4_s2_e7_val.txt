@@ -1,0 +1,101 @@
+# ===== Heuristic Code =====
+#{This strategy identifies peak-utility bottleneck edges as ruin seeds, expands them into contiguous tour sub-paths and spatial clusters to penalize intra-cluster and boundary edges simultaneously, and applies targeted discounts on promising bypass shortcuts to force complete structural reconstruction of tangled sub-tours.}#
+
+import numpy as np
+
+def update_edge_distance(edge_distance, local_opt_tour, edge_n_used):
+    updated_edge_distance = np.copy(edge_distance)
+    num_nodes = len(local_opt_tour)
+    tour = np.asarray(local_opt_tour)
+
+    u_idx = tour
+    v_idx = np.roll(tour, -1)
+    w_idx = np.roll(tour, -2)
+
+    edge_n_used *= 0.96
+
+    d_uv = edge_distance[u_idx, v_idx]
+    d_vw = edge_distance[v_idx, w_idx]
+    d_uw = edge_distance[u_idx, w_idx]
+
+    detour_ratio = (d_uv + d_vw) / (d_uw + 1e-8)
+    denom = 2.0 * d_uv * d_vw + 1e-8
+    cos_turn = np.clip((d_uv**2 + d_vw**2 - d_uw**2) / denom, -1.0, 1.0)
+    acute_deficit = 1.0 - cos_turn
+    geom_inefficiency = detour_ratio * (1.0 + 0.5 * acute_deficit)
+
+    base_dist = d_uv
+    base_freq = edge_n_used[u_idx, v_idx]
+    local_geom_factor = 0.5 * (geom_inefficiency + np.roll(geom_inefficiency, 1))
+    utilities = (base_dist / (1.0 + base_freq)) * (1.0 + 0.35 * local_geom_factor)
+
+    total_budget = max(2, int(np.ceil(0.14 * num_nodes)))
+    cluster_size = max(2, int(np.ceil(np.sqrt(total_budget))))
+    num_seeds = max(1, int(np.ceil(total_budget / cluster_size)))
+
+    sorted_order = np.argsort(utilities)[::-1]
+    global_mean_dist = np.mean(edge_distance)
+    adaptive_lambda = 0.30 * global_mean_dist
+
+    ruined_nodes = set()
+    penalized_edges = set()
+
+    for seed_idx in sorted_order:
+        if len(penalized_edges) >= total_budget:
+            break
+        if seed_idx in ruined_nodes or ((seed_idx + 1) % num_nodes) in ruined_nodes:
+            continue
+
+        half_span = cluster_size // 2
+        cluster_positions = [(seed_idx + offset) % num_nodes for offset in range(-half_span, cluster_size - half_span)]
+
+        for pos in cluster_positions:
+            ruined_nodes.add(pos)
+            u = u_idx[pos]
+            v = v_idx[pos]
+            edge_key = (min(u, v), max(u, v))
+            if edge_key not in penalized_edges:
+                penalized_edges.add(edge_key)
+                edge_n_used[u, v] += 1.0
+                edge_n_used[v, u] += 1.0
+                freq_penalty = 1.0 + np.log1p(edge_n_used[u, v])
+                geom_weight = 1.0 + 0.5 * local_geom_factor[pos]
+                penalty = adaptive_lambda * freq_penalty * geom_weight
+                updated_edge_distance[u, v] += penalty
+                updated_edge_distance[v, u] += penalty
+
+        # Cross-penalize internal chords within the ruined cluster to avoid simple intra-cluster flips
+        for i in range(len(cluster_positions)):
+            for j in range(i + 2, len(cluster_positions)):
+                ci = u_idx[cluster_positions[i]]
+                cj = u_idx[cluster_positions[j]]
+                chord_penalty = 0.5 * adaptive_lambda
+                updated_edge_distance[ci, cj] += chord_penalty
+                updated_edge_distance[cj, ci] += chord_penalty
+
+    k_shortcuts = max(1, int(np.ceil(0.14 * num_nodes)))
+    high_detour_indices = np.argsort(detour_ratio)[-k_shortcuts:]
+    for idx in high_detour_indices:
+        u, w = u_idx[idx], w_idx[idx]
+        shortcut_cost = edge_distance[u, w]
+        freq = edge_n_used[u, w]
+        if freq < 1.0:
+            discount = 0.10 * global_mean_dist * (1.0 / (1.0 + freq))
+            updated_edge_distance[u, w] = max(1e-6, updated_edge_distance[u, w] - discount)
+            updated_edge_distance[w, u] = updated_edge_distance[u, w]
+
+    return updated_edge_distance
+# ===== Eval Output =====
+[*] Running ...
+[*] mode=val, data=/home/ducanh/projects/EAs_project/MoH/problems/tsp_gls/data/val/val_instance_data_sol_100.pkl, seed=0, n_instances=8
+[*] instance_indices=[6, 9, 0, 2, 4, 3, 5, 1]
+[*] instance 6: obj=7.7596, gap=0.0000
+[*] instance 9: obj=8.0684, gap=0.3123
+[*] instance 0: obj=8.0001, gap=0.0000
+[*] instance 2: obj=8.0739, gap=0.0000
+[*] instance 4: obj=7.8131, gap=0.0000
+[*] instance 3: obj=7.3713, gap=0.0000
+[*] instance 5: obj=7.6365, gap=0.0000
+[*] instance 1: obj=7.5570, gap=0.0000
+[*] ave_gap on size 100: 0.03903527114908212
+0.03903527114908212

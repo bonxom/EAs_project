@@ -1,0 +1,108 @@
+# ===== Heuristic Code =====
+#{An adaptive Guided Local Search penalty mechanism replacing static multiplicative utilities with an entropy-weighted multi-criteria Borda ranking combining relative incident-edge regret, persistent frequency memory, and geometric inefficiency, paired with dual-action shortcut reward incentives.}#
+
+import numpy as np
+
+def update_edge_distance(edge_distance, local_opt_tour, edge_n_used):
+    updated_edge_distance = np.copy(edge_distance)
+    num_nodes = len(local_opt_tour)
+    tour = np.asarray(local_opt_tour)
+
+    u_idx = tour
+    v_idx = np.roll(tour, -1)
+    w_idx = np.roll(tour, -2)
+
+    # Frequency memory decay
+    edge_n_used *= 0.96
+
+    # Extract tour edge distances
+    d_uv = edge_distance[u_idx, v_idx]
+    d_vw = edge_distance[v_idx, w_idx]
+    d_uw = edge_distance[u_idx, w_idx]
+
+    # Geometric turn and detour metrics
+    detour_ratio = (d_uv + d_vw) / (d_uw + 1e-8)
+    denom = 2.0 * d_uv * d_vw + 1e-8
+    cos_turn = np.clip((d_uv**2 + d_vw**2 - d_uw**2) / denom, -1.0, 1.0)
+    acute_deficit = 1.0 - cos_turn
+    geom_inefficiency = detour_ratio * (1.0 + 0.5 * acute_deficit)
+    local_geom = 0.5 * (geom_inefficiency + np.roll(geom_inefficiency, 1))
+
+    # 1. Regret-based edge length criterion relative to incident neighborhood
+    # Compute softmin / min-incident baseline approximation for u and v
+    # Fast row-wise percentile or k-nearest neighbor minimum surrogate
+    deg_k = min(5, max(2, num_nodes - 1))
+    # Approximate incident baseline efficiently without full matrix sort
+    incident_u = np.partition(edge_distance[u_idx], deg_k, axis=1)[:, 1:deg_k]
+    incident_v = np.partition(edge_distance[v_idx], deg_k, axis=1)[:, 1:deg_k]
+    base_u = np.mean(incident_u, axis=1)
+    base_v = np.mean(incident_v, axis=1)
+    incident_baseline = 0.5 * (base_u + base_v) + 1e-8
+    edge_regret = d_uv / incident_baseline
+
+    # 2. Persistence frequency criterion
+    base_freq = edge_n_used[u_idx, v_idx]
+    freq_metric = 1.0 / (1.0 + base_freq)
+
+    # 3. Geometric inefficiency criterion
+    geom_metric = local_geom
+
+    # Fractional ranking normalization (0 to 1) for the three criteria
+    r_regret = np.argsort(np.argsort(edge_regret)).astype(np.float64) / max(1, num_nodes - 1)
+    r_freq = np.argsort(np.argsort(freq_metric)).astype(np.float64) / max(1, num_nodes - 1)
+    r_geom = np.argsort(np.argsort(geom_metric)).astype(np.float64) / max(1, num_nodes - 1)
+
+    # Entropy-weighted Borda fusion across the criteria
+    criteria_matrix = np.column_stack([r_regret, r_freq, r_geom]) + 1e-6
+    col_sums = np.sum(criteria_matrix, axis=0, keepdims=True)
+    p = criteria_matrix / col_sums
+    entropy = -np.sum(p * np.log(p), axis=0) / np.log(num_nodes)
+    dispersion = 1.0 - entropy
+    weights = (dispersion + 1e-3) / (np.sum(dispersion) + 3e-3)
+
+    borda_utility = criteria_matrix @ weights
+
+    # Selection budget
+    k = max(1, int(np.ceil(0.14 * num_nodes)))
+    top_k_indices = np.argsort(borda_utility)[-k:]
+
+    global_mean_dist = np.mean(edge_distance)
+    adaptive_lambda = 0.30 * global_mean_dist
+
+    # Penalize inefficient edges with regret-scaled penalty
+    for idx in top_k_indices:
+        u, v = u_idx[idx], v_idx[idx]
+        edge_n_used[u, v] += 1.0
+        edge_n_used[v, u] += 1.0
+        freq_penalty = 1.0 + np.log1p(edge_n_used[u, v])
+        geom_weight = 1.0 + 0.5 * local_geom[idx]
+        regret_weight = np.clip(edge_regret[idx], 0.5, 2.5)
+        penalty = adaptive_lambda * freq_penalty * geom_weight * (0.5 + 0.5 * regret_weight)
+        updated_edge_distance[u, v] += penalty
+        updated_edge_distance[v, u] += penalty
+
+    # Dual-action reward for promising shortcut/cross edges
+    high_detour_indices = np.argsort(detour_ratio)[-k:]
+    for idx in high_detour_indices:
+        u, w = u_idx[idx], w_idx[idx]
+        freq = edge_n_used[u, w]
+        if freq < 1.0:
+            discount = 0.10 * global_mean_dist * (1.0 / (1.0 + freq))
+            updated_edge_distance[u, w] = max(1e-6, updated_edge_distance[u, w] - discount)
+            updated_edge_distance[w, u] = updated_edge_distance[u, w]
+
+    return updated_edge_distance
+# ===== Eval Output =====
+[*] Running ...
+[*] mode=val, data=/home/ducanh/projects/EAs_project/MoH/problems/tsp_gls/data/val/val_instance_data_sol_100.pkl, seed=0, n_instances=8
+[*] instance_indices=[6, 9, 0, 2, 4, 3, 5, 1]
+[*] instance 6: obj=7.7627, gap=0.0399
+[*] instance 9: obj=8.0699, gap=0.3302
+[*] instance 0: obj=8.0333, gap=0.4154
+[*] instance 2: obj=8.0739, gap=0.0000
+[*] instance 4: obj=7.8131, gap=0.0000
+[*] instance 3: obj=7.3713, gap=0.0000
+[*] instance 5: obj=7.6365, gap=0.0000
+[*] instance 1: obj=7.5628, gap=0.0756
+[*] ave_gap on size 100: 0.10764077013666051
+0.10764077013666051

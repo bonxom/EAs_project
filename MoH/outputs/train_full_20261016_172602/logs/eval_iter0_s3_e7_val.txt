@@ -1,0 +1,73 @@
+# ===== Heuristic Code =====
+# {Penalizes edges using a hybrid topological score combining geometric cluster bridging scale and 2-hop curvature ratios with frequency-discounted logistic shaping.}
+
+import numpy as np
+
+def update_edge_distance(edge_distance, local_opt_tour, edge_n_used):
+    updated_edge_distance = np.copy(edge_distance)
+    n = len(local_opt_tour)
+
+    u = local_opt_tour
+    v = np.roll(local_opt_tour, -1)
+    p = np.roll(local_opt_tour, 1)
+    w = np.roll(local_opt_tour, -2)
+
+    tour_lens = edge_distance[u, v]
+    usage = edge_n_used[u, v]
+
+    # Fast k-NN scale estimation using partition
+    k = min(6, n - 1)
+    k_nn_dists = np.partition(edge_distance, k, axis=1)[:, 1:k]
+    node_scale = np.mean(k_nn_dists, axis=1) + 1e-6
+
+    # Geometric bridging ratio
+    cluster_scale = np.sqrt(node_scale[u] * node_scale[v])
+    bridging_ratio = tour_lens / cluster_scale
+
+    # Curvature / slack ratio via 2-hop alternate path context
+    two_hop_context = 0.5 * (edge_distance[p, v] + edge_distance[u, w]) + 1e-6
+    curvature_ratio = tour_lens / two_hop_context
+
+    mean_len = np.mean(tour_lens) + 1e-6
+    rel_len = tour_lens / mean_len
+
+    # Curvature-informed logistic saturation penalty
+    steepness = 3.0 + 2.0 * np.clip(curvature_ratio, 0.5, 2.0)
+    rank_penalty = 1.0 / (1.0 + np.exp(-steepness * (rel_len - 1.0)))
+
+    # Topological density & bridging factor
+    bridge_factor = np.clip(bridging_ratio / (np.mean(bridging_ratio) + 1e-6), 0.2, 3.0)
+
+    # Usage discount
+    usage_factor = 1.0 / (1.0 + 0.35 * usage)
+
+    # Adaptive balancing between structural curvature-rank penalty and bridging penalty
+    freq_mean = np.mean(usage)
+    w_global = 0.55 / (1.0 + 0.08 * freq_mean)
+    w_bridge = 1.0 - w_global
+
+    base_penalty = (w_global * rank_penalty + w_bridge * (rel_len * bridge_factor)) * usage_factor
+
+    # Selective boost for top percentile rupture candidates
+    cutoff = np.percentile(base_penalty, 75)
+    boost_mask = base_penalty >= cutoff
+    base_penalty[boost_mask] *= 1.45
+
+    np.add.at(updated_edge_distance, (u, v), base_penalty)
+    np.add.at(updated_edge_distance, (v, u), base_penalty)
+
+    return updated_edge_distance
+# ===== Eval Output =====
+[*] Running ...
+[*] mode=val, data=/home/ducanh/projects/EAs_project/MoH/problems/tsp_gls/data/val/val_instance_data_sol_200.pkl, seed=0, n_instances=8
+[*] instance_indices=[6, 9, 0, 2, 4, 3, 5, 1]
+[*] instance 6: obj=10.4528, gap=0.0671
+[*] instance 9: obj=10.6814, gap=0.1720
+[*] instance 0: obj=10.8991, gap=0.1232
+[*] instance 2: obj=10.9875, gap=0.3625
+[*] instance 4: obj=10.8776, gap=0.2804
+[*] instance 3: obj=10.6160, gap=0.1329
+[*] instance 5: obj=10.9578, gap=0.6818
+[*] instance 1: obj=11.0620, gap=0.3425
+[*] ave_gap on size 200: 0.2702887092997902
+0.2702887092997902

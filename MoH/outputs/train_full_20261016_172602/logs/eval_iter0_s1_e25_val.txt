@@ -1,0 +1,96 @@
+# ===== Heuristic Code =====
+#{The algorithm detects persistent contiguous sub-tour segments using combined usage counts across 2-edge and 3-edge chains, imposes super-linear penalties on these rigid chains to disrupt stubborn local structures, and strategically discounts orthogonal shortcuts bypassing the penalized segments.}#
+
+import numpy as np
+
+def update_edge_distance(edge_distance, local_opt_tour, edge_n_used):
+    # Step 1: Initialize by creating an explicit copy of the distance matrix
+    updated_edge_distance = np.copy(edge_distance)
+    n = len(local_opt_tour)
+    if n < 4:
+        return updated_edge_distance
+
+    tour = np.array(local_opt_tour, dtype=np.intp)
+    u_idx = tour
+    v_idx = np.roll(tour, -1)
+    w_idx = np.roll(tour, -2)
+
+    # Step 2: Extract base metrics along the tour
+    e_costs = edge_distance[u_idx, v_idx].astype(np.float64)
+    e_used = edge_n_used[u_idx, v_idx].astype(np.float64)
+
+    # Step 3: Compute contiguous 2-edge and 3-edge sub-path persistence scores
+    # Chain usage aggregates co-occurrence across consecutive edges
+    e_used_next = np.roll(e_used, -1)
+    chain_used_2 = np.minimum(e_used, e_used_next)
+
+    e_used_prev = np.roll(e_used, 1)
+    chain_used_3 = np.minimum(np.minimum(e_used_prev, e_used), e_used_next)
+
+    # Persistent sub-tour score combines individual edge utilities and chain durability
+    mean_cost = np.mean(e_costs)
+    std_cost = np.std(e_costs) + 1e-8
+    rel_cost = (e_costs - mean_cost) / std_cost
+    cost_weight = 1.0 / (1.0 + np.exp(-rel_cost))
+
+    # Super-linear penalty factor based on persistent sub-structures
+    persistence_factor = 1.0 + np.power(chain_used_2 / (1.0 + np.mean(chain_used_2) + 1e-8), 1.5)
+    utilities = e_costs * (1.0 + cost_weight) * persistence_factor / (1.0 + np.sqrt(e_used + 1.0))
+
+    threshold = np.median(utilities)
+    penalize_mask = utilities >= threshold
+
+    # Step 4: Apply super-linear penalties to stubborn segments
+    p_u = u_idx[penalize_mask]
+    p_v = v_idx[penalize_mask]
+    p_costs = e_costs[penalize_mask]
+    p_used = e_used[penalize_mask]
+    p_pers = persistence_factor[penalize_mask]
+
+    penalties = (p_costs / (1.0 + np.sqrt(p_used + 1.0))) * p_pers
+    updated_edge_distance[p_u, p_v] += penalties
+    updated_edge_distance[p_v, p_u] += penalties
+
+    # Step 5: Dual-memory fragmentation - incentivize orthogonal shortcuts skipping persistent chains
+    # For sub-chains u -> v -> w with high 2-edge persistence, discount the bypassing shortcut (u, w)
+    bypass_mask = chain_used_2 >= np.median(chain_used_2)
+    b_u = u_idx[bypass_mask]
+    b_w = w_idx[bypass_mask]
+
+    # Discount bypass chords that have been rarely explored to induce structural mutation
+    bypass_used = edge_n_used[b_u, b_w]
+    rare_bypass_mask = bypass_used <= np.median(bypass_used)
+
+    rb_u = b_u[rare_bypass_mask]
+    rb_w = b_w[rare_bypass_mask]
+    discount = 0.05 * updated_edge_distance[rb_u, rb_w] / (1.0 + bypass_used[rare_bypass_mask])
+
+    updated_edge_distance[rb_u, rb_w] -= discount
+    updated_edge_distance[rb_w, rb_u] -= discount
+
+    # Step 6: Decay completely unvisited edges linked to penalized endpoints
+    penalized_nodes = np.unique(np.concatenate((p_u, p_v)))
+    decay_ratio = 0.02
+    for node in penalized_nodes:
+        unused_mask = (edge_n_used[node] == 0)
+        unused_mask[node] = False
+        if np.any(unused_mask):
+            current_vals = updated_edge_distance[node, unused_mask]
+            updated_edge_distance[node, unused_mask] -= current_vals * decay_ratio
+            updated_edge_distance[unused_mask, node] = updated_edge_distance[node, unused_mask]
+
+    return updated_edge_distance
+# ===== Eval Output =====
+[*] Running ...
+[*] mode=val, data=/home/ducanh/projects/EAs_project/MoH/problems/tsp_gls/data/val/val_instance_data_sol_50.pkl, seed=0, n_instances=8
+[*] instance_indices=[6, 9, 0, 2, 4, 3, 5, 1]
+[*] instance 6: obj=5.7136, gap=0.5983
+[*] instance 9: obj=5.9639, gap=0.0000
+[*] instance 0: obj=5.7978, gap=0.3373
+[*] instance 2: obj=5.8071, gap=0.0000
+[*] instance 4: obj=5.3965, gap=0.0000
+[*] instance 3: obj=5.7569, gap=0.0000
+[*] instance 5: obj=5.6187, gap=0.0000
+[*] instance 1: obj=5.1651, gap=0.0000
+[*] ave_gap on size 50: 0.11694945388892874
+0.11694945388892874

@@ -1,0 +1,77 @@
+# ===== Heuristic Code =====
+#{A guided local search heuristic that approximates Held-Karp node potentials to compute reduced-cost edge slacks and targets trapped, high-slack edges along the tour with structured adaptive penalties modulated by k-nearest-neighbor topological sparsity.}#
+
+import numpy as np
+
+def update_edge_distance(edge_distance, local_opt_tour, edge_n_used):
+    # Step 1: Copy distance matrix to preserve original data
+    updated_edge_distance = np.copy(edge_distance)
+    num_nodes = len(local_opt_tour)
+    if num_nodes <= 2:
+        return updated_edge_distance
+
+    # Step 2: Identify active edges in the current local optimum tour
+    u_idx = np.asarray(local_opt_tour)
+    v_idx = np.roll(u_idx, -1)
+    tour_distances = edge_distance[u_idx, v_idx]
+    tour_counts = edge_n_used[u_idx, v_idx]
+
+    # Step 3: Compute surrogate Held-Karp / 1-tree Lagrangean multipliers (node potentials)
+    # Approximate dual node potentials via the average of the k-nearest incident edges
+    k_neighbors = min(4, num_nodes - 1)
+    sorted_dists = np.partition(edge_distance, kth=k_neighbors, axis=1)[:, 1:k_neighbors + 1]
+    pi = 0.5 * np.mean(sorted_dists, axis=1)
+
+    # Step 4: Compute reduced cost slacks for tour edges: c_ij - pi_i - pi_j
+    # Edges with higher positive slack deviate more from the lower-bound relaxation backbone
+    slack = tour_distances - (pi[u_idx] + pi[v_idx])
+    slack_positive = np.maximum(slack, 0.0)
+
+    # Step 5: Guided Local Search edge utility with reduced cost slack scaling
+    # Penalize edges that have high raw distance and high slack relative to usage frequency
+    utilities = (tour_distances + 0.5 * slack_positive) / (1.0 + tour_counts)
+    max_util = np.max(utilities)
+    max_mask = np.isclose(utilities, max_util, rtol=1e-5, atol=1e-8)
+
+    # Increment usage counts symmetrically for the identified bottleneck edges
+    for i in range(num_nodes):
+        if max_mask[i]:
+            u, v = u_idx[i], v_idx[i]
+            edge_n_used[u, v] += 1
+            edge_n_used[v, u] += 1
+
+    # Step 6: Construct topological sparsity bounds using symmetric k-NN neighborhood
+    k_nn = min(8, num_nodes - 1)
+    knn_thresholds = np.partition(edge_distance, kth=k_nn, axis=1)[:, k_nn]
+    knn_mask = (edge_distance <= knn_thresholds[:, None]) | (edge_distance <= knn_thresholds[None, :])
+    sparsity_factor = np.where(knn_mask, 0.85, 1.40)
+
+    # Step 7: Calculate adaptive penalty scale based on tour scale and stagnation
+    mean_tour_dist = np.mean(tour_distances)
+    updated_counts = edge_n_used[u_idx, v_idx]
+    stagnation_ratio = np.mean(updated_counts > 1.0)
+    penalty_base = (0.15 + 0.15 * stagnation_ratio) * mean_tour_dist
+
+    # Step 8: Apply metric-structured penalty modulated by slack and edge usage
+    reduced_cost_matrix = edge_distance - (pi[:, None] + pi[None, :])
+    norm_reduced_cost = 1.0 + np.tanh(np.maximum(reduced_cost_matrix, 0.0) / (mean_tour_dist + 1e-12))
+
+    penalty_matrix = penalty_base * edge_n_used * sparsity_factor * norm_reduced_cost
+    np.fill_diagonal(penalty_matrix, 0.0)
+    updated_edge_distance += penalty_matrix
+
+    return updated_edge_distance
+# ===== Eval Output =====
+[*] Running ...
+[*] mode=val, data=/home/ducanh/projects/EAs_project/MoH/problems/tsp_gls/data/val/val_instance_data_sol_100.pkl, seed=0, n_instances=8
+[*] instance_indices=[6, 9, 0, 2, 4, 3, 5, 1]
+[*] instance 6: obj=7.8855, gap=1.6224
+[*] instance 9: obj=8.1217, gap=0.9744
+[*] instance 0: obj=8.1682, gap=2.1009
+[*] instance 2: obj=8.0900, gap=0.1994
+[*] instance 4: obj=8.0184, gap=2.6273
+[*] instance 3: obj=7.5242, gap=2.0730
+[*] instance 5: obj=7.6365, gap=0.0000
+[*] instance 1: obj=7.5761, gap=0.2525
+[*] ave_gap on size 100: 1.2312334988515277
+1.2312334988515277

@@ -1,0 +1,91 @@
+# ===== Heuristic Code =====
+#{This algorithm identifies coherent high-curvature tour subpaths via consecutive edge utility convolutions and penalizes entire path segments simultaneously, combined with a rank-one Laplacian potential field shift on affected nodes to warp distances globally and escape local optima.}#
+
+import numpy as np
+
+def update_edge_distance(edge_distance, local_opt_tour, edge_n_used):
+    updated_edge_distance = np.copy(edge_distance)
+    n = len(local_opt_tour)
+    if n < 4:
+        return updated_edge_distance
+
+    tour = np.array(local_opt_tour, dtype=np.intp)
+    u_idx = tour
+    v_idx = np.roll(tour, -1)
+
+    costs = edge_distance[u_idx, v_idx].astype(np.float64)
+    used = edge_n_used[u_idx, v_idx].astype(np.float64)
+
+    # Edge-level utility based on cost and historical frequency
+    mean_cost = np.mean(costs)
+    norm_cost = costs / (mean_cost + 1e-12)
+    edge_utilities = norm_cost / (1.0 + np.sqrt(used + 1.0))
+
+    # Identify coherent high-curvature subpaths via cyclic moving window convolution
+    k = max(2, min(5, n // 4))
+    kernel = np.ones(k, dtype=np.float64) / k
+    ext_utils = np.concatenate((edge_utilities, edge_utilities[:k - 1]))
+    subpath_utilities = np.convolve(ext_utils, kernel, mode='valid')
+
+    # Select candidate subpaths above median utility
+    threshold = np.median(subpath_utilities)
+    hot_windows = np.where(subpath_utilities >= threshold)[0]
+
+    # Non-overlapping greedy selection of prominent chains
+    sorted_order = np.argsort(-subpath_utilities[hot_windows])
+    selected_edges = np.zeros(n, dtype=bool)
+    selected_nodes = np.zeros(n, dtype=bool)
+
+    for idx in hot_windows[sorted_order]:
+        window_indices = (idx + np.arange(k)) % n
+        if not np.any(selected_edges[window_indices]):
+            selected_edges[window_indices] = True
+            for w in window_indices:
+                selected_nodes[u_idx[w]] = True
+                selected_nodes[v_idx[w]] = True
+
+    # Subpath contour penalization
+    p_u = u_idx[selected_edges]
+    p_v = v_idx[selected_edges]
+    p_costs = costs[selected_edges]
+    p_utils = edge_utilities[selected_edges]
+    max_util = np.max(p_utils) if len(p_utils) > 0 else 1.0
+
+    penalties = 0.5 * p_costs * (1.0 + (p_utils / (max_util + 1e-12)))
+    updated_edge_distance[p_u, p_v] += penalties
+    updated_edge_distance[p_v, p_u] += penalties
+
+    # Global distance metric restructuring via rank-one Laplacian potential field shift
+    # Shifts metric around ruptured subpath nodes to create directional gradients toward unexplored nodes
+    potential = np.zeros(edge_distance.shape[0], dtype=np.float64)
+    active_nodes = np.where(selected_nodes)[0]
+    if len(active_nodes) > 0:
+        # Potential proportional to the node's participation in penalized chains
+        node_penalties = np.zeros(edge_distance.shape[0], dtype=np.float64)
+        np.add.at(node_penalties, p_u, penalties)
+        np.add.at(node_penalties, p_v, penalties)
+
+        max_np = np.max(node_penalties)
+        if max_np > 0:
+            potential = (node_penalties / max_np) * (0.05 * mean_cost)
+
+        # Apply low-rank metric shift: D_new(i, j) = max(0, D(i, j) + P_i - P_j) symmetrized
+        potential_diff = np.abs(potential[:, None] - potential[None, :])
+        updated_edge_distance += potential_diff
+        np.fill_diagonal(updated_edge_distance, 0.0)
+
+    return updated_edge_distance
+# ===== Eval Output =====
+[*] Running ...
+[*] mode=val, data=/home/ducanh/projects/EAs_project/MoH/problems/tsp_gls/data/val/val_instance_data_sol_50.pkl, seed=0, n_instances=8
+[*] instance_indices=[6, 9, 0, 2, 4, 3, 5, 1]
+[*] instance 6: obj=5.6796, gap=0.0000
+[*] instance 9: obj=5.9639, gap=0.0000
+[*] instance 0: obj=5.7783, gap=0.0000
+[*] instance 2: obj=5.8071, gap=0.0000
+[*] instance 4: obj=5.3965, gap=0.0000
+[*] instance 3: obj=5.7569, gap=0.0000
+[*] instance 5: obj=5.6187, gap=0.0000
+[*] instance 1: obj=5.1651, gap=0.0000
+[*] ave_gap on size 50: 2.528279113844789e-06
+2.528279113844789e-06

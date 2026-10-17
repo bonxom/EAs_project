@@ -1,0 +1,82 @@
+# ===== Heuristic Code =====
+#{Applies non-monotonic global penalty evaporation combined with fatigue-driven exponential surge penalties on persistent tour edges alongside compensatory discounts on incident unvisited alternatives to shatter cyclic traps and stagnation.}#
+
+import numpy as np
+
+def update_edge_distance(edge_distance, local_opt_tour, edge_n_used):
+    updated_edge_distance = np.copy(edge_distance)
+    n = len(local_opt_tour)
+    if n < 3:
+        return updated_edge_distance
+
+    # Global penalty evaporation: slightly compress over-inflated distances back toward base geometry
+    # to prevent unbounded monotonic penalty accumulation while preserving learned structural bias
+    max_used_all = np.max(edge_n_used)
+    if max_used_all > 0:
+        evaporation_rate = 0.015 * (1.0 / (1.0 + np.exp(-max_used_all / 20.0)))
+        # Symmetrically dissipate perturbed edges
+        perturbed_mask = edge_n_used > 0
+        updated_edge_distance[perturbed_mask] *= (1.0 - evaporation_rate)
+
+    # Extract current local tour edges
+    u_idx = np.array(local_opt_tour, dtype=np.intp)
+    v_idx = np.roll(u_idx, -1)
+
+    costs = updated_edge_distance[u_idx, v_idx].astype(np.float64)
+    used = edge_n_used[u_idx, v_idx].astype(np.float64)
+
+    # Core utility evaluation: Z-score sigmoid cost weighting modulated by usage frequency
+    mean_cost = np.mean(costs)
+    std_cost = np.std(costs) + 1e-8
+    z_scores = (costs - mean_cost) / std_cost
+    weights = 1.0 / (1.0 + np.exp(-z_scores))
+    utilities = (costs * (1.0 + weights)) / (1.0 + np.sqrt(used))
+
+    threshold = np.median(utilities)
+    max_util = np.max(utilities) + 1e-8
+    penalize_mask = utilities >= threshold
+
+    p_u = u_idx[penalize_mask]
+    p_v = v_idx[penalize_mask]
+    p_costs = costs[penalize_mask]
+    p_used = used[penalize_mask]
+    p_utils = utilities[penalize_mask]
+
+    # Fatigue memory with non-linear surge: repeatedly re-emerging edges suffer exponential surge
+    # to decisively kick the search out of periodic limit cycles and deep local trap basins
+    fatigue_factor = np.exp(np.clip(p_used / (np.mean(used) + 1.0), 0.0, 3.0)) - 1.0
+    base_penalties = (p_costs / (1.0 + np.sqrt(p_used + 1.0))) * (1.0 + p_utils / max_util)
+    surge_penalties = base_penalties * (1.0 + 0.5 * fatigue_factor)
+
+    updated_edge_distance[p_u, p_v] += surge_penalties
+    updated_edge_distance[p_v, p_u] += surge_penalties
+
+    # Compensatory exploration incentives on under-explored alternatives incident to penalized nodes
+    penalized_nodes = np.unique(np.concatenate((p_u, p_v)))
+    decay_ratio = 0.025
+    for u in penalized_nodes:
+        unused_mask = (edge_n_used[u] == 0)
+        unused_mask[u] = False
+        if np.any(unused_mask):
+            current_vals = updated_edge_distance[u, unused_mask]
+            discount = current_vals * decay_ratio
+            updated_edge_distance[u, unused_mask] -= discount
+            updated_edge_distance[unused_mask, u] -= discount
+
+    # Symmetrize diagonal integrity
+    np.fill_diagonal(updated_edge_distance, 0.0)
+    return updated_edge_distance
+# ===== Eval Output =====
+[*] Running ...
+[*] mode=val, data=/home/ducanh/projects/EAs_project/MoH/problems/tsp_gls/data/val/val_instance_data_sol_50.pkl, seed=0, n_instances=8
+[*] instance_indices=[6, 9, 0, 2, 4, 3, 5, 1]
+[*] instance 6: obj=5.7136, gap=0.5983
+[*] instance 9: obj=5.9639, gap=0.0000
+[*] instance 0: obj=5.7783, gap=0.0000
+[*] instance 2: obj=5.8071, gap=0.0000
+[*] instance 4: obj=5.3965, gap=0.0000
+[*] instance 3: obj=5.7569, gap=0.0000
+[*] instance 5: obj=5.6187, gap=0.0000
+[*] instance 1: obj=5.1651, gap=0.0000
+[*] ave_gap on size 50: 0.07478878681544121
+0.07478878681544121

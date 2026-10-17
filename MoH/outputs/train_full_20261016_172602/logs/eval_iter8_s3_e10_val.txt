@@ -1,0 +1,58 @@
+# ===== Heuristic Code =====
+#{Replaces heuristic ranking with an information-theoretic regret formulation that scales edge penalties by the opportunity cost relative to best incident alternatives, normalized by local dispersion and usage frequency.}
+
+import numpy as np
+
+def update_edge_distance(edge_distance, local_opt_tour, edge_n_used):
+    updated_edge_distance = np.copy(edge_distance)
+    n = len(local_opt_tour)
+
+    u_idx = local_opt_tour
+    v_idx = np.roll(local_opt_tour, -1)
+
+    # Extract distances of current tour edges
+    current_edge_dists = edge_distance[u_idx, v_idx]
+
+    # Calculate k-nearest neighbor reference and local dispersion for each node
+    k = min(5, n - 1)
+    sorted_dists = np.partition(edge_distance, kth=k, axis=1)[:, 1:k+1]
+    best_alt_dist = sorted_dists[:, 0]
+    local_dispersion = np.std(sorted_dists, axis=1) + 1e-6
+
+    # Regret computation: opportunity cost of utilizing (u, v) instead of best incident alternative
+    # Evaluated symmetrically across both endpoints
+    regret_u = np.maximum(0.0, current_edge_dists - best_alt_dist[u_idx]) / local_dispersion[u_idx]
+    regret_v = np.maximum(0.0, current_edge_dists - best_alt_dist[v_idx]) / local_dispersion[v_idx]
+    net_regret = 0.5 * (regret_u + regret_v)
+
+    # Information-theoretic scaling: amplify penalty when high regret coincides with low alternative entropy
+    dispersion_factor = 1.0 / (0.5 * (local_dispersion[u_idx] + local_dispersion[v_idx]))
+    norm_dispersion = dispersion_factor / (np.mean(dispersion_factor) + 1e-6)
+
+    # Standard GLS frequency regularizer to prevent cycling
+    freq = edge_n_used[u_idx, v_idx]
+    usage_attenuation = 1.0 / (1.0 + freq)
+
+    # Base penalty proportional to mean tour length to keep dimensional consistency
+    avg_tour_dist = np.mean(current_edge_dists) + 1e-6
+    penalty = (avg_tour_dist * 0.1) * net_regret * norm_dispersion * usage_attenuation
+
+    # Apply symmetric updates to distance matrix
+    np.add.at(updated_edge_distance, (u_idx, v_idx), penalty)
+    np.add.at(updated_edge_distance, (v_idx, u_idx), penalty)
+
+    return updated_edge_distance
+# ===== Eval Output =====
+[*] Running ...
+[*] mode=val, data=/home/ducanh/projects/EAs_project/MoH/problems/tsp_gls/data/val/val_instance_data_sol_200.pkl, seed=0, n_instances=8
+[*] instance_indices=[6, 9, 0, 2, 4, 3, 5, 1]
+[*] instance 6: obj=10.8195, gap=3.5775
+[*] instance 9: obj=10.9595, gap=2.7805
+[*] instance 0: obj=11.4240, gap=4.9448
+[*] instance 2: obj=11.2182, gap=2.4702
+[*] instance 4: obj=11.0696, gap=2.0506
+[*] instance 3: obj=10.8628, gap=2.4615
+[*] instance 5: obj=11.2178, gap=3.0709
+[*] instance 1: obj=11.3711, gap=3.1463
+[*] ave_gap on size 200: 3.0627791877315067
+3.0627791877315067

@@ -1,0 +1,76 @@
+# ===== Heuristic Code =====
+#{This heuristic enhances GLS edge penalization by integrating 4-point sequential tour context, comparing each edge's length against its immediate predecessor and successor edges to disproportionately penalize edges with high local slack alongside k-NN density and usage factors.}
+
+import numpy as np
+
+def update_edge_distance(edge_distance, local_opt_tour, edge_n_used):
+    updated_edge_distance = np.copy(edge_distance)
+    n = len(local_opt_tour)
+    if n < 4:
+        return updated_edge_distance
+
+    # Calculate k-NN density scale
+    k = min(6, n - 1)
+    sorted_dists = np.sort(edge_distance, axis=1)
+    k_nn_avg = np.mean(sorted_dists[:, 1:k + 1], axis=1)
+    node_density = 1.0 / (k_nn_avg + 1e-6)
+    node_density = node_density / np.mean(node_density)
+
+    # 4-point sequential tour context: p -> u -> v -> w
+    p_idx = np.roll(local_opt_tour, 1)
+    u_idx = local_opt_tour
+    v_idx = np.roll(local_opt_tour, -1)
+    w_idx = np.roll(local_opt_tour, -2)
+
+    tour_edge_lengths = edge_distance[u_idx, v_idx]
+    prev_lengths = edge_distance[p_idx, u_idx]
+    next_lengths = edge_distance[v_idx, w_idx]
+
+    # Global relative length
+    avg_tour_length = np.mean(tour_edge_lengths)
+    relative_length = tour_edge_lengths / (avg_tour_length + 1e-6)
+    rank_penalty = 1.0 / (1.0 + np.exp(-4.0 * (relative_length - 1.0)))
+
+    # Local context slack ratio (edge compared to adjacent path neighbors)
+    local_adj_mean = 0.5 * (prev_lengths + next_lengths)
+    slack_ratio = tour_edge_lengths / (local_adj_mean + 1e-6)
+    slack_factor = np.clip(slack_ratio, 0.5, 3.0)
+
+    # Usage and density modulation
+    usage = edge_n_used[u_idx, v_idx]
+    usage_factor = 1.0 / (1.0 + 0.3 * usage)
+    density_factor = 0.5 * (node_density[u_idx] + node_density[v_idx])
+
+    # Reconstructed local penalty blending relative length, slack ratio, usage, and density
+    local_penalty = relative_length * slack_factor * usage_factor * density_factor
+
+    # Adaptive global-local balance
+    freq_mean = np.mean(usage)
+    w_global = 0.5 / (1.0 + 0.1 * freq_mean)
+    w_local = 1.0 - w_global
+    combined_penalty = w_global * rank_penalty + w_local * local_penalty
+
+    # Amplify penalties for the longest quartile
+    threshold = np.percentile(tour_edge_lengths, 75)
+    high_penalty_mask = tour_edge_lengths >= threshold
+    combined_penalty[high_penalty_mask] *= 1.5
+
+    # Symmetric matrix update
+    np.add.at(updated_edge_distance, (u_idx, v_idx), combined_penalty)
+    np.add.at(updated_edge_distance, (v_idx, u_idx), combined_penalty)
+
+    return updated_edge_distance
+# ===== Eval Output =====
+[*] Running ...
+[*] mode=val, data=/home/ducanh/projects/EAs_project/MoH/problems/tsp_gls/data/val/val_instance_data_sol_200.pkl, seed=0, n_instances=8
+[*] instance_indices=[6, 9, 0, 2, 4, 3, 5, 1]
+[*] instance 6: obj=10.4509, gap=0.0489
+[*] instance 9: obj=10.8010, gap=1.2937
+[*] instance 0: obj=10.8937, gap=0.0732
+[*] instance 2: obj=10.9690, gap=0.1935
+[*] instance 4: obj=10.9064, gap=0.5462
+[*] instance 3: obj=10.6160, gap=0.1329
+[*] instance 5: obj=10.9104, gap=0.2470
+[*] instance 1: obj=11.0939, gap=0.6322
+[*] ave_gap on size 200: 0.39592892157972737
+0.39592892157972737

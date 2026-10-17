@@ -1,0 +1,79 @@
+# ===== Heuristic Code =====
+#{Guided Local Search strategy with relative-neighborhood utility penalization, anisotropic spatial eccentricity weighting, and stagnation-scaled sub-tour breaking penalties to escape recurrent basins.}#
+
+import numpy as np
+
+def update_edge_distance(edge_distance, local_opt_tour, edge_n_used):
+    updated_edge_distance = np.copy(edge_distance)
+    num_nodes = len(local_opt_tour)
+    u_idx = np.asarray(local_opt_tour)
+    v_idx = np.roll(u_idx, -1)
+
+    # 1. Classical Guided Local Search (GLS) edge utility evaluation on the local optimal tour
+    tour_distances = edge_distance[u_idx, v_idx]
+    tour_counts = edge_n_used[u_idx, v_idx]
+
+    # Evaluate relative cost against k-nearest neighborhood to highlight genuinely sub-optimal edges
+    k = min(10, max(2, num_nodes // 5))
+    k_nearest_dist = np.partition(edge_distance, k, axis=1)[:, :k]
+    node_baseline_dist = np.mean(k_nearest_dist, axis=1)
+    relative_edge_cost = tour_distances / (0.5 * (node_baseline_dist[u_idx] + node_baseline_dist[v_idx]) + 1e-12)
+
+    utilities = relative_edge_cost / (1.0 + tour_counts)
+    max_util = np.max(utilities)
+    penalize_threshold = 0.90 * max_util
+    penalize_mask = utilities >= penalize_threshold
+
+    # Increment usage counter on selected high-utility bottleneck edges
+    for i in range(num_nodes):
+        if penalize_mask[i]:
+            u, v = u_idx[i], v_idx[i]
+            edge_n_used[u, v] += 1
+            edge_n_used[v, u] += 1
+
+    # 2. Node spatial centrality and eccentricity analysis
+    node_mean_dist = np.mean(edge_distance, axis=1)
+    global_mean_dist = np.mean(node_mean_dist)
+    spatial_centrality = global_mean_dist / (node_mean_dist + 1e-12)
+    norm_spatial = spatial_centrality / (np.max(spatial_centrality) + 1e-12)
+
+    # 3. Usage entropy and stagnation detection
+    node_usage_sum = np.sum(edge_n_used, axis=1, keepdims=True) + 1e-12
+    usage_probs = edge_n_used / node_usage_sum
+    usage_entropy = -np.sum(usage_probs * np.log(usage_probs + 1e-12), axis=1)
+    max_entropy = np.log(num_nodes) + 1e-12
+    rigidity = 1.0 - (usage_entropy / max_entropy)
+
+    tour_usage = edge_n_used[u_idx, v_idx]
+    stagnation_ratio = np.mean(tour_usage > 1.0)
+    stagnation_boost = 1.0 + 0.5 * stagnation_ratio + 0.5 * np.mean(rigidity)
+
+    # Base lambda calibration for guided local search (proportional to optimal tour edge scale)
+    base_lambda = 0.15 * (np.sum(tour_distances) / num_nodes) * stagnation_boost
+
+    # 4. Modulated penalty field with spatial and topological rigidity scaling
+    spatial_field = 1.0 + 0.25 * (norm_spatial[:, None] + norm_spatial[None, :])
+    rigidity_field = 1.0 + 0.25 * (rigidity[:, None] + rigidity[None, :])
+    modulation_field = spatial_field * rigidity_field
+
+    penalty_matrix = base_lambda * edge_n_used * modulation_field
+
+    # Ensure zero self-penalty
+    np.fill_diagonal(penalty_matrix, 0.0)
+
+    updated_edge_distance += penalty_matrix
+    return updated_edge_distance
+# ===== Eval Output =====
+[*] Running ...
+[*] mode=val, data=/home/ducanh/projects/EAs_project/MoH/problems/tsp_gls/data/val/val_instance_data_sol_100.pkl, seed=0, n_instances=8
+[*] instance_indices=[6, 9, 0, 2, 4, 3, 5, 1]
+[*] instance 6: obj=7.8248, gap=0.8404
+[*] instance 9: obj=8.0803, gap=0.4602
+[*] instance 0: obj=8.0001, gap=0.0000
+[*] instance 2: obj=8.0900, gap=0.1994
+[*] instance 4: obj=7.8686, gap=0.7109
+[*] instance 3: obj=7.3713, gap=0.0000
+[*] instance 5: obj=7.6365, gap=0.0000
+[*] instance 1: obj=7.5628, gap=0.0756
+[*] ave_gap on size 100: 0.2858131206513903
+0.2858131206513903

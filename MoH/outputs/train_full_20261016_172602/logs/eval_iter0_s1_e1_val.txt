@@ -1,0 +1,111 @@
+# ===== Heuristic Code =====
+#{Penalize high-utility edges via an exponential moving average cost threshold and accelerate reciprocal k-nearest neighbor exploration with argpartition-based candidate pruning coupled with a graph-density-adaptive reward decay.}#
+
+import numpy as np
+
+def update_edge_distance(edge_distance, local_opt_tour, edge_n_used):
+    updated_edge_distance = np.copy(edge_distance)
+    n = len(local_opt_tour)
+    if n < 4:
+        return updated_edge_distance
+
+    # Extract tour edges and edge costs
+    u_idx = np.array(local_opt_tour, dtype=np.intp)
+    v_idx = np.roll(u_idx, -1)
+    costs = edge_distance[u_idx, v_idx].astype(np.float64)
+
+    # Calculate exponential moving average (EMA) threshold across tour cost trajectory
+    alpha_ema = 2.0 / (n + 1.0)
+    ema_cost = np.empty(n, dtype=np.float64)
+    running_val = costs[0]
+    for i in range(n):
+        running_val = alpha_ema * costs[i] + (1.0 - alpha_ema) * running_val
+        ema_cost[i] = running_val
+
+    # Standardized utility formulation
+    mean_cost = np.mean(costs)
+    std_cost = np.std(costs) + 1e-8
+    used_counts = edge_n_used[u_idx, v_idx].astype(np.float64)
+    z_scores = (costs - mean_cost) / std_cost
+    sigmoid_weights = 1.0 / (1.0 + np.exp(-z_scores))
+    utilities = (costs * (1.0 + sigmoid_weights)) / (1.0 + used_counts)
+
+    # Edge penalty scaled relative to EMA baseline
+    threshold_condition = costs >= ema_cost
+    max_util = np.max(utilities) + 1e-8
+    penalized_nodes = set()
+
+    for idx in range(n):
+        if threshold_condition[idx]:
+            u = u_idx[idx]
+            v = v_idx[idx]
+            used = used_counts[idx]
+            util_scale = 1.0 + (utilities[idx] / max_util)
+            penalty = (costs[idx] / (1.0 + np.sqrt(used + 1.0))) * util_scale
+            updated_edge_distance[u, v] += penalty
+            updated_edge_distance[v, u] += penalty
+            penalized_nodes.add(u)
+            penalized_nodes.add(v)
+
+    if not penalized_nodes:
+        return updated_edge_distance
+
+    # Determine adaptive parameters based on problem size and graph density
+    k_neighbors = min(8, max(3, n // 15))
+    k_search = min(n - 1, max(k_neighbors * 3, 12))
+
+    # Graph density approximation: ratio of observed active edges to total possible edges
+    active_edges = np.count_nonzero(edge_n_used) / 2.0
+    total_possible_edges = (n * (n - 1)) / 2.0
+    graph_density = max(1e-4, active_edges / total_possible_edges)
+    adaptive_decay_base = 0.035 / (1.0 + np.sqrt(graph_density))
+
+    # Candidate neighbor discovery via argpartition top-k pruning
+    candidate_neighbors = {}
+    for u in penalized_nodes:
+        row = edge_distance[u].copy()
+        row[u] = np.inf
+        # Efficient partial partition of lowest distances
+        k_smallest_idx = np.argpartition(row, k_search)[:k_search]
+        k_smallest_idx = k_smallest_idx[np.argsort(row[k_smallest_idx])]
+
+        valid = []
+        for v in k_smallest_idx:
+            if edge_n_used[u, v] <= 1:
+                valid.append(int(v))
+                if len(valid) >= k_neighbors:
+                    break
+        candidate_neighbors[u] = valid
+
+    # Mutual reciprocal neighbor reward discount
+    visited_pairs = set()
+    for u in penalized_nodes:
+        u_cand = candidate_neighbors[u]
+        for rank_u, v in enumerate(u_cand):
+            pair = (u, v) if u < v else (v, u)
+            if pair in visited_pairs:
+                continue
+            if v in candidate_neighbors and u in candidate_neighbors[v]:
+                rank_v = candidate_neighbors[v].index(u)
+                avg_rank = 0.5 * (rank_u + rank_v)
+                rank_discount = 1.0 / (1.0 + avg_rank * 0.3)
+                decay = updated_edge_distance[u, v] * adaptive_decay_base * rank_discount
+                updated_edge_distance[u, v] -= decay
+                updated_edge_distance[v, u] -= decay
+                visited_pairs.add(pair)
+
+    return updated_edge_distance
+# ===== Eval Output =====
+[*] Running ...
+[*] mode=val, data=/home/ducanh/projects/EAs_project/MoH/problems/tsp_gls/data/val/val_instance_data_sol_50.pkl, seed=0, n_instances=8
+[*] instance_indices=[6, 9, 0, 2, 4, 3, 5, 1]
+[*] instance 6: obj=5.7136, gap=0.5983
+[*] instance 9: obj=5.9639, gap=0.0000
+[*] instance 0: obj=5.7783, gap=0.0000
+[*] instance 2: obj=5.8071, gap=0.0000
+[*] instance 4: obj=5.3965, gap=0.0000
+[*] instance 3: obj=5.8224, gap=1.1392
+[*] instance 5: obj=5.6187, gap=0.0000
+[*] instance 1: obj=5.1651, gap=0.0000
+[*] ave_gap on size 50: 0.21718291265821477
+0.21718291265821477

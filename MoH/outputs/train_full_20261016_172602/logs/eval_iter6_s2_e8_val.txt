@@ -1,0 +1,95 @@
+# ===== Heuristic Code =====
+# {An adaptive guided local search strategy incorporating reactive stagnation detection, variance-normalized triplet detour penalties, asymmetric edge utility scaling, and bounded chord incentives to escape deep local optima robustly.}
+
+import numpy as np
+
+def update_edge_distance(edge_distance, local_opt_tour, edge_n_used):
+    updated_edge_distance = np.copy(edge_distance)
+    num_nodes = len(local_opt_tour)
+    tour = np.asarray(local_opt_tour, dtype=int)
+
+    # Track indices for 2-hop triplets
+    u_idx = tour
+    v_idx = np.roll(tour, -1)
+    w_idx = np.roll(tour, -2)
+
+    # Persistent frequency decay
+    edge_n_used *= 0.95
+
+    # Distance metrics along local optimal tour
+    d_uv = edge_distance[u_idx, v_idx]
+    d_vw = edge_distance[v_idx, w_idx]
+    d_uw = edge_distance[u_idx, w_idx]
+
+    # Geometric detour calculation and acute angle deficit
+    detour_ratio = (d_uv + d_vw) / (d_uw + 1e-8)
+    denom = 2.0 * d_uv * d_vw + 1e-8
+    cos_turn = np.clip((d_uv**2 + d_vw**2 - d_uw**2) / denom, -1.0, 1.0)
+    acute_deficit = 1.0 - cos_turn
+    geom_inefficiency = detour_ratio * (1.0 + 0.4 * acute_deficit)
+
+    # Asymmetric contribution: weight penalty heavier on the longer leg of the detour
+    leg_asymmetry = d_uv / (d_uv + d_vw + 1e-8)
+
+    # Reactive stagnation and entrapment detection
+    tour_usage = edge_n_used[u_idx, v_idx]
+    overlap_ratio = np.mean(tour_usage > 1.2)
+    mean_usage = np.mean(tour_usage)
+    stagnation_pressure = np.clip(overlap_ratio * 1.5 + (mean_usage / (np.max(edge_n_used) + 1e-6)), 0.0, 2.5)
+
+    # Dynamic top-k selection adaptation: expand perturbation when stagnant
+    base_k_frac = 0.12 + 0.08 * np.tanh(stagnation_pressure)
+    k = max(2, min(num_nodes - 1, int(np.ceil(base_k_frac * num_nodes))))
+
+    # Utility formulation incorporating asymmetric geometric inefficiency and usage resistance
+    local_geom_factor = 0.5 * (geom_inefficiency + np.roll(geom_inefficiency, 1))
+    asymmetric_factor = 1.0 + 0.5 * (leg_asymmetry - 0.5)
+    utilities = (d_uv / (1.0 + tour_usage)) * (1.0 + 0.30 * local_geom_factor) * asymmetric_factor
+
+    top_k_indices = np.argsort(utilities)[-k:]
+
+    # Global and local scale estimators
+    global_mean_dist = np.mean(d_uv)
+    adaptive_lambda = (0.25 + 0.15 * np.tanh(stagnation_pressure)) * global_mean_dist
+
+    # Penalize inefficient tour edges
+    for idx in top_k_indices:
+        u, v = u_idx[idx], v_idx[idx]
+        edge_n_used[u, v] += 1.0
+        edge_n_used[v, u] += 1.0
+
+        freq_factor = 1.0 + np.log1p(edge_n_used[u, v])
+        penalty = adaptive_lambda * freq_factor * (1.0 + 0.3 * local_geom_factor[idx])
+        updated_edge_distance[u, v] += penalty
+        updated_edge_distance[v, u] += penalty
+
+    # Strictly bounded chord incentive for unvisited shortcut candidates
+    chord_k = max(1, k // 2)
+    high_detour_indices = np.argsort(detour_ratio)[-chord_k:]
+    for idx in high_detour_indices:
+        u, w = u_idx[idx], w_idx[idx]
+        freq = edge_n_used[u, w]
+        if freq < 1.0:
+            original_d = edge_distance[u, w]
+            # Bound discount to prevent negative cycles or over-distortion
+            max_discount = 0.20 * original_d
+            discount = min(max_discount, 0.08 * global_mean_dist / (1.0 + freq))
+            new_cost = max(original_d * 0.75, updated_edge_distance[u, w] - discount)
+            updated_edge_distance[u, w] = new_cost
+            updated_edge_distance[w, u] = new_cost
+
+    return updated_edge_distance
+# ===== Eval Output =====
+[*] Running ...
+[*] mode=val, data=/home/ducanh/projects/EAs_project/MoH/problems/tsp_gls/data/val/val_instance_data_sol_100.pkl, seed=0, n_instances=8
+[*] instance_indices=[6, 9, 0, 2, 4, 3, 5, 1]
+[*] instance 6: obj=7.8408, gap=1.0465
+[*] instance 9: obj=8.0833, gap=0.4977
+[*] instance 0: obj=8.1650, gap=2.0616
+[*] instance 2: obj=8.0984, gap=0.3041
+[*] instance 4: obj=7.8131, gap=0.0000
+[*] instance 3: obj=7.3713, gap=0.0000
+[*] instance 5: obj=7.6670, gap=0.3984
+[*] instance 1: obj=7.6730, gap=1.5340
+[*] ave_gap on size 100: 0.730283974659815
+0.730283974659815

@@ -1,0 +1,94 @@
+# ===== Heuristic Code =====
+#{Vectorize edge penalty and shortcut discount updates using argpartition for O(N) selection and tour-mean normalization to eliminate expensive full-matrix operations and Python-level loops.}
+
+import numpy as np
+
+def update_edge_distance(edge_distance, local_opt_tour, edge_n_used):
+    updated_edge_distance = np.copy(edge_distance)
+    num_nodes = len(local_opt_tour)
+    tour = np.asarray(local_opt_tour)
+
+    u_idx = tour
+    v_idx = np.roll(tour, -1)
+    w_idx = np.roll(tour, -2)
+
+    edge_n_used *= 0.96
+
+    d_uv = edge_distance[u_idx, v_idx]
+    d_vw = edge_distance[v_idx, w_idx]
+    d_uw = edge_distance[u_idx, w_idx]
+
+    # Tour average cost acts as an O(N) proxy for characteristic edge scale, avoiding O(N^2) dense mean
+    tour_mean_dist = np.mean(d_uv)
+
+    detour_ratio = (d_uv + d_vw) / (d_uw + 1e-8)
+    denom = 2.0 * d_uv * d_vw + 1e-8
+    cos_turn = np.clip((d_uv**2 + d_vw**2 - d_uw**2) / denom, -1.0, 1.0)
+    acute_deficit = 1.0 - cos_turn
+    geom_inefficiency = detour_ratio * (1.0 + 0.5 * acute_deficit)
+
+    local_geom_factor = 0.5 * (geom_inefficiency + np.roll(geom_inefficiency, 1))
+    base_freq = edge_n_used[u_idx, v_idx]
+    utilities = (d_uv / (1.0 + base_freq)) * (1.0 + 0.35 * local_geom_factor)
+
+    k = max(1, int(np.ceil(0.14 * num_nodes)))
+
+    # Fast O(N) selection via argpartition instead of full O(N log N) argsort
+    if k < num_nodes:
+        top_k_indices = np.argpartition(utilities, -k)[-k:]
+    else:
+        top_k_indices = np.arange(num_nodes)
+
+    adaptive_lambda = 0.30 * tour_mean_dist
+
+    # Vectorized edge penalty updates
+    sel_u = u_idx[top_k_indices]
+    sel_v = v_idx[top_k_indices]
+
+    edge_n_used[sel_u, sel_v] += 1.0
+    edge_n_used[sel_v, sel_u] = edge_n_used[sel_u, sel_v]
+
+    freq_penalty = 1.0 + np.log1p(edge_n_used[sel_u, sel_v])
+    geom_weight = 1.0 + 0.5 * local_geom_factor[top_k_indices]
+    penalties = adaptive_lambda * freq_penalty * geom_weight
+
+    updated_edge_distance[sel_u, sel_v] += penalties
+    updated_edge_distance[sel_v, sel_u] += penalties
+
+    # Vectorized shortcut incentive updates
+    if k < num_nodes:
+        high_detour_indices = np.argpartition(detour_ratio, -k)[-k:]
+    else:
+        high_detour_indices = np.arange(num_nodes)
+
+    sc_u = u_idx[high_detour_indices]
+    sc_w = w_idx[high_detour_indices]
+    sc_freq = edge_n_used[sc_u, sc_w]
+
+    mask = sc_freq < 1.0
+    if np.any(mask):
+        valid_u = sc_u[mask]
+        valid_w = sc_w[mask]
+        valid_freq = sc_freq[mask]
+
+        discounts = (0.10 * tour_mean_dist) / (1.0 + valid_freq)
+        new_dists = np.maximum(1e-6, updated_edge_distance[valid_u, valid_w] - discounts)
+
+        updated_edge_distance[valid_u, valid_w] = new_dists
+        updated_edge_distance[valid_w, valid_u] = new_dists
+
+    return updated_edge_distance
+# ===== Eval Output =====
+[*] Running ...
+[*] mode=val, data=/home/ducanh/projects/EAs_project/MoH/problems/tsp_gls/data/val/val_instance_data_sol_100.pkl, seed=0, n_instances=8
+[*] instance_indices=[6, 9, 0, 2, 4, 3, 5, 1]
+[*] instance 6: obj=7.8248, gap=0.8404
+[*] instance 9: obj=8.1032, gap=0.7451
+[*] instance 0: obj=8.0001, gap=0.0000
+[*] instance 2: obj=8.1442, gap=0.8713
+[*] instance 4: obj=7.8131, gap=0.0000
+[*] instance 3: obj=7.3713, gap=0.0000
+[*] instance 5: obj=7.6781, gap=0.5438
+[*] instance 1: obj=7.6730, gap=1.5340
+[*] ave_gap on size 100: 0.5668269615100585
+0.5668269615100585

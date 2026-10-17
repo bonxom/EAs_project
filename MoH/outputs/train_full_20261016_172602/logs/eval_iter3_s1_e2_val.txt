@@ -1,0 +1,76 @@
+# ===== Heuristic Code =====
+#{This algorithm penalizes high-utility tour edges and selectively discounts geometrically promising, low-usage nearest-neighbor candidate edges incident to perturbed nodes using rank-proportional weights.}#
+
+import numpy as np
+
+def update_edge_distance(edge_distance, local_opt_tour, edge_n_used):
+    updated_edge_distance = np.copy(edge_distance)
+    n = len(local_opt_tour)
+    if n <= 3:
+        return updated_edge_distance
+
+    u_idx = np.array(local_opt_tour, dtype=np.intp)
+    v_idx = np.roll(u_idx, -1)
+
+    costs = edge_distance[u_idx, v_idx].astype(np.float64)
+    used = edge_n_used[u_idx, v_idx].astype(np.float64)
+
+    # Edge utility evaluation balancing cost and historical frequency
+    mean_cost = np.mean(costs)
+    std_cost = np.std(costs) + 1e-8
+    z_scores = (costs - mean_cost) / std_cost
+    weights = 1.0 / (1.0 + np.exp(-z_scores))
+    utilities = (costs * (1.0 + weights)) / (1.0 + used)
+
+    # Penalize the upper half of high-utility edges
+    threshold = np.median(utilities)
+    max_util = np.max(utilities) + 1e-8
+    penalize_mask = utilities >= threshold
+
+    p_u = u_idx[penalize_mask]
+    p_v = v_idx[penalize_mask]
+    p_costs = costs[penalize_mask]
+    p_used = used[penalize_mask]
+    p_utils = utilities[penalize_mask]
+
+    penalties = (p_costs / (1.0 + np.sqrt(p_used + 1.0))) * (1.0 + p_utils / max_util)
+    updated_edge_distance[p_u, p_v] += penalties
+    updated_edge_distance[p_v, p_u] += penalties
+
+    # Targeted rank-proportional discounting on promising nearest neighbors
+    penalized_nodes = np.unique(np.concatenate((p_u, p_v)))
+    k = min(8, max(3, n // 10))
+
+    for u in penalized_nodes:
+        # Find nearest neighbors based on original geometric distance excluding self
+        dist_row = edge_distance[u].copy()
+        dist_row[u] = np.inf
+
+        # Partition top k neighbors
+        k_nearest = np.argpartition(dist_row, k)[:k]
+        k_nearest = k_nearest[np.argsort(dist_row[k_nearest])]
+
+        # Filter neighbors with low cumulative usage to preserve geometric fidelity
+        for rank, v in enumerate(k_nearest):
+            if edge_n_used[u, v] <= 1:
+                # Rank-decayed discount factor
+                discount_factor = 0.03 / (1.0 + 0.5 * rank)
+                discount = updated_edge_distance[u, v] * discount_factor
+                updated_edge_distance[u, v] -= discount
+                updated_edge_distance[v, u] -= discount
+
+    return updated_edge_distance
+# ===== Eval Output =====
+[*] Running ...
+[*] mode=val, data=/home/ducanh/projects/EAs_project/MoH/problems/tsp_gls/data/val/val_instance_data_sol_50.pkl, seed=0, n_instances=8
+[*] instance_indices=[6, 9, 0, 2, 4, 3, 5, 1]
+[*] instance 6: obj=5.7136, gap=0.5983
+[*] instance 9: obj=5.9639, gap=0.0000
+[*] instance 0: obj=5.8546, gap=1.3193
+[*] instance 2: obj=5.8071, gap=0.0000
+[*] instance 4: obj=5.3965, gap=0.0000
+[*] instance 3: obj=5.7569, gap=0.0000
+[*] instance 5: obj=5.6187, gap=0.0000
+[*] instance 1: obj=5.1651, gap=0.0000
+[*] ave_gap on size 50: 0.23970344406727684
+0.23970344406727684

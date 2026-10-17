@@ -1,0 +1,76 @@
+# ===== Heuristic Code =====
+#{This algorithm applies a diversification-driven ruin-and-recreate perturbation combining spatial dispersion ruin, multi-scale neighborhood stress, dynamic frequency-based temperature damping, and orthogonal cross-tour edge rewards to decisively break local optima.}
+
+import numpy as np
+
+def update_edge_distance(edge_distance, local_opt_tour, edge_n_used):
+    updated_edge_distance = np.copy(edge_distance)
+    n = len(local_opt_tour)
+    if n < 4:
+        return updated_edge_distance
+
+    u_idx = local_opt_tour
+    v_idx = np.roll(local_opt_tour, -1)
+
+    tour_edge_lengths = edge_distance[u_idx, v_idx]
+    mean_length = np.mean(tour_edge_lengths)
+    std_length = np.std(tour_edge_lengths) + 1e-6
+    rel_length = tour_edge_lengths / (mean_length + 1e-6)
+
+    # Multi-scale neighborhood density estimation (k=3 and k=8)
+    sorted_dists = np.sort(edge_distance, axis=1)
+    k_small = min(4, n)
+    k_large = min(9, n)
+    dens_small = 1.0 / (np.mean(sorted_dists[:, 1:k_small], axis=1) + 1e-6)
+    dens_large = 1.0 / (np.mean(sorted_dists[:, 1:k_large], axis=1) + 1e-6)
+    combined_dens = 0.5 * (dens_small / np.mean(dens_small) + dens_large / np.mean(dens_large))
+
+    # Frequency-damped temperature jump
+    usage = edge_n_used[u_idx, v_idx]
+    mean_usage = np.mean(usage)
+    temp_jump = 1.0 + np.tanh(mean_usage / 5.0)
+
+    # Ruin penalty: Target long, clustered, and frequently visited edges with non-linear activation
+    z_scores = (tour_edge_lengths - mean_length) / std_length
+    spatial_weight = 0.5 * (combined_dens[u_idx] + combined_dens[v_idx])
+    inv_freq_weight = 1.0 / (1.0 + 0.25 * usage)
+
+    ruin_activation = 1.0 / (1.0 + np.exp(-3.0 * z_scores))
+    base_penalty = mean_length * (0.15 + 0.35 * rel_length * ruin_activation)
+    total_penalty = base_penalty * spatial_weight * inv_freq_weight * temp_jump
+
+    # Non-monotonic high-stress ruin: amplify worst quartile
+    stress_threshold = np.percentile(tour_edge_lengths, 75)
+    total_penalty[tour_edge_lengths >= stress_threshold] *= 1.6
+
+    # Symmetric penalty update on current tour edges
+    np.add.at(updated_edge_distance, (u_idx, v_idx), total_penalty)
+    np.add.at(updated_edge_distance, (v_idx, u_idx), total_penalty)
+
+    # Recreate directive: Orthogonal shortcut incentive to break neighborhood topology deterministically
+    stride = max(2, n // 3)
+    alt_v_idx = np.roll(local_opt_tour, -stride)
+    recreate_usage = edge_n_used[u_idx, alt_v_idx]
+    discount = 0.05 * mean_length / (1.0 + recreate_usage)
+
+    np.add.at(updated_edge_distance, (u_idx, alt_v_idx), -discount)
+    np.add.at(updated_edge_distance, (alt_v_idx, u_idx), -discount)
+
+    # Floor to prevent negative edge distances while maintaining symmetry
+    np.maximum(updated_edge_distance, 0.0, out=updated_edge_distance)
+
+    return updated_edge_distance
+# ===== Eval Output =====
+[*] Running ...
+[*] mode=val, data=/home/ducanh/projects/EAs_project/MoH/problems/tsp_gls/data/val/val_instance_data_sol_200.pkl, seed=0, n_instances=8
+[*] instance_indices=[6, 9, 0, 2, 4, 3, 5, 1]
+[*] instance 6: obj=10.6366, gap=1.8260
+[*] instance 9: obj=10.8973, gap=2.1975
+[*] instance 0: obj=11.1777, gap=2.6822
+[*] instance 2: obj=11.1725, gap=2.0527
+[*] instance 4: obj=10.8881, gap=0.3772
+[*] instance 3: obj=10.6653, gap=0.5986
+[*] instance 5: obj=11.1196, gap=2.1693
+[*] instance 1: obj=11.2401, gap=1.9582
+[*] ave_gap on size 200: 1.732704468621857
+1.732704468621857

@@ -1,0 +1,88 @@
+# ===== Heuristic Code =====
+#{Guided Local Search augmented with k-NN subpath smoothing that couples stagnation-aware bottleneck penalties with selective distance reductions for unvisited, high-potential nearest-neighbor edges to facilitate escaping local traps.}
+
+import numpy as np
+
+def update_edge_distance(edge_distance, local_opt_tour, edge_n_used):
+    updated_edge_distance = np.copy(edge_distance)
+    num_nodes = len(local_opt_tour)
+
+    # 1. Identify maximum utility edge(s) in current local optimum and increment usage count
+    u_idx = np.asarray(local_opt_tour)
+    v_idx = np.roll(u_idx, -1)
+    tour_distances = edge_distance[u_idx, v_idx]
+    tour_counts = edge_n_used[u_idx, v_idx]
+
+    utilities = tour_distances / (1.0 + tour_counts)
+    max_util = np.max(utilities)
+    max_mask = np.isclose(utilities, max_util)
+
+    for i in range(num_nodes):
+        if max_mask[i]:
+            u, v = u_idx[i], v_idx[i]
+            edge_n_used[u, v] += 1
+            edge_n_used[v, u] += 1
+
+    # 2. Compute spatial and search metrics
+    node_mean_dist = np.mean(edge_distance, axis=1)
+    global_mean_dist = np.mean(node_mean_dist)
+
+    spatial_centrality = global_mean_dist / (node_mean_dist + 1e-12)
+    norm_spatial = spatial_centrality / (np.max(spatial_centrality) + 1e-12)
+
+    tour_usage_updated = edge_n_used[u_idx, v_idx]
+    overlap_ratio = np.mean(tour_usage_updated > 1.0)
+
+    # Adaptive penalty scaling factor based on stagnation
+    stagnation_factor = np.clip(overlap_ratio, 0.0, 1.0)
+    adaptive_lambda = (0.20 + 0.15 * stagnation_factor) * global_mean_dist
+
+    spatial_field = norm_spatial[:, None] + norm_spatial[None, :]
+    penalty_matrix = adaptive_lambda * edge_n_used * (1.0 + 0.25 * spatial_field)
+    updated_edge_distance += penalty_matrix
+
+    # 3. k-NN subpath smoothing: incentivize underutilized high-quality candidate edges
+    k = min(8, max(3, num_nodes // 10))
+    # Find k nearest neighbors for each node based on original distances (excluding self)
+    temp_dist = np.copy(edge_distance)
+    np.fill_diagonal(temp_dist, np.inf)
+    knn_indices = np.argpartition(temp_dist, kth=k, axis=1)[:, :k]
+
+    # Create mask for mutual or unvisited k-NN candidate edges
+    knn_mask = np.zeros((num_nodes, num_nodes), dtype=bool)
+    rows = np.repeat(np.arange(num_nodes), k)
+    cols = knn_indices.ravel()
+    knn_mask[rows, cols] = True
+    knn_mask = np.logical_or(knn_mask, knn_mask.T)
+    np.fill_diagonal(knn_mask, False)
+
+    # Target unvisited or rarely explored k-NN edges that are not in the current tour
+    current_tour_mask = np.zeros((num_nodes, num_nodes), dtype=bool)
+    current_tour_mask[u_idx, v_idx] = True
+    current_tour_mask[v_idx, u_idx] = True
+
+    candidate_mask = knn_mask & (edge_n_used == 0) & (~current_tour_mask)
+
+    # Apply smoothing bonus (distance discount) proportional to adaptive lambda and neighbor quality
+    discount_matrix = np.zeros_like(updated_edge_distance)
+    discount_magnitude = 0.08 * adaptive_lambda
+    discount_matrix[candidate_mask] = discount_magnitude
+
+    # Ensure discounted distance never drops below 10% of original distance
+    updated_edge_distance = np.maximum(updated_edge_distance - discount_matrix, 0.1 * edge_distance)
+
+    return updated_edge_distance
+# ===== Eval Output =====
+[*] Running ...
+[*] mode=val, data=/home/ducanh/projects/EAs_project/MoH/problems/tsp_gls/data/val/val_instance_data_sol_100.pkl, seed=0, n_instances=8
+[*] instance_indices=[6, 9, 0, 2, 4, 3, 5, 1]
+[*] instance 6: obj=7.7697, gap=0.1304
+[*] instance 9: obj=8.0433, gap=0.0000
+[*] instance 0: obj=8.0001, gap=0.0000
+[*] instance 2: obj=8.1191, gap=0.5604
+[*] instance 4: obj=7.8131, gap=0.0000
+[*] instance 3: obj=7.3713, gap=0.0000
+[*] instance 5: obj=7.6365, gap=0.0000
+[*] instance 1: obj=7.5816, gap=0.3244
+[*] ave_gap on size 100: 0.1268990294724437
+0.1268990294724437

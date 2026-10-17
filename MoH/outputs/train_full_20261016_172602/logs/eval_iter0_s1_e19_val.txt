@@ -1,0 +1,81 @@
+# ===== Heuristic Code =====
+# {A dual-frequency guided local search heuristic combining contextual bottleneck utility with sub-linear usage penalties and bounded k-NN geometric discounting on unvisited edges to escape local optima.}
+
+import numpy as np
+
+def update_edge_distance(edge_distance, local_opt_tour, edge_n_used):
+    updated_edge_distance = np.copy(edge_distance)
+    n = len(local_opt_tour)
+    if n < 4:
+        return updated_edge_distance
+
+    tour = np.asarray(local_opt_tour, dtype=np.intp)
+    u_idx = tour
+    v_idx = np.roll(tour, -1)
+
+    costs = edge_distance[u_idx, v_idx].astype(np.float64)
+    used = edge_n_used[u_idx, v_idx].astype(np.float64)
+
+    # Normalized logistic weighting from tour edge costs
+    mean_cost = np.mean(costs)
+    std_cost = np.std(costs) + 1e-8
+    z_scores = (costs - mean_cost) / std_cost
+    weights = 1.0 / (1.0 + np.exp(-z_scores))
+
+    # Base utility scaled with sub-linear usage suppression
+    base_utilities = (costs * (1.0 + weights)) / (1.0 + np.sqrt(used + 1.0))
+
+    # Neighborhood bottleneck contextualization
+    prev_util = np.roll(base_utilities, 1)
+    next_util = np.roll(base_utilities, -1)
+    bottleneck_utilities = base_utilities + 0.35 * np.maximum(prev_util, next_util)
+
+    # Identify edges above median bottleneck utility for penalization
+    threshold = np.median(bottleneck_utilities)
+    max_util = np.max(bottleneck_utilities) + 1e-8
+    penalize_mask = bottleneck_utilities >= threshold
+
+    p_u = u_idx[penalize_mask]
+    p_v = v_idx[penalize_mask]
+    p_costs = costs[penalize_mask]
+    p_used = used[penalize_mask]
+    p_utils = bottleneck_utilities[penalize_mask]
+
+    # Sub-linear usage-suppressed penalty calculation
+    penalties = (p_costs / (1.0 + np.sqrt(p_used + 1.0))) * (1.0 + p_utils / max_util)
+    updated_edge_distance[p_u, p_v] += penalties
+    updated_edge_distance[p_v, p_u] += penalties
+
+    # Saturated geometric discounts on unvisited k-NN edges around penalized nodes
+    penalized_nodes = np.unique(np.concatenate((p_u, p_v)))
+    k_nn = min(5, n - 1)
+    max_total_used = np.max(edge_n_used)
+    discount_rate = 0.035 / (1.0 + 0.05 * np.log1p(max_total_used))
+
+    for u in penalized_nodes:
+        orig_row = edge_distance[u]
+        nn_candidates = np.argpartition(orig_row, k_nn)[:k_nn + 1]
+        for v in nn_candidates:
+            if v != u and edge_n_used[u, v] == 0:
+                reward = discount_rate * orig_row[v]
+                # Lower bound ensures non-degeneracy and bounded metric distortion
+                min_allowed = 0.75 * orig_row[v]
+                new_val = max(min_allowed, updated_edge_distance[u, v] - reward)
+                updated_edge_distance[u, v] = new_val
+                updated_edge_distance[v, u] = new_val
+
+    return updated_edge_distance
+# ===== Eval Output =====
+[*] Running ...
+[*] mode=val, data=/home/ducanh/projects/EAs_project/MoH/problems/tsp_gls/data/val/val_instance_data_sol_50.pkl, seed=0, n_instances=8
+[*] instance_indices=[6, 9, 0, 2, 4, 3, 5, 1]
+[*] instance 6: obj=5.7136, gap=0.5983
+[*] instance 9: obj=5.9639, gap=0.0000
+[*] instance 0: obj=5.7783, gap=0.0000
+[*] instance 2: obj=5.8071, gap=0.0000
+[*] instance 4: obj=5.3965, gap=0.0000
+[*] instance 3: obj=5.8123, gap=0.9633
+[*] instance 5: obj=5.6187, gap=0.0000
+[*] instance 1: obj=5.1651, gap=0.0000
+[*] ave_gap on size 50: 0.1952036921433975
+0.1952036921433975

@@ -1,0 +1,78 @@
+# ===== Heuristic Code =====
+#{Dual-Phase Penalty Decay with Global Edge Memory: Track cumulative base distances via global usage history to apply selective exponential memory decay to transiently penalized edges while aggressively compounding penalties on recurrent structural bottleneck edges in the local optimal tour.}#
+
+import numpy as np
+
+def update_edge_distance(edge_distance, local_opt_tour, edge_n_used):
+    # Copy edge distance matrix to avoid modifying original array
+    updated_edge_distance = np.copy(edge_distance)
+
+    # Extract consecutive edge endpoints along the local optimal tour
+    u_idx = local_opt_tour
+    v_idx = np.roll(local_opt_tour, -1)
+
+    # Symmetrize edge usage count to reliably identify recurrent global frequency
+    sym_used = edge_n_used + edge_n_used.T
+    tour_counts = sym_used[u_idx, v_idx]
+    tour_lengths = edge_distance[u_idx, v_idx]
+
+    # Compute utilities highlighting high-cost edges relative to their reinforcement level
+    utilities = tour_lengths / (1.0 + tour_counts)
+    max_utility = np.max(utilities)
+    threshold = 0.95 * max_utility
+    bottleneck_mask = utilities >= threshold
+
+    sel_u = u_idx[bottleneck_mask]
+    sel_v = v_idx[bottleneck_mask]
+
+    # Base scale derived from tour statistics
+    mean_length = np.mean(tour_lengths)
+    std_length = np.std(tour_lengths)
+    scale = mean_length + 0.5 * std_length
+
+    # Identify transiently penalized edges (infrequently used but currently elevated) and decay them
+    # Usage threshold differentiates recurrent structural bottlenecks from transient exploration
+    transient_mask = (sym_used > 0) & (sym_used <= 2)
+    # Apply exponential-style decay back towards base values for transient edges
+    decay_factor = 0.92
+    updated_edge_distance[transient_mask] *= decay_factor
+
+    # Reinforce recurrent and identified bottleneck edges with compounding penalty
+    # Recurrent factor weights persistent edges higher based on sym_used count
+    bottleneck_counts = sym_used[sel_u, sel_v]
+    reinforcement = 1.0 + np.log1p(bottleneck_counts)
+    penalties = 0.35 * scale * reinforcement
+
+    # Apply direct penalty to bottleneck edges
+    for i in range(len(sel_u)):
+        u = sel_u[i]
+        v = sel_v[i]
+        p = penalties[i]
+        updated_edge_distance[u, v] += p
+        updated_edge_distance[v, u] += p
+
+    # Mild dilution to incident nodes to prevent immediate adjacent cycling
+    incident_nodes = np.unique(np.concatenate([sel_u, sel_v]))
+    incident_penalty = 0.04 * scale
+    updated_edge_distance[incident_nodes, :] += incident_penalty
+    updated_edge_distance[:, incident_nodes] += incident_penalty
+
+    # Ensure distance symmetry and zero out the self-loop diagonals
+    updated_edge_distance = 0.5 * (updated_edge_distance + updated_edge_distance.T)
+    np.fill_diagonal(updated_edge_distance, 0.0)
+
+    return updated_edge_distance
+# ===== Eval Output =====
+[*] Running ...
+[*] mode=val, data=/home/ducanh/projects/EAs_project/MoH/problems/tsp_gls/data/val/val_instance_data_sol_20.pkl, seed=0, n_instances=8
+[*] instance_indices=[6, 9, 0, 2, 4, 3, 5, 1]
+[*] instance 6: obj=3.7045, gap=0.0000
+[*] instance 9: obj=4.1442, gap=0.0000
+[*] instance 0: obj=3.6827, gap=0.0000
+[*] instance 2: obj=3.8184, gap=0.0000
+[*] instance 4: obj=3.8385, gap=0.0000
+[*] instance 3: obj=3.6971, gap=0.0000
+[*] instance 5: obj=3.4281, gap=0.0000
+[*] instance 1: obj=3.6958, gap=0.0000
+[*] ave_gap on size 20: 1.2218318606871392e-06
+1.2218318606871392e-06

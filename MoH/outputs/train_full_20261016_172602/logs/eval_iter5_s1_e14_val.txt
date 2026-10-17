@@ -1,0 +1,70 @@
+# ===== Heuristic Code =====
+#{This strategy penalizes high-utility tour edges using normalized utility-frequency damping while creating directed escape routes by applying an exponentially-decaying distance discount strictly to the top-k nearest unvisited neighbors of penalized vertices.}#
+
+import numpy as np
+
+def update_edge_distance(edge_distance, local_opt_tour, edge_n_used):
+    updated_edge_distance = np.copy(edge_distance)
+    n = len(local_opt_tour)
+    u_idx = np.array(local_opt_tour, dtype=np.intp)
+    v_idx = np.roll(u_idx, -1)
+
+    costs = edge_distance[u_idx, v_idx].astype(np.float64)
+    used = edge_n_used[u_idx, v_idx].astype(np.float64)
+
+    mean_cost = np.mean(costs)
+    std_cost = np.std(costs) + 1e-8
+    z_scores = (costs - mean_cost) / std_cost
+    weights = 1.0 / (1.0 + np.exp(-z_scores))
+    utilities = (costs * (1.0 + weights)) / (1.0 + used)
+
+    threshold = np.median(utilities)
+    max_util = np.max(utilities) + 1e-8
+    penalize_mask = utilities >= threshold
+
+    p_u = u_idx[penalize_mask]
+    p_v = v_idx[penalize_mask]
+    p_costs = costs[penalize_mask]
+    p_used = used[penalize_mask]
+    p_utils = utilities[penalize_mask]
+
+    penalties = (p_costs / (1.0 + np.sqrt(p_used + 1.0))) * (1.0 + p_utils / max_util)
+    updated_edge_distance[p_u, p_v] += penalties
+    updated_edge_distance[p_v, p_u] += penalties
+
+    penalized_nodes = np.unique(np.concatenate((p_u, p_v)))
+    k_candidates = min(4, n - 1)
+    base_discount = 0.05
+
+    for u in penalized_nodes:
+        unused_mask = (edge_n_used[u] == 0)
+        unused_mask[u] = False
+        candidates = np.where(unused_mask)[0]
+
+        if len(candidates) > 0:
+            c_dists = edge_distance[u, candidates]
+            sort_order = np.argsort(c_dists)
+            top_k = candidates[sort_order[:k_candidates]]
+
+            ranks = np.arange(len(top_k), dtype=np.float64)
+            discount_factors = base_discount * np.exp(-0.5 * ranks)
+
+            discounts = updated_edge_distance[u, top_k] * discount_factors
+            updated_edge_distance[u, top_k] -= discounts
+            updated_edge_distance[top_k, u] = updated_edge_distance[u, top_k]
+
+    return updated_edge_distance
+# ===== Eval Output =====
+[*] Running ...
+[*] mode=val, data=/home/ducanh/projects/EAs_project/MoH/problems/tsp_gls/data/val/val_instance_data_sol_50.pkl, seed=0, n_instances=8
+[*] instance_indices=[6, 9, 0, 2, 4, 3, 5, 1]
+[*] instance 6: obj=5.7136, gap=0.5983
+[*] instance 9: obj=5.9639, gap=0.0000
+[*] instance 0: obj=5.7783, gap=0.0000
+[*] instance 2: obj=5.8071, gap=0.0000
+[*] instance 4: obj=5.3965, gap=0.0000
+[*] instance 3: obj=5.8123, gap=0.9633
+[*] instance 5: obj=5.6187, gap=0.0000
+[*] instance 1: obj=5.1651, gap=0.0000
+[*] ave_gap on size 50: 0.1952036921433975
+0.1952036921433975

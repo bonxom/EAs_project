@@ -1,0 +1,93 @@
+# ===== Heuristic Code =====
+#{The algorithm applies dynamic memory-decayed dual perturbation by heavily penalizing inefficient and overused tour edges proportional to local edge scale, while simultaneously providing negative incentive rewards to rarely used k-nearest-neighbor alternative edges connected to those endpoints.}
+
+import numpy as np
+
+def update_edge_distance(edge_distance, local_opt_tour, edge_n_used):
+    # Step 1: Create a copy of the edge distance matrix to avoid modifying the original input
+    updated_edge_distance = np.copy(edge_distance)
+    n = len(local_opt_tour)
+    if n < 4:
+        return updated_edge_distance
+
+    # Step 2: Exponentially scaled memory decay factor on frequency count to avoid over-penalizing backbone edges
+    decayed_usage = np.log1p(edge_n_used.astype(np.float64))
+
+    # Step 3: Compute localized k-NN statistics for scale-invariant penalty/incentive calibration
+    k = min(8, n - 1)
+    knn_partition = np.partition(edge_distance, k, axis=1)[:, 1:k+1]
+    local_scale = np.mean(knn_partition, axis=1) + 1e-8
+
+    # Step 4: Identify tour edges and compute normalized cost relative to endpoint scales
+    u_idx = local_opt_tour
+    v_idx = np.roll(local_opt_tour, -1)
+    tour_lengths = edge_distance[u_idx, v_idx]
+    pair_scale = 0.5 * (local_scale[u_idx] + local_scale[v_idx])
+    relative_edge_cost = tour_lengths / pair_scale
+
+    # Step 5: Dual utility score computation for tour edges
+    usage_component = 1.0 / (1.0 + np.exp(-0.8 * (decayed_usage[u_idx, v_idx] - np.median(decayed_usage[u_idx, v_idx]))))
+    utility = relative_edge_cost * (1.0 + usage_component)
+
+    # Focus positive perturbation on the most inefficient/trapped edges (top 40th percentile)
+    threshold = np.percentile(utility, 60)
+    penalized_mask = utility >= threshold
+
+    # Scale positive penalties relative to local edge distances
+    penalty_values = pair_scale[penalized_mask] * (0.35 * utility[penalized_mask] / (np.mean(utility) + 1e-8))
+    pen_u = u_idx[penalized_mask]
+    pen_v = v_idx[penalized_mask]
+
+    np.add.at(updated_edge_distance, (pen_u, pen_v), penalty_values)
+    np.add.at(updated_edge_distance, (pen_v, pen_u), penalty_values)
+
+    # Step 6: Negative reinforcement (incentives) on high-potential k-NN non-tour edges connected to penalized endpoints
+    cand_nodes = np.unique(np.concatenate([pen_u, pen_v]))
+    cand_k = min(4, n - 1)
+    cand_neighbors = np.argpartition(edge_distance[cand_nodes], cand_k, axis=1)[:, 1:cand_k+1]
+
+    # Mask out tour edges from receiving incentives
+    tour_edge_set = set(zip(u_idx, v_idx)) | set(zip(v_idx, u_idx))
+
+    incentive_u = []
+    incentive_v = []
+    incentive_val = []
+
+    for idx, u in enumerate(cand_nodes):
+        neighbors = cand_neighbors[idx]
+        for v in neighbors:
+            if (u, v) not in tour_edge_set and u != v:
+                # Incentivize edges with lower usage frequency
+                usage_discount = 1.0 / (1.0 + decayed_usage[u, v])
+                bonus = 0.15 * min(local_scale[u], local_scale[v]) * usage_discount
+                incentive_u.append(u)
+                incentive_v.append(v)
+                incentive_val.append(bonus)
+
+    if incentive_u:
+        incentive_u = np.array(incentive_u, dtype=np.intp)
+        incentive_v = np.array(incentive_v, dtype=np.intp)
+        incentive_val = np.array(incentive_val, dtype=np.float64)
+
+        np.add.at(updated_edge_distance, (incentive_u, incentive_v), -incentive_val)
+        np.add.at(updated_edge_distance, (incentive_v, incentive_u), -incentive_val)
+
+    # Ensure distances remain non-negative and zero along diagonal
+    np.maximum(updated_edge_distance, 0.0, out=updated_edge_distance)
+    np.fill_diagonal(updated_edge_distance, 0.0)
+
+    return updated_edge_distance
+# ===== Eval Output =====
+[*] Running ...
+[*] mode=val, data=/home/ducanh/projects/EAs_project/MoH/problems/tsp_gls/data/val/val_instance_data_sol_200.pkl, seed=0, n_instances=8
+[*] instance_indices=[6, 9, 0, 2, 4, 3, 5, 1]
+[*] instance 6: obj=10.8398, gap=3.7716
+[*] instance 9: obj=11.0279, gap=3.4223
+[*] instance 0: obj=11.3936, gap=4.6653
+[*] instance 2: obj=11.2272, gap=2.5526
+[*] instance 4: obj=11.3176, gap=4.3371
+[*] instance 3: obj=10.8764, gap=2.5895
+[*] instance 5: obj=11.2535, gap=3.3988
+[*] instance 1: obj=11.3317, gap=2.7896
+[*] ave_gap on size 200: 3.440855011916441
+3.440855011916441

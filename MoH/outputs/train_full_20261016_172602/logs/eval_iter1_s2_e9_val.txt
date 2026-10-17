@@ -1,0 +1,135 @@
+# ===== Heuristic Code =====
+#{This algorithm enhances guided local search by penalizing geometrically inefficient tour edges using decayed frequencies and acute turn metrics, while reconstructing shortcuts through multi-hop chordal evaluation (2-hop, 3-hop, and 4-hop bypasses) that dynamically discounts high-saving, infrequently used subpath shortcuts.}#
+
+import numpy as np
+
+def update_edge_distance(edge_distance, local_opt_tour, edge_n_used):
+    updated_edge_distance = np.copy(edge_distance)
+    num_nodes = len(local_opt_tour)
+    tour = np.asarray(local_opt_tour)
+
+    # Decayed frequency tracking
+    edge_n_used *= 0.96
+
+    # 1-hop consecutive node indices
+    u_idx = tour
+    v_idx = np.roll(tour, -1)
+    w_idx = np.roll(tour, -2)
+
+    # Triplet geometric evaluation
+    d_uv = edge_distance[u_idx, v_idx]
+    d_vw = edge_distance[v_idx, w_idx]
+    d_uw = edge_distance[u_idx, w_idx]
+
+    detour_ratio = (d_uv + d_vw) / (d_uw + 1e-8)
+    denom = 2.0 * d_uv * d_vw + 1e-8
+    cos_turn = (d_uv**2 + d_vw**2 - d_uw**2) / denom
+    cos_turn = np.clip(cos_turn, -1.0, 1.0)
+    acute_deficit = 1.0 - cos_turn
+    geom_inefficiency = detour_ratio * (1.0 + 0.5 * acute_deficit)
+
+    base_dist = d_uv
+    base_freq = edge_n_used[u_idx, v_idx]
+    local_geom_factor = 0.5 * (geom_inefficiency + np.roll(geom_inefficiency, 1))
+    utilities = (base_dist / (1.0 + base_freq)) * (1.0 + 0.35 * local_geom_factor)
+
+    k = max(1, int(np.ceil(0.14 * num_nodes)))
+    top_k_indices = np.argsort(utilities)[-k:]
+    global_mean_dist = np.mean(edge_distance)
+    adaptive_lambda = 0.30 * global_mean_dist
+
+    # Penalize inefficient edges
+    for idx in top_k_indices:
+        u, v = u_idx[idx], v_idx[idx]
+        edge_n_used[u, v] += 1.0
+        edge_n_used[v, u] += 1.0
+        freq_penalty = 1.0 + np.log1p(edge_n_used[u, v])
+        geom_weight = 1.0 + 0.5 * local_geom_factor[idx]
+        penalty = adaptive_lambda * freq_penalty * geom_weight
+        updated_edge_distance[u, v] += penalty
+        updated_edge_distance[v, u] += penalty
+
+    # Multi-hop chordal and cross-subpath shortcut recreation (hops: 2, 3, 4)
+    if num_nodes >= 6:
+        shortcut_candidates = []
+        # Precompute path segments along the tour
+        # hop=2 corresponds to skipping 1 intermediate node (path length 2 edges: u -> roll(-1) -> roll(-2))
+        # hop=3 corresponds to skipping 2 intermediate nodes (path length 3 edges)
+        # hop=4 corresponds to skipping 3 intermediate nodes (path length 4 edges)
+        d_e1 = d_uv
+        d_e2 = d_vw
+        d_e3 = edge_distance[w_idx, np.roll(tour, -3)]
+        d_e4 = edge_distance[np.roll(tour, -3), np.roll(tour, -4)]
+
+        hops_data = [
+            (2, np.roll(tour, -2), d_e1 + d_e2),
+            (3, np.roll(tour, -3), d_e1 + d_e2 + d_e3),
+            (4, np.roll(tour, -4), d_e1 + d_e2 + d_e3 + d_e4)
+        ]
+
+        for hop_len, dest_nodes, subpath_dists in hops_data:
+            chord_dists = edge_distance[u_idx, dest_nodes]
+            # Savings gained by taking chord over path
+            savings = subpath_dists - chord_dists
+            ratio = subpath_dists / (chord_dists + 1e-8)
+            freqs = edge_n_used[u_idx, dest_nodes]
+
+            # Metric triangle score prioritizing high metric savings and lower prior usage
+            scores = (savings / (global_mean_dist + 1e-8)) * ratio / (1.0 + freqs)
+
+            for i in range(num_nodes):
+                u = u_idx[i]
+                target = dest_nodes[i]
+                if freqs[i] < 1.0 and savings[i] > 0:
+                    shortcut_candidates.append((scores[i], u, target, hop_len))
+
+        # Sort candidates deterministically by score descending
+        shortcut_candidates.sort(key=lambda item: item[0], reverse=True)
+
+        # Select top-k distinct shortcut pairs to reward
+        applied = 0
+        discount_budget = k
+        seen_pairs = set()
+
+        for score, u, target, hop_len in shortcut_candidates:
+            pair = (min(u, target), max(u, target))
+            if pair in seen_pairs:
+                continue
+            seen_pairs.add(pair)
+
+            # Hop-scaled discount: rewarding deeper chords proportionally
+            hop_boost = 1.0 + 0.15 * (hop_len - 2)
+            discount = 0.10 * global_mean_dist * hop_boost / (1.0 + edge_n_used[u, target])
+            new_cost = max(1e-6, updated_edge_distance[u, target] - discount)
+            updated_edge_distance[u, target] = new_cost
+            updated_edge_distance[target, u] = new_cost
+
+            applied += 1
+            if applied >= discount_budget:
+                break
+    else:
+        # Fallback for very small instances
+        high_detour_indices = np.argsort(detour_ratio)[-k:]
+        for idx in high_detour_indices:
+            u, w = u_idx[idx], w_idx[idx]
+            freq = edge_n_used[u, w]
+            if freq < 1.0:
+                discount = 0.10 * global_mean_dist * (1.0 / (1.0 + freq))
+                updated_edge_distance[u, w] = max(1e-6, updated_edge_distance[u, w] - discount)
+                updated_edge_distance[w, u] = updated_edge_distance[u, w]
+
+    return updated_edge_distance
+# ===== Eval Output =====
+[*] Running ...
+[*] mode=val, data=/home/ducanh/projects/EAs_project/MoH/problems/tsp_gls/data/val/val_instance_data_sol_100.pkl, seed=0, n_instances=8
+[*] instance_indices=[6, 9, 0, 2, 4, 3, 5, 1]
+[*] instance 6: obj=7.7627, gap=0.0399
+[*] instance 9: obj=8.0684, gap=0.3123
+[*] instance 0: obj=8.0001, gap=0.0000
+[*] instance 2: obj=8.0739, gap=0.0000
+[*] instance 4: obj=7.8131, gap=0.0000
+[*] instance 3: obj=7.3713, gap=0.0000
+[*] instance 5: obj=7.6365, gap=0.0000
+[*] instance 1: obj=7.5570, gap=0.0000
+[*] ave_gap on size 100: 0.0440271494280664
+0.0440271494280664

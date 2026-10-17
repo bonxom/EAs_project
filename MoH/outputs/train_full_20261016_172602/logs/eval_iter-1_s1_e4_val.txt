@@ -1,0 +1,110 @@
+# ===== Heuristic Code =====
+#{This algorithm computes structural entropy and pseudo-degree connectivity for each vertex to apply deterministic pseudo-Gaussian perturbations and utility-scaled penalties to high-cost tour edges while selectively boosting low-frequency shortcuts.}
+
+import numpy as np
+
+def update_edge_distance(edge_distance, local_opt_tour, edge_n_used):
+    updated_edge_distance = np.copy(edge_distance)
+    n = len(local_opt_tour)
+    if n <= 1:
+        return updated_edge_distance
+
+    # Extract tour edges and edge costs
+    tour_edges = [(int(local_opt_tour[i]), int(local_opt_tour[(i + 1) % n])) for i in range(n)]
+    costs = np.array([edge_distance[u, v] for u, v in tour_edges], dtype=np.float64)
+
+    # Calculate edge utility based on cost and usage frequency
+    mean_cost = np.mean(costs)
+    std_cost = np.std(costs) + 1e-8
+
+    utilities = np.zeros(n, dtype=np.float64)
+    for i in range(n):
+        u, v = tour_edges[i]
+        used = edge_n_used[u, v]
+        z_score = (costs[i] - mean_cost) / std_cost
+        sigmoid_weight = 1.0 / (1.0 + np.exp(-np.clip(z_score, -10.0, 10.0)))
+        utilities[i] = (costs[i] * (1.0 + sigmoid_weight)) / (1.0 + np.sqrt(used + 1.0))
+
+    threshold = np.median(utilities)
+    max_util = np.max(utilities) + 1e-8
+
+    # Compute pseudo-degrees and local usage distribution entropy for all nodes
+    usage_sums = np.sum(edge_n_used, axis=1) + 1e-8
+    entropy_weights = np.zeros(n, dtype=np.float64)
+
+    for i in range(n):
+        u = local_opt_tour[i]
+        p = edge_n_used[u] / usage_sums[u]
+        p = p[p > 0]
+        ent = -np.sum(p * np.log(p + 1e-12))
+        deg = np.count_nonzero(edge_n_used[u] > 0)
+        # Normalize structural influence
+        entropy_weights[u] = 1.0 / (1.0 + np.exp(-(ent / (np.log(deg + 2.0)))))
+
+    penalized_nodes = set()
+    for idx in range(n):
+        if utilities[idx] >= threshold:
+            u, v = tour_edges[idx]
+            used = edge_n_used[u, v]
+            ent_factor = 0.5 * (entropy_weights[u] + entropy_weights[v])
+
+            # Deterministic pseudo-Gaussian perturbation from trigonometric hash
+            phase = (u * 131.0 + v * 97.0) % 1000.0
+            pseudo_normal = np.sin(phase) * np.cos(phase * 1.6180339887)
+            noise_factor = 1.0 + 0.15 * ent_factor * pseudo_normal
+
+            penalty = (costs[idx] / (1.0 + np.sqrt(used + 1.0))) * (1.0 + utilities[idx] / max_util) * noise_factor
+            updated_edge_distance[u, v] += penalty
+            updated_edge_distance[v, u] += penalty
+            penalized_nodes.add(u)
+            penalized_nodes.add(v)
+
+    # Apply reciprocal k-nearest low-use neighbor decay around penalized vertices
+    k_neighbors = min(8, max(3, n // 15))
+    base_decay = 0.04
+    candidate_neighbors = {}
+
+    for u in penalized_nodes:
+        dists = edge_distance[u].copy()
+        dists[u] = np.inf
+        sorted_indices = np.argsort(dists)
+        valid_candidates = []
+        for v in sorted_indices:
+            if edge_n_used[u, v] <= 1:
+                valid_candidates.append(int(v))
+                if len(valid_candidates) >= k_neighbors:
+                    break
+        candidate_neighbors[u] = valid_candidates
+
+    visited_pairs = set()
+    for u in penalized_nodes:
+        u_cand = candidate_neighbors[u]
+        for rank_u, v in enumerate(u_cand):
+            pair = (min(u, v), max(u, v))
+            if pair in visited_pairs:
+                continue
+            if v in candidate_neighbors and u in candidate_neighbors[v]:
+                rank_v = candidate_neighbors[v].index(u)
+                avg_rank = 0.5 * (rank_u + rank_v)
+                rank_factor = 1.0 / (1.0 + avg_rank * 0.3)
+                ent_mod = 1.0 + 0.2 * (entropy_weights[u] + entropy_weights[v])
+                decay = updated_edge_distance[u, v] * base_decay * rank_factor * ent_mod
+                updated_edge_distance[u, v] -= decay
+                updated_edge_distance[v, u] -= decay
+                visited_pairs.add(pair)
+
+    return updated_edge_distance
+# ===== Eval Output =====
+[*] Running ...
+[*] mode=val, data=/home/ducanh/projects/EAs_project/MoH/problems/tsp_gls/data/val/val_instance_data_sol_50.pkl, seed=0, n_instances=8
+[*] instance_indices=[6, 9, 0, 2, 4, 3, 5, 1]
+[*] instance 6: obj=5.7136, gap=0.5983
+[*] instance 9: obj=5.9639, gap=0.0000
+[*] instance 0: obj=5.7783, gap=0.0000
+[*] instance 2: obj=5.8071, gap=0.0000
+[*] instance 4: obj=5.3965, gap=0.0000
+[*] instance 3: obj=5.7569, gap=0.0000
+[*] instance 5: obj=5.6187, gap=0.0000
+[*] instance 1: obj=5.1651, gap=0.0000
+[*] ave_gap on size 50: 0.07478878681544121
+0.07478878681544121

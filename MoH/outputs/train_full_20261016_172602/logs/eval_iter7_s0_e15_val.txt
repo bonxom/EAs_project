@@ -1,0 +1,50 @@
+# ===== Heuristic Code =====
+#{Compute Guided Local Search utilities by decoupling the penalized matrix from the evaluation metric, deriving base Euclidean distances via penalty subtraction to prevent self-inflating cost feedback loops and applying calibrated penalties to maximum-utility edges.}
+
+import numpy as np
+
+def update_edge_distance(edge_distance, local_opt_tour, edge_n_used):
+    updated_edge_distance = np.copy(edge_distance)
+    u_idx = local_opt_tour
+    v_idx = np.roll(local_opt_tour, -1)
+
+    current_edge_lens = edge_distance[u_idx, v_idx]
+    edge_counts = edge_n_used[u_idx, v_idx]
+
+    # Estimate the penalty increment scale to recover base distances
+    # and decouple utility calculation from cumulative penalty feedback
+    avg_current = np.mean(current_edge_lens)
+    penalty_factor = 0.3
+    # Penalties applied so far approximately scale with edge_n_used
+    # To recover unpenalized original distances accurately:
+    base_lengths = np.maximum(1e-6, current_edge_lens - penalty_factor * avg_current * (edge_counts / (1.0 + np.mean(edge_counts) + 1e-6)))
+
+    # Evaluate utility using recovered base distances and count regularization
+    utilities = base_lengths / (1.0 + edge_counts)
+
+    max_utility = np.max(utilities)
+    threshold = 0.999 * max_utility
+    selected_mask = utilities >= threshold
+
+    sel_u = u_idx[selected_mask]
+    sel_v = v_idx[selected_mask]
+
+    penalty = penalty_factor * np.mean(base_lengths)
+    updated_edge_distance[sel_u, sel_v] += penalty
+    updated_edge_distance[sel_v, sel_u] += penalty
+
+    return updated_edge_distance
+# ===== Eval Output =====
+[*] Running ...
+[*] mode=val, data=/home/ducanh/projects/EAs_project/MoH/problems/tsp_gls/data/val/val_instance_data_sol_20.pkl, seed=0, n_instances=8
+[*] instance_indices=[6, 9, 0, 2, 4, 3, 5, 1]
+[*] instance 6: obj=3.7045, gap=0.0000
+[*] instance 9: obj=4.1442, gap=0.0000
+[*] instance 0: obj=3.6827, gap=0.0000
+[*] instance 2: obj=3.8184, gap=0.0000
+[*] instance 4: obj=3.8385, gap=0.0000
+[*] instance 3: obj=3.6971, gap=0.0000
+[*] instance 5: obj=3.4281, gap=0.0000
+[*] instance 1: obj=3.6958, gap=0.0000
+[*] ave_gap on size 20: 1.2218318606871392e-06
+1.2218318606871392e-06

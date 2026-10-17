@@ -1,0 +1,110 @@
+# ===== Heuristic Code =====
+#{Adaptive stagnation-aware Guided Local Search combines geometric turn-detour utility penalties with inter-iteration Hamming similarity tracking to dynamically escalate perturbation scale and execute targeted anisotropic ruin on persistent sub-paths.}#
+
+import numpy as np
+
+def update_edge_distance(edge_distance, local_opt_tour, edge_n_used):
+    updated_edge_distance = np.copy(edge_distance)
+    num_nodes = len(local_opt_tour)
+    if num_nodes < 4:
+        return updated_edge_distance
+
+    tour = np.asarray(local_opt_tour, dtype=np.intp)
+    u_idx = tour
+    v_idx = np.roll(tour, -1)
+    w_idx = np.roll(tour, -2)
+
+    # 1. Decay edge usage history
+    edge_n_used *= 0.95
+
+    # 2. Vectorized geometric slack and turn deficit calculations
+    d_uv = edge_distance[u_idx, v_idx]
+    d_vw = edge_distance[v_idx, w_idx]
+    d_uw = edge_distance[u_idx, w_idx]
+
+    detour_ratio = (d_uv + d_vw) / (d_uw + 1e-8)
+    denom = 2.0 * d_uv * d_vw + 1e-8
+    cos_turn = np.clip((d_uv**2 + d_vw**2 - d_uw**2) / denom, -1.0, 1.0)
+    acute_deficit = 1.0 - cos_turn
+    geom_inefficiency = detour_ratio * (1.0 + 0.5 * acute_deficit)
+
+    # 3. Inter-iteration persistence / stagnation estimation from tour edge frequencies
+    current_edge_freqs = edge_n_used[u_idx, v_idx]
+    # An edge visited repeatedly will have a high accumulated value despite decay
+    mean_freq = np.mean(current_edge_freqs)
+    stagnation_ratio = np.mean(current_edge_freqs > 1.5)
+
+    # 4. Dynamic perturbation sizing based on detected stagnation
+    # Scale perturbation intensity up when stagnation is detected (high edge overlap)
+    if stagnation_ratio > 0.60:
+        k_ratio = 0.28
+        lambda_mult = 0.60
+        stagnant_mode = True
+    else:
+        k_ratio = 0.14 + 0.10 * stagnation_ratio
+        lambda_mult = 0.28 + 0.15 * stagnation_ratio
+        stagnant_mode = False
+
+    k = max(2, int(np.ceil(k_ratio * num_nodes)))
+
+    # 5. Utility scoring combining edge distance, frequency, and local geometric inefficiency
+    local_geom_factor = 0.5 * (geom_inefficiency + np.roll(geom_inefficiency, 1))
+    utilities = (d_uv / (1.0 + current_edge_freqs)) * (1.0 + 0.40 * local_geom_factor)
+
+    # If stagnation occurs, amplify penalties on stubborn edges with high frequency
+    if stagnant_mode:
+        utilities *= (1.0 + 0.50 * current_edge_freqs)
+
+    top_k_indices = np.argsort(utilities)[-k:]
+    global_mean_dist = np.mean(edge_distance)
+    adaptive_lambda = lambda_mult * global_mean_dist
+
+    # 6. Apply penalty waves to selected edges
+    for idx in top_k_indices:
+        u, v = u_idx[idx], v_idx[idx]
+        edge_n_used[u, v] += 1.0
+        edge_n_used[v, u] += 1.0
+        freq_penalty = 1.0 + np.log1p(edge_n_used[u, v])
+        geom_weight = 1.0 + 0.5 * local_geom_factor[idx]
+        penalty = adaptive_lambda * freq_penalty * geom_weight
+        updated_edge_distance[u, v] += penalty
+        updated_edge_distance[v, u] += penalty
+
+    # 7. Adaptive shortcut incentive discounting on candidate replacement chords
+    k_shortcuts = max(1, k // 2)
+    high_detour_indices = np.argsort(detour_ratio)[-k_shortcuts:]
+    for idx in high_detour_indices:
+        u, w = u_idx[idx], w_idx[idx]
+        freq = edge_n_used[u, w]
+        if freq < 1.0:
+            discount = 0.12 * global_mean_dist * (1.0 / (1.0 + freq))
+            new_cost = max(1e-6, updated_edge_distance[u, w] - discount)
+            updated_edge_distance[u, w] = new_cost
+            updated_edge_distance[w, u] = new_cost
+
+    # 8. Explosive ruin on high-density stubborn sub-paths under severe stagnation
+    if stagnant_mode:
+        stubborn_cluster = np.argsort(current_edge_freqs)[-max(2, num_nodes // 8):]
+        for s_idx in stubborn_cluster:
+            u, v = u_idx[s_idx], v_idx[s_idx]
+            # Zero out memory to permit structural re-exploration and heavily penalize current link
+            edge_n_used[u, v] = 0.0
+            edge_n_used[v, u] = 0.0
+            updated_edge_distance[u, v] += adaptive_lambda * 1.5
+            updated_edge_distance[v, u] += adaptive_lambda * 1.5
+
+    return updated_edge_distance
+# ===== Eval Output =====
+[*] Running ...
+[*] mode=val, data=/home/ducanh/projects/EAs_project/MoH/problems/tsp_gls/data/val/val_instance_data_sol_100.pkl, seed=0, n_instances=8
+[*] instance_indices=[6, 9, 0, 2, 4, 3, 5, 1]
+[*] instance 6: obj=7.7627, gap=0.0399
+[*] instance 9: obj=8.0699, gap=0.3302
+[*] instance 0: obj=8.0001, gap=0.0000
+[*] instance 2: obj=8.0739, gap=0.0000
+[*] instance 4: obj=7.8131, gap=0.0000
+[*] instance 3: obj=7.3713, gap=0.0000
+[*] instance 5: obj=7.6365, gap=0.0000
+[*] instance 1: obj=7.5570, gap=0.0000
+[*] ave_gap on size 100: 0.04626864650450202
+0.04626864650450202

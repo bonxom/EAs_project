@@ -1,0 +1,77 @@
+# ===== Heuristic Code =====
+#{An adaptive dispersion-weighted rank-selection mechanism scales penalties continuously based on the coefficient of variation of tour edge costs, applying smooth Pareto-guided penalties to high-cost re-used edges while counter-discounting promising incident unexplored options without static thresholding.}#
+
+import numpy as np
+
+def update_edge_distance(edge_distance, local_opt_tour, edge_n_used):
+    updated_edge_distance = np.copy(edge_distance)
+    n = len(local_opt_tour)
+    if n < 3:
+        return updated_edge_distance
+
+    u_idx = np.array(local_opt_tour, dtype=np.intp)
+    v_idx = np.roll(u_idx, -1)
+
+    costs = edge_distance[u_idx, v_idx].astype(np.float64)
+    used = edge_n_used[u_idx, v_idx].astype(np.float64)
+
+    mean_cost = np.mean(costs)
+    std_cost = np.std(costs)
+    cv = std_cost / (mean_cost + 1e-12)
+
+    # Adaptive budget: fewer edges penalized when tour edges are homogeneous (low CV)
+    effective_k = int(np.clip(np.round(n * (0.15 + 0.35 * np.tanh(2.0 * cv))), 1, n))
+
+    # Normalized utility components for multi-criteria ranking
+    norm_cost = (costs - np.min(costs)) / (np.ptp(costs) + 1e-12)
+    norm_used = (used - np.min(used)) / (np.ptp(used) + 1e-12) if np.ptp(used) > 0 else np.zeros_like(used)
+
+    # Pareto utility combining edge length and reuse frequency
+    utilities = norm_cost * 0.65 + norm_used * 0.35 + (costs / (mean_cost + 1e-12)) * (1.0 / (1.0 + np.sqrt(used)))
+
+    # Rank edges by utility and select dynamically scaled top candidates
+    sorted_order = np.argsort(-utilities)
+    top_indices = sorted_order[:effective_k]
+
+    # Soft rank-decayed penalty weights to prevent abrupt cutoffs
+    rank_weights = np.exp(-np.linspace(0.0, 2.0, effective_k))
+    rank_weights /= np.max(rank_weights)
+
+    p_u = u_idx[top_indices]
+    p_v = v_idx[top_indices]
+    p_costs = costs[top_indices]
+    p_used = used[top_indices]
+
+    # Base penalty modulated by dispersion and edge reuse
+    penalties = (p_costs * (0.05 + 0.20 * np.tanh(cv))) * rank_weights / np.sqrt(1.0 + p_used)
+
+    np.add.at(updated_edge_distance, (p_u, p_v), penalties)
+    np.add.at(updated_edge_distance, (p_v, p_u), penalties)
+
+    # Counter-discounting for untouched incident candidate edges
+    penalized_nodes = np.unique(np.concatenate((p_u, p_v)))
+    decay_ratio = np.clip(0.01 + 0.03 * cv, 0.005, 0.04)
+
+    for u in penalized_nodes:
+        unused_mask = (edge_n_used[u] == 0)
+        unused_mask[u] = False
+        if np.any(unused_mask):
+            discounts = updated_edge_distance[u, unused_mask] * decay_ratio
+            updated_edge_distance[u, unused_mask] -= discounts
+            updated_edge_distance[unused_mask, u] = updated_edge_distance[u, unused_mask]
+
+    return updated_edge_distance
+# ===== Eval Output =====
+[*] Running ...
+[*] mode=val, data=/home/ducanh/projects/EAs_project/MoH/problems/tsp_gls/data/val/val_instance_data_sol_50.pkl, seed=0, n_instances=8
+[*] instance_indices=[6, 9, 0, 2, 4, 3, 5, 1]
+[*] instance 6: obj=5.7136, gap=0.5983
+[*] instance 9: obj=6.0516, gap=1.4712
+[*] instance 0: obj=5.8546, gap=1.3193
+[*] instance 2: obj=5.8274, gap=0.3500
+[*] instance 4: obj=5.5821, gap=3.4387
+[*] instance 3: obj=5.8230, gap=1.1483
+[*] instance 5: obj=5.6187, gap=0.0000
+[*] instance 1: obj=5.3071, gap=2.7501
+[*] ave_gap on size 50: 1.3844929451330368
+1.3844929451330368

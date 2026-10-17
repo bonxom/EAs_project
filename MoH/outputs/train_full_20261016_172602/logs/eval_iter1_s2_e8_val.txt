@@ -1,0 +1,89 @@
+# ===== Heuristic Code =====
+#{An entropy-driven guided local search update dynamically modulates memory decay and penalty scaling based on tour edge overlap with historical usage, triggering an aggressive non-linear memory wash and persistent-edge penalty spike upon cycling.}#
+
+import numpy as np
+
+def update_edge_distance(edge_distance, local_opt_tour, edge_n_used):
+    updated_edge_distance = np.copy(edge_distance)
+    num_nodes = len(local_opt_tour)
+    tour = np.asarray(local_opt_tour)
+
+    u_idx = tour
+    v_idx = np.roll(tour, -1)
+    w_idx = np.roll(tour, -2)
+
+    current_freqs = edge_n_used[u_idx, v_idx]
+    mean_current_freq = np.mean(current_freqs)
+    max_possible_ref = np.max(edge_n_used) + 1e-8
+
+    # Measure entrapment/cycling ratio based on how heavily visited the current tour's edges are
+    overlap_ratio = np.clip(mean_current_freq / max_possible_ref, 0.0, 1.0)
+
+    # Entropy-driven adaptive memory decay: aggressive wash when cycling (high overlap), gentle decay otherwise
+    decay_factor = 0.98 - 0.25 * (overlap_ratio ** 2)
+    edge_n_used *= decay_factor
+
+    # Non-linear memory wash on stagnant bridges if deeply cycling
+    if overlap_ratio > 0.65:
+        edge_n_used[edge_n_used < 0.25 * np.mean(edge_n_used)] = 0.0
+
+    d_uv = edge_distance[u_idx, v_idx]
+    d_vw = edge_distance[v_idx, w_idx]
+    d_uw = edge_distance[u_idx, w_idx]
+
+    detour_ratio = (d_uv + d_vw) / (d_uw + 1e-8)
+    denom = 2.0 * d_uv * d_vw + 1e-8
+    cos_turn = np.clip((d_uv**2 + d_vw**2 - d_uw**2) / denom, -1.0, 1.0)
+    acute_deficit = 1.0 - cos_turn
+    geom_inefficiency = detour_ratio * (1.0 + 0.5 * acute_deficit)
+
+    base_dist = d_uv
+    base_freq = edge_n_used[u_idx, v_idx]
+    local_geom_factor = 0.5 * (geom_inefficiency + np.roll(geom_inefficiency, 1))
+
+    utilities = (base_dist / (1.0 + base_freq)) * (1.0 + 0.35 * local_geom_factor)
+
+    k_fraction = 0.12 + 0.10 * overlap_ratio
+    k = max(1, int(np.ceil(k_fraction * num_nodes)))
+    top_k_indices = np.argsort(utilities)[-k:]
+
+    tour_mean_dist = np.mean(d_uv)
+    adaptive_lambda = tour_mean_dist * (0.20 + 0.45 * (overlap_ratio ** 1.5))
+
+    for idx in top_k_indices:
+        u, v = u_idx[idx], v_idx[idx]
+        edge_n_used[u, v] += 1.0
+        edge_n_used[v, u] += 1.0
+
+        freq_penalty = 1.0 + np.log1p(edge_n_used[u, v])
+        spike_multiplier = 1.0 + (1.5 * overlap_ratio if edge_n_used[u, v] > mean_current_freq else 0.0)
+        geom_weight = 1.0 + 0.5 * local_geom_factor[idx]
+
+        penalty = adaptive_lambda * freq_penalty * geom_weight * spike_multiplier
+        updated_edge_distance[u, v] += penalty
+        updated_edge_distance[v, u] += penalty
+
+    high_detour_indices = np.argsort(detour_ratio)[-k:]
+    for idx in high_detour_indices:
+        u, w = u_idx[idx], w_idx[idx]
+        freq = edge_n_used[u, w]
+        if freq < 0.5:
+            discount = 0.12 * tour_mean_dist * (1.0 + overlap_ratio) * (1.0 / (1.0 + freq))
+            updated_edge_distance[u, w] = max(1e-6, updated_edge_distance[u, w] - discount)
+            updated_edge_distance[w, u] = updated_edge_distance[u, w]
+
+    return updated_edge_distance
+# ===== Eval Output =====
+[*] Running ...
+[*] mode=val, data=/home/ducanh/projects/EAs_project/MoH/problems/tsp_gls/data/val/val_instance_data_sol_100.pkl, seed=0, n_instances=8
+[*] instance_indices=[6, 9, 0, 2, 4, 3, 5, 1]
+[*] instance 6: obj=7.8248, gap=0.8404
+[*] instance 9: obj=8.1032, gap=0.7451
+[*] instance 0: obj=8.1650, gap=2.0616
+[*] instance 2: obj=8.1372, gap=0.7843
+[*] instance 4: obj=7.8131, gap=0.0000
+[*] instance 3: obj=7.3713, gap=0.0000
+[*] instance 5: obj=7.6365, gap=0.0000
+[*] instance 1: obj=7.6730, gap=1.5340
+[*] ave_gap on size 100: 0.7456650956858546
+0.7456650956858546

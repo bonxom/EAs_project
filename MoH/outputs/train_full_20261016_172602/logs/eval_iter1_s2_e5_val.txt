@@ -1,0 +1,101 @@
+# ===== Heuristic Code =====
+#{A multi-scale perimeter deficit metric evaluating 2-hop and 3-hop tour excursions normalized by local k-nearest neighbor density replaces static cosine turn geometry to identify and penalize spatially discordant bottleneck edges in Guided Local Search.}#
+
+import numpy as np
+
+def update_edge_distance(edge_distance, local_opt_tour, edge_n_used):
+    updated_edge_distance = np.copy(edge_distance)
+    num_nodes = len(local_opt_tour)
+    tour = np.asarray(local_opt_tour)
+
+    # Track indices for 1-hop, 2-hop, and 3-hop horizons along the local tour
+    t_idx = np.roll(tour, 1)
+    u_idx = tour
+    v_idx = np.roll(tour, -1)
+    w_idx = np.roll(tour, -2)
+    x_idx = np.roll(tour, -3)
+
+    # Historical frequency decay
+    edge_n_used *= 0.96
+
+    # Local k-nearest neighbor scale estimation around node v
+    knn_size = min(max(3, int(np.sqrt(num_nodes))), max(1, num_nodes - 1))
+    # Approximate local scale: average distance to the k-th nearest neighbors
+    part_dist = np.partition(edge_distance, knn_size, axis=1)[:, :knn_size + 1]
+    # Exclude self-distance (which is 0)
+    local_scale = np.mean(np.sort(part_dist, axis=1)[:, 1:], axis=1) + 1e-8
+
+    # Tour segment path lengths
+    d_uv = edge_distance[u_idx, v_idx]
+    d_vw = edge_distance[v_idx, w_idx]
+    d_wx = edge_distance[w_idx, x_idx]
+    d_tu = edge_distance[t_idx, u_idx]
+
+    # Direct chord distances
+    d_uw = edge_distance[u_idx, w_idx]
+    d_ux = edge_distance[u_idx, x_idx]
+
+    # 2-hop perimeter deficit normalized by local density scale at central node v
+    path_2hop = d_uv + d_vw
+    deficit_2hop = (path_2hop - d_uw) / local_scale[v_idx]
+
+    # 3-hop perimeter deficit normalized by local density scale across intermediate nodes
+    path_3hop = d_uv + d_vw + d_wx
+    scale_3hop = 0.5 * (local_scale[v_idx] + local_scale[w_idx])
+    deficit_3hop = (path_3hop - d_ux) / scale_3hop
+
+    # Multi-scale spatial deficit pinpointing inefficient clustering violations
+    multi_deficit = np.maximum(0.0, deficit_2hop) + 0.5 * np.maximum(0.0, deficit_3hop)
+
+    # Edge-centered geometric factor combining context from adjacent tour positions
+    edge_spatial_factor = 0.5 * (multi_deficit + np.roll(multi_deficit, 1))
+
+    # GLS Utility computation combining edge length, penalty frequency, and spatial deficit
+    base_dist = d_uv
+    base_freq = edge_n_used[u_idx, v_idx]
+    utilities = (base_dist / (1.0 + base_freq)) * (1.0 + 0.35 * edge_spatial_factor)
+
+    # Determine number of edges to penalize
+    k = max(1, int(np.ceil(0.14 * num_nodes)))
+    top_k_indices = np.argsort(utilities)[-k:]
+
+    global_mean_dist = np.mean(edge_distance)
+    adaptive_lambda = 0.30 * global_mean_dist
+
+    # Penalize candidate bottleneck edges
+    for idx in top_k_indices:
+        u, v = u_idx[idx], v_idx[idx]
+        edge_n_used[u, v] += 1.0
+        edge_n_used[v, u] += 1.0
+        freq_penalty = 1.0 + np.log1p(edge_n_used[u, v])
+        geom_weight = 1.0 + 0.5 * edge_spatial_factor[idx]
+        penalty = adaptive_lambda * freq_penalty * geom_weight
+        updated_edge_distance[u, v] += penalty
+        updated_edge_distance[v, u] += penalty
+
+    # Promote shortcut edges bypassing high-deficit nodes
+    high_deficit_indices = np.argsort(deficit_2hop)[-k:]
+    for idx in high_deficit_indices:
+        u, w = u_idx[idx], w_idx[idx]
+        freq = edge_n_used[u, w]
+        if freq < 1.0:
+            discount = 0.10 * global_mean_dist * (1.0 / (1.0 + freq))
+            new_val = max(1e-6, updated_edge_distance[u, w] - discount)
+            updated_edge_distance[u, w] = new_val
+            updated_edge_distance[w, u] = new_val
+
+    return updated_edge_distance
+# ===== Eval Output =====
+[*] Running ...
+[*] mode=val, data=/home/ducanh/projects/EAs_project/MoH/problems/tsp_gls/data/val/val_instance_data_sol_100.pkl, seed=0, n_instances=8
+[*] instance_indices=[6, 9, 0, 2, 4, 3, 5, 1]
+[*] instance 6: obj=7.7596, gap=0.0000
+[*] instance 9: obj=8.0501, gap=0.0846
+[*] instance 0: obj=8.0001, gap=0.0000
+[*] instance 2: obj=8.0739, gap=0.0000
+[*] instance 4: obj=7.8131, gap=0.0000
+[*] instance 3: obj=7.3713, gap=0.0000
+[*] instance 5: obj=7.6365, gap=0.0000
+[*] instance 1: obj=7.5570, gap=0.0000
+[*] ave_gap on size 100: 0.01057458169665959
+0.01057458169665959

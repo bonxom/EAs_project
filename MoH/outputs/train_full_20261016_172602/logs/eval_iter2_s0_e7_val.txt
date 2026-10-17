@@ -1,0 +1,68 @@
+# ===== Heuristic Code =====
+#{Dynamically adapts edge penalization by filtering the top-k utility edges using a statistical offset and rank partitioning to strictly penalize the 1 to 2 most critical bottleneck edges with minimal overhead.}
+
+import numpy as np
+
+def update_edge_distance(edge_distance, local_opt_tour, edge_n_used):
+    # Create an explicit copy of the distance matrix to avoid modifying the input
+    updated_edge_distance = np.copy(edge_distance)
+
+    # Vectorized extraction of tour directed edges
+    u_idx = local_opt_tour
+    v_idx = np.roll(local_opt_tour, -1)
+
+    tour_lengths = edge_distance[u_idx, v_idx]
+    tour_counts = edge_n_used[u_idx, v_idx]
+
+    # Guided Local Search utility calculation: length / (1 + count)
+    utilities = tour_lengths / (1.0 + tour_counts)
+
+    n_edges = utilities.size
+    if n_edges == 0:
+        return updated_edge_distance
+
+    # Adaptively identify top critical edges (strictly 1 to 2 edges when clustered)
+    if n_edges <= 2:
+        selected_mask = np.ones(n_edges, dtype=bool)
+    else:
+        # Determine the second highest utility value efficiently via partial partition
+        k_val = np.partition(utilities, n_edges - 2)[n_edges - 2]
+        max_util = np.max(utilities)
+        std_util = np.std(utilities)
+
+        # Adaptive threshold: dynamically balance variance spread and top-2 partition
+        stat_threshold = max_util - 0.5 * std_util
+        adaptive_threshold = max(k_val, stat_threshold, 0.995 * max_util)
+
+        selected_mask = utilities >= adaptive_threshold
+        # Enforce strict top-2 upper bound to avoid over-penalization in flat landscapes
+        if np.count_nonzero(selected_mask) > 2:
+            selected_mask = utilities >= k_val
+            if np.count_nonzero(selected_mask) > 2:
+                selected_mask = utilities == max_util
+
+    avg_edge = np.mean(tour_lengths)
+    penalty = 0.3 * avg_edge
+
+    # Apply symmetric penalization via advanced indexing
+    sel_u = u_idx[selected_mask]
+    sel_v = v_idx[selected_mask]
+
+    updated_edge_distance[sel_u, sel_v] += penalty
+    updated_edge_distance[sel_v, sel_u] += penalty
+
+    return updated_edge_distance
+# ===== Eval Output =====
+[*] Running ...
+[*] mode=val, data=/home/ducanh/projects/EAs_project/MoH/problems/tsp_gls/data/val/val_instance_data_sol_20.pkl, seed=0, n_instances=8
+[*] instance_indices=[6, 9, 0, 2, 4, 3, 5, 1]
+[*] instance 6: obj=3.7045, gap=0.0000
+[*] instance 9: obj=4.1442, gap=0.0000
+[*] instance 0: obj=3.6827, gap=0.0000
+[*] instance 2: obj=3.8184, gap=0.0000
+[*] instance 4: obj=3.8385, gap=0.0000
+[*] instance 3: obj=3.6971, gap=0.0000
+[*] instance 5: obj=3.4281, gap=0.0000
+[*] instance 1: obj=3.6958, gap=0.0000
+[*] ave_gap on size 20: 1.2218318606871392e-06
+1.2218318606871392e-06

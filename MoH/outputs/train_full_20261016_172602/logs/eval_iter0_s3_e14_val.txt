@@ -1,0 +1,53 @@
+# ===== Heuristic Code =====
+#{Normalize tour edge lengths against the asymmetric local neighborhood scales of both endpoints using the maximum of their k-nearest-neighbor distances to protect necessary inter-cluster bridge edges from excessive penalties.}#
+
+import numpy as np
+
+def update_edge_distance(edge_distance, local_opt_tour, edge_n_used):
+    updated_edge_distance = np.copy(edge_distance)
+    n = len(local_opt_tour)
+    k = min(8, n - 1)
+
+    # Calculate k-nearest neighbor scale for each node
+    sorted_dists = np.partition(edge_distance, kth=k, axis=1)[:, 1:k+1]
+    k_nn_scale = np.mean(sorted_dists, axis=1)
+
+    u_idx = local_opt_tour
+    v_idx = np.roll(local_opt_tour, -1)
+
+    tour_edge_lengths = edge_distance[u_idx, v_idx]
+    usage = edge_n_used[u_idx, v_idx]
+
+    # Local neighborhood scale: max of endpoint neighborhood scales preserves bridge edges
+    local_scale = np.maximum(k_nn_scale[u_idx], k_nn_scale[v_idx]) + 1e-6
+    rel_local_length = tour_edge_lengths / local_scale
+
+    # Usage discount factor
+    usage_factor = 1.0 / (1.0 + 0.35 * usage)
+
+    # Sigmoidal rank-based penalty on locally scaled edge lengths
+    median_rel = np.median(rel_local_length)
+    penalty_scale = 1.0 / (1.0 + np.exp(-3.0 * (rel_local_length - median_rel)))
+
+    # Final penalty weighted by usage and local elongation
+    penalty = rel_local_length * usage_factor * penalty_scale
+
+    # Symmetric penalty update
+    np.add.at(updated_edge_distance, (u_idx, v_idx), penalty)
+    np.add.at(updated_edge_distance, (v_idx, u_idx), penalty)
+
+    return updated_edge_distance
+# ===== Eval Output =====
+[*] Running ...
+[*] mode=val, data=/home/ducanh/projects/EAs_project/MoH/problems/tsp_gls/data/val/val_instance_data_sol_200.pkl, seed=0, n_instances=8
+[*] instance_indices=[6, 9, 0, 2, 4, 3, 5, 1]
+[*] instance 6: obj=10.4458, gap=0.0000
+[*] instance 9: obj=10.7478, gap=0.7954
+[*] instance 0: obj=10.8857, gap=0.0000
+[*] instance 2: obj=10.9761, gap=0.2588
+[*] instance 4: obj=10.8605, gap=0.1235
+[*] instance 3: obj=10.6069, gap=0.0472
+[*] instance 5: obj=10.8987, gap=0.1390
+[*] instance 1: obj=11.0542, gap=0.2722
+[*] ave_gap on size 200: 0.20450874595788204
+0.20450874595788204

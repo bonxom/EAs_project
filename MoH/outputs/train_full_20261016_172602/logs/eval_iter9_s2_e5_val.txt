@@ -1,0 +1,97 @@
+# ===== Heuristic Code =====
+#{This algorithm dynamically scales GLS penalties and shortcut incentives by estimating instance scale and solution suboptimality relative to a fast 1-tree lower bound proxy, while weighting edge modifications via local node-incident degree pressures rather than uniform global constants.}#
+
+import numpy as np
+
+def update_edge_distance(edge_distance, local_opt_tour, edge_n_used):
+    updated_edge_distance = np.copy(edge_distance)
+    num_nodes = len(local_opt_tour)
+    tour = np.asarray(local_opt_tour)
+
+    # Precompute indices for consecutive nodes in the tour
+    u_idx = tour
+    v_idx = np.roll(tour, -1)
+    w_idx = np.roll(tour, -2)
+
+    # Asymptotic memory decay
+    edge_n_used *= 0.96
+
+    d_uv = edge_distance[u_idx, v_idx]
+    d_vw = edge_distance[v_idx, w_idx]
+    d_uw = edge_distance[u_idx, w_idx]
+
+    current_tour_cost = np.sum(d_uv)
+
+    # Compute lower bound proxy via sum of the 2-nearest-neighbor half-costs
+    sorted_dists = np.partition(edge_distance, 2, axis=1)
+    # The first column is 0 (self-distance), columns 1 and 2 are nearest two distinct neighbors
+    lb_proxy = 0.5 * np.sum(sorted_dists[:, 1] + sorted_dists[:, 2])
+
+    # Suboptimality ratio gap indicates how aggressively we need to perturb
+    gap = max(0.0, (current_tour_cost - lb_proxy) / (current_tour_cost + 1e-8))
+
+    # Dynamic k: scales between 8% and 22% of nodes depending on suboptimality gap
+    k_fraction = 0.08 + 0.14 * np.clip(gap * 3.0, 0.0, 1.0)
+    k = max(1, min(num_nodes - 1, int(np.ceil(k_fraction * num_nodes))))
+
+    # Local node incident pressure based on average distance to 2-nearest neighbors
+    node_scale = 0.5 * (sorted_dists[:, 1] + sorted_dists[:, 2])
+
+    # Geometric detour and turn calculation
+    detour_ratio = (d_uv + d_vw) / (d_uw + 1e-8)
+    denom = 2.0 * d_uv * d_vw + 1e-8
+    cos_turn = np.clip((d_uv**2 + d_vw**2 - d_uw**2) / denom, -1.0, 1.0)
+    acute_deficit = 1.0 - cos_turn
+    geom_inefficiency = detour_ratio * (1.0 + 0.5 * acute_deficit)
+    local_geom_factor = 0.5 * (geom_inefficiency + np.roll(geom_inefficiency, 1))
+
+    base_freq = edge_n_used[u_idx, v_idx]
+    utilities = (d_uv / (1.0 + base_freq)) * (1.0 + 0.35 * local_geom_factor)
+
+    top_k_indices = np.argsort(utilities)[-k:]
+
+    # Adaptive lambda scaled by solution suboptimality gap
+    lambda_factor = 0.20 + 0.25 * np.clip(gap * 2.5, 0.0, 1.0)
+
+    for idx in top_k_indices:
+        u, v = u_idx[idx], v_idx[idx]
+        edge_n_used[u, v] += 1.0
+        edge_n_used[v, u] += 1.0
+
+        # Localized node pressure replaces uniform global mean
+        local_pressure = 0.5 * (node_scale[u] + node_scale[v])
+
+        # Frequency penalty with sublinear growth modulated by usage
+        freq_penalty = 1.0 + np.sqrt(edge_n_used[u, v])
+        geom_weight = 1.0 + 0.5 * local_geom_factor[idx]
+
+        penalty = lambda_factor * local_pressure * freq_penalty * geom_weight
+        updated_edge_distance[u, v] += penalty
+        updated_edge_distance[v, u] += penalty
+
+    # Promote potential shortcut moves for sharp or long detours
+    high_detour_indices = np.argsort(detour_ratio)[-k:]
+    for idx in high_detour_indices:
+        u, w = u_idx[idx], w_idx[idx]
+        freq = edge_n_used[u, w]
+        if freq < 1.0:
+            local_pressure = 0.5 * (node_scale[u] + node_scale[w])
+            discount = 0.12 * local_pressure * (1.0 / (1.0 + freq))
+            updated_edge_distance[u, w] = max(1e-6, updated_edge_distance[u, w] - discount)
+            updated_edge_distance[w, u] = updated_edge_distance[u, w]
+
+    return updated_edge_distance
+# ===== Eval Output =====
+[*] Running ...
+[*] mode=val, data=/home/ducanh/projects/EAs_project/MoH/problems/tsp_gls/data/val/val_instance_data_sol_100.pkl, seed=0, n_instances=8
+[*] instance_indices=[6, 9, 0, 2, 4, 3, 5, 1]
+[*] instance 6: obj=7.7932, gap=0.4329
+[*] instance 9: obj=8.1138, gap=0.8765
+[*] instance 0: obj=8.0861, gap=1.0744
+[*] instance 2: obj=8.1054, gap=0.3902
+[*] instance 4: obj=7.8131, gap=0.0000
+[*] instance 3: obj=7.3713, gap=0.0000
+[*] instance 5: obj=7.6670, gap=0.3984
+[*] instance 1: obj=7.5734, gap=0.2161
+[*] ave_gap on size 100: 0.4235667313160024
+0.4235667313160024

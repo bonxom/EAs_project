@@ -1,0 +1,82 @@
+# ===== Heuristic Code =====
+#{We combine GLS utility-based median edge penalization with mutual k-NN topology weighting and restrict unvisited edge discounting exclusively to unvisited neighbors within each penalized endpoint's k-NN candidate set.}#
+
+import numpy as np
+
+def update_edge_distance(edge_distance, local_opt_tour, edge_n_used):
+    updated_edge_distance = np.copy(edge_distance)
+    n = len(local_opt_tour)
+
+    u_idx = np.array(local_opt_tour, dtype=np.intp)
+    v_idx = np.roll(u_idx, -1)
+
+    costs = edge_distance[u_idx, v_idx].astype(np.float64)
+    used = edge_n_used[u_idx, v_idx].astype(np.float64)
+
+    # Precompute k-NN (k=8) candidate neighbors based on original distance
+    k = min(8, n - 1)
+    # Get top-k nearest neighbors for all nodes (excluding self)
+    # argpartition partitions the smallest k+1 elements; index 0 is self (distance 0)
+    knn_part = np.argpartition(edge_distance, kth=k, axis=1)[:, :k+1]
+    knn_mask = np.zeros((n, n), dtype=bool)
+    rows = np.arange(n)[:, None]
+    knn_mask[rows, knn_part] = True
+    np.fill_diagonal(knn_mask, False)
+
+    # Mutual k-NN indicator for edges in the tour
+    is_mutual_knn = knn_mask[u_idx, v_idx] & knn_mask[v_idx, u_idx]
+
+    # Utility calculation using z-scores and mutual k-NN weighting
+    mean_cost = np.mean(costs)
+    std_cost = np.std(costs) + 1e-8
+    z_scores = (costs - mean_cost) / std_cost
+    weights = 1.0 / (1.0 + np.exp(-z_scores))
+
+    # Boost utility for long edges that are NOT mutual nearest neighbors
+    topo_boost = np.where(is_mutual_knn, 1.0, 1.2)
+    utilities = (costs * (1.0 + weights) * topo_boost) / (1.0 + used)
+
+    threshold = np.median(utilities)
+    max_util = np.max(utilities) + 1e-8
+    penalize_mask = utilities >= threshold
+
+    p_u = u_idx[penalize_mask]
+    p_v = v_idx[penalize_mask]
+    p_costs = costs[penalize_mask]
+    p_used = used[penalize_mask]
+    p_utils = utilities[penalize_mask]
+
+    # Sub-linear frequency damping with utility scaling
+    penalties = (p_costs / (1.0 + np.sqrt(p_used + 1.0))) * (1.0 + p_utils / max_util)
+    updated_edge_distance[p_u, p_v] += penalties
+    updated_edge_distance[p_v, p_u] += penalties
+
+    # Focused discounting strictly within the k-NN neighborhood of penalized endpoints
+    penalized_nodes = np.unique(np.concatenate((p_u, p_v)))
+    decay_ratio = 0.025
+
+    for u in penalized_nodes:
+        # Candidate neighbors: in k-NN set and unused
+        cand_mask = knn_mask[u] & (edge_n_used[u] == 0)
+        cand_mask[u] = False
+        if np.any(cand_mask):
+            current_vals = updated_edge_distance[u, cand_mask]
+            discount = current_vals * decay_ratio
+            updated_edge_distance[u, cand_mask] -= discount
+            updated_edge_distance[cand_mask, u] -= discount
+
+    return updated_edge_distance
+# ===== Eval Output =====
+[*] Running ...
+[*] mode=val, data=/home/ducanh/projects/EAs_project/MoH/problems/tsp_gls/data/val/val_instance_data_sol_50.pkl, seed=0, n_instances=8
+[*] instance_indices=[6, 9, 0, 2, 4, 3, 5, 1]
+[*] instance 6: obj=5.7136, gap=0.5983
+[*] instance 9: obj=5.9639, gap=0.0000
+[*] instance 0: obj=5.7783, gap=0.0000
+[*] instance 2: obj=5.8071, gap=0.0000
+[*] instance 4: obj=5.3965, gap=0.0000
+[*] instance 3: obj=5.7569, gap=0.0000
+[*] instance 5: obj=5.6492, gap=0.5441
+[*] instance 1: obj=5.1651, gap=0.0000
+[*] ave_gap on size 50: 0.14279541467067947
+0.14279541467067947

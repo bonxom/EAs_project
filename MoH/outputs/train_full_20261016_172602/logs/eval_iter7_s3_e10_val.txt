@@ -1,0 +1,75 @@
+# ===== Heuristic Code =====
+#{This algorithm evaluates two-edge subpaths (corners) along the tour by computing their detour ratio relative to direct bypasses, combining relative length, usage discounting, and local density, and distributes corner-based detour penalties across adjacent incident edges to ruin poor sub-chains.}
+
+import numpy as np
+
+def update_edge_distance(edge_distance, local_opt_tour, edge_n_used):
+    updated_edge_distance = np.copy(edge_distance)
+    n = len(local_opt_tour)
+    if n < 4:
+        return updated_edge_distance
+
+    # Compute k-nearest neighbor density for nodes
+    k = min(6, n - 1)
+    sorted_dists = np.sort(edge_distance, axis=1)
+    k_nn_avg = np.mean(sorted_dists[:, 1:k+1], axis=1)
+    node_density = 1.0 / (k_nn_avg + 1e-6)
+    node_density = node_density / (np.mean(node_density) + 1e-6)
+
+    # Node indices for consecutive triplets: p -> c -> s
+    p_idx = np.roll(local_opt_tour, 1)
+    c_idx = np.asarray(local_opt_tour)
+    s_idx = np.roll(local_opt_tour, -1)
+
+    # Edge distances along the corner (p-c and c-s) and direct shortcut (p-s)
+    d_pc = edge_distance[p_idx, c_idx]
+    d_cs = edge_distance[c_idx, s_idx]
+    d_ps = edge_distance[p_idx, s_idx]
+
+    # Detour ratio of visiting central node c versus direct shortcut
+    corner_length = d_pc + d_cs
+    detour_ratio = corner_length / (d_ps + 1e-6)
+    detour_norm = detour_ratio / (np.mean(detour_ratio) + 1e-6)
+
+    # Guided Local Search properties on edges
+    avg_tour_edge = np.mean(d_cs)
+    rel_edge_len = d_cs / (avg_tour_edge + 1e-6)
+    usage_factor = 1.0 / (1.0 + 0.3 * edge_n_used[c_idx, s_idx])
+    density_factor = 0.5 * (node_density[c_idx] + node_density[s_idx])
+
+    # Base edge penalty combining relative length, usage discount, and density
+    base_edge_penalty = rel_edge_len * usage_factor * density_factor
+
+    # Corner structural penalty targeting inefficient sub-chains and sharp detours
+    corner_penalty = (detour_norm ** 1.5) * (1.0 / (1.0 + 0.15 * (edge_n_used[p_idx, c_idx] + edge_n_used[c_idx, s_idx])))
+
+    # Distribute corner penalty to both incoming and outgoing incident edges
+    chain_penalty = 0.5 * corner_penalty + 0.5 * np.roll(corner_penalty, -1)
+
+    # Synthesize total penalty for edge (c -> s)
+    total_penalty = 0.55 * base_edge_penalty + 0.45 * chain_penalty
+
+    # Amplify high-detour sub-chains above the 75th percentile
+    detour_threshold = np.percentile(corner_length, 75)
+    amplify_mask = corner_length >= detour_threshold
+    total_penalty[amplify_mask] *= 1.4
+
+    # Apply symmetric updates to the distance matrix
+    np.add.at(updated_edge_distance, (c_idx, s_idx), total_penalty)
+    np.add.at(updated_edge_distance, (s_idx, c_idx), total_penalty)
+
+    return updated_edge_distance
+# ===== Eval Output =====
+[*] Running ...
+[*] mode=val, data=/home/ducanh/projects/EAs_project/MoH/problems/tsp_gls/data/val/val_instance_data_sol_200.pkl, seed=0, n_instances=8
+[*] instance_indices=[6, 9, 0, 2, 4, 3, 5, 1]
+[*] instance 6: obj=10.4458, gap=0.0000
+[*] instance 9: obj=10.6868, gap=0.2227
+[*] instance 0: obj=10.9079, gap=0.2034
+[*] instance 2: obj=10.9686, gap=0.1901
+[*] instance 4: obj=10.9051, gap=0.5338
+[*] instance 3: obj=10.6207, gap=0.1778
+[*] instance 5: obj=10.9277, gap=0.4055
+[*] instance 1: obj=11.0710, gap=0.4243
+[*] ave_gap on size 200: 0.2696933231323001
+0.2696933231323001

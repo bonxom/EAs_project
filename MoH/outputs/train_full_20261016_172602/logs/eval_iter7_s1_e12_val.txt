@@ -1,0 +1,103 @@
+# ===== Heuristic Code =====
+#{This algorithm identifies sub-tour segments with peak GLS edge utility density, applying structural block penalties within the dense cluster to enforce macro-diversification while discounting bridging edges to distant nodes to mandate complete topological re-routing.}
+
+import numpy as np
+
+def update_edge_distance(edge_distance, local_opt_tour, edge_n_used):
+    updated_edge_distance = np.copy(edge_distance)
+    n = len(local_opt_tour)
+    if n < 4:
+        return updated_edge_distance
+
+    tour = np.array(local_opt_tour, dtype=np.intp)
+    u_idx = tour
+    v_idx = np.roll(tour, -1)
+
+    costs = edge_distance[u_idx, v_idx].astype(np.float64)
+    used = edge_n_used[u_idx, v_idx].astype(np.float64)
+
+    mean_cost = np.mean(costs)
+    std_cost = np.std(costs) + 1e-8
+    z_scores = (costs - mean_cost) / std_cost
+    weights = 1.0 / (1.0 + np.exp(-z_scores))
+    utilities = (costs * (1.0 + weights)) / (1.0 + used)
+
+    # Identify the sub-tour cluster of size k with maximum utility density
+    k = max(3, int(np.clip(n // 4, 3, 30)))
+    if k >= n:
+        k = max(2, n // 2)
+
+    extended_utils = np.concatenate([utilities, utilities[:k - 1]])
+    window_sums = np.convolve(extended_utils, np.ones(k, dtype=np.float64), mode='valid')
+    best_start = int(np.argmax(window_sums))
+
+    # Indices of nodes belonging to the critical cluster
+    cluster_pos = (np.arange(best_start, best_start + k)) % n
+    cluster_nodes = tour[cluster_pos]
+
+    # Block-level structural penalties within the ruined sub-cluster
+    cluster_cost_scale = np.mean(costs[cluster_pos]) + 1e-8
+    sub_used = edge_n_used[np.ix_(cluster_nodes, cluster_nodes)].astype(np.float64)
+    block_penalty = (cluster_cost_scale * 1.5) / (1.0 + np.sqrt(sub_used + 1.0))
+
+    # Apply intra-cluster ruin penalties (preserve zero diagonals)
+    updated_edge_distance[np.ix_(cluster_nodes, cluster_nodes)] += block_penalty
+    np.fill_diagonal(updated_edge_distance, 0.0)
+
+    # Penalize the immediate boundary edges isolating the sub-tour
+    prev_node = tour[(best_start - 1) % n]
+    next_node = tour[(best_start + k) % n]
+    c_start_node = tour[best_start % n]
+    c_end_node = tour[(best_start + k - 1) % n]
+
+    updated_edge_distance[prev_node, c_start_node] += cluster_cost_scale * 1.25
+    updated_edge_distance[c_start_node, prev_node] += cluster_cost_scale * 1.25
+    updated_edge_distance[c_end_node, next_node] += cluster_cost_scale * 1.25
+    updated_edge_distance[next_node, c_end_node] += cluster_cost_scale * 1.25
+
+    # Recreate: Discount edges connecting cluster nodes to distant, unused/under-used external nodes
+    external_mask = np.ones(n, dtype=bool)
+    external_mask[cluster_nodes] = False
+    external_nodes = np.where(external_mask)[0]
+
+    if len(external_nodes) > 0:
+        ext_used = edge_n_used[np.ix_(cluster_nodes, external_nodes)]
+        # Target least-used bridging shortcuts
+        min_used_thresh = np.percentile(ext_used, 30)
+        reconnect_mask = ext_used <= min_used_thresh
+
+        discount_rate = 0.05
+        current_ext_vals = updated_edge_distance[np.ix_(cluster_nodes, external_nodes)]
+        discount = current_ext_vals * discount_rate * reconnect_mask
+
+        updated_edge_distance[np.ix_(cluster_nodes, external_nodes)] -= discount
+        updated_edge_distance[np.ix_(external_nodes, cluster_nodes)] -= discount.T
+
+    # Standard GLS penalty on other standalone high-utility tour edges outside cluster
+    outside_mask = np.ones(n, dtype=bool)
+    outside_mask[cluster_pos] = False
+    if np.any(outside_mask):
+        rem_utils = utilities[outside_mask]
+        rem_thresh = np.percentile(rem_utils, 75)
+        rem_pen_mask = outside_mask & (utilities >= rem_thresh)
+        p_u = u_idx[rem_pen_mask]
+        p_v = v_idx[rem_pen_mask]
+        p_pen = (costs[rem_pen_mask] / (1.0 + np.sqrt(used[rem_pen_mask] + 1.0))) * 0.5
+        updated_edge_distance[p_u, p_v] += p_pen
+        updated_edge_distance[p_v, p_u] += p_pen
+
+    return updated_edge_distance
+# ===== Eval Output =====
+[*] Running ...
+[*] mode=val, data=/home/ducanh/projects/EAs_project/MoH/problems/tsp_gls/data/val/val_instance_data_sol_50.pkl, seed=0, n_instances=8
+[*] instance_indices=[6, 9, 0, 2, 4, 3, 5, 1]
+[*] instance 6: obj=5.7136, gap=0.5983
+[*] instance 9: obj=6.0108, gap=0.7860
+[*] instance 0: obj=5.7783, gap=0.0000
+[*] instance 2: obj=5.8071, gap=0.0000
+[*] instance 4: obj=5.3965, gap=0.0000
+[*] instance 3: obj=5.8806, gap=2.1487
+[*] instance 5: obj=5.6187, gap=0.0000
+[*] instance 1: obj=5.1651, gap=0.0000
+[*] ave_gap on size 50: 0.44161499334800236
+0.44161499334800236

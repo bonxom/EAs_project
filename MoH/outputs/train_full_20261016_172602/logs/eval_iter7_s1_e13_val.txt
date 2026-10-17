@@ -1,0 +1,93 @@
+# ===== Heuristic Code =====
+#{This algorithm dynamically penalizes non-dominated tour edges using a Pareto front of edge cost versus negative usage combined with an adaptive quantile cutoff scaled by search stagnation to focus perturbations on critical bottlenecks.}#
+
+import numpy as np
+
+def update_edge_distance(edge_distance, local_opt_tour, edge_n_used):
+    updated_edge_distance = np.copy(edge_distance)
+    n = len(local_opt_tour)
+    if n < 2:
+        return updated_edge_distance
+
+    u_idx = np.array(local_opt_tour, dtype=np.intp)
+    v_idx = np.roll(u_idx, -1)
+
+    costs = edge_distance[u_idx, v_idx].astype(np.float64)
+    used = edge_n_used[u_idx, v_idx].astype(np.float64)
+
+    # Calculate tour-level search stagnation / saturation
+    max_used_in_tour = np.max(used)
+    mean_used_in_tour = np.mean(used)
+    # Stagnation ratio ranges smoothly in [0, 1]
+    stagnation = mean_used_in_tour / (max_used_in_tour + 1.0)
+
+    # Dynamically scale the quantile threshold: tighten from 50th percentile down to top 15% (85th percentile)
+    quantile_cutoff = 50.0 + 35.0 * stagnation
+
+    # Standard utility computation
+    mean_cost = np.mean(costs)
+    std_cost = np.std(costs) + 1e-8
+    z_scores = (costs - mean_cost) / std_cost
+    weights = 1.0 / (1.0 + np.exp(-z_scores))
+    utilities = (costs * (1.0 + weights)) / (1.0 + used)
+
+    threshold = np.percentile(utilities, quantile_cutoff)
+
+    # Pareto non-domination filter: edge is dominated if another edge has >= cost AND <= used (with at least one strict inequality)
+    # Equivalently, we want edges that are not dominated in the objective space of (cost maximize, used minimize).
+    c_diff = costs[:, None] - costs[None, :]
+    u_diff = used[None, :] - used[:, None]
+
+    # is_dominated[i] is True if there exists j such that costs[j] >= costs[i] and used[j] <= used[i] (and strictly better in one)
+    weakly_better = (costs[None, :] >= costs[:, None]) & (used[None, :] <= used[:, None])
+    strictly_better = (costs[None, :] > costs[:, None]) | (used[None, :] < used[:, None])
+    is_dominated = np.any(weakly_better & strictly_better, axis=1)
+    pareto_mask = ~is_dominated
+
+    # Combine Pareto non-domination with the adaptive quantile threshold
+    penalize_mask = (utilities >= threshold) | pareto_mask
+
+    # Ensure at least one edge is selected (fallback to maximum utility)
+    if not np.any(penalize_mask):
+        penalize_mask[np.argmax(utilities)] = True
+
+    p_u = u_idx[penalize_mask]
+    p_v = v_idx[penalize_mask]
+    p_costs = costs[penalize_mask]
+    p_used = used[penalize_mask]
+    p_utils = utilities[penalize_mask]
+
+    max_util = np.max(utilities) + 1e-8
+    penalties = (p_costs / (1.0 + np.sqrt(p_used + 1.0))) * (1.0 + p_utils / max_util)
+
+    # Symmetric matrix penalty updates
+    updated_edge_distance[p_u, p_v] += penalties
+    updated_edge_distance[p_v, p_u] += penalties
+
+    # Reward unexplored alternative edges connected to penalized nodes
+    penalized_nodes = np.unique(np.concatenate((p_u, p_v)))
+    decay_ratio = 0.02 * (1.0 + stagnation)
+
+    for u in penalized_nodes:
+        unused_mask = (edge_n_used[u] == 0)
+        unused_mask[u] = False
+        if np.any(unused_mask):
+            current_vals = updated_edge_distance[u, unused_mask]
+            updated_edge_distance[u, unused_mask] -= current_vals * decay_ratio
+            updated_edge_distance[unused_mask, u] = updated_edge_distance[u, unused_mask]
+
+    return updated_edge_distance
+# ===== Eval Output =====
+[*] Running ...
+[*] mode=val, data=/home/ducanh/projects/EAs_project/MoH/problems/tsp_gls/data/val/val_instance_data_sol_50.pkl, seed=0, n_instances=8
+[*] instance_indices=[6, 9, 0, 2, 4, 3, 5, 1]
+[*] instance 6: obj=5.7136, gap=0.5983
+[*] instance 9: obj=5.9639, gap=0.0000
+[*] instance 0: obj=5.7783, gap=0.0000
+[*] instance 2: obj=5.8071, gap=0.0000
+[*] instance 4: obj=5.3965, gap=0.0000
+[*] instance 3: obj=5.8123, gap=0.9633
+[*] instance 5: obj=5.6187, gap=0.0000
+[*] instance 1: obj=5.1651, gap=0.0000
+[*] ave_gap on size 50: 0.1952036921433975
+0.1952036921433975

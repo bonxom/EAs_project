@@ -1,0 +1,84 @@
+# ===== Heuristic Code =====
+#{An adaptive Guided Local Search penalty mechanism that penalizes only high-utility edges via quantile-based top selection while selectively discounting the nearest geometric unvisited candidate edges to focus intensification on high-quality structural alternatives.}#
+
+import numpy as np
+
+def update_edge_distance(edge_distance, local_opt_tour, edge_n_used):
+    updated_edge_distance = np.copy(edge_distance)
+    n = len(local_opt_tour)
+
+    u_idx = np.array(local_opt_tour, dtype=np.intp)
+    v_idx = np.roll(u_idx, -1)
+
+    costs = edge_distance[u_idx, v_idx].astype(np.float64)
+    used = edge_n_used[u_idx, v_idx].astype(np.float64)
+
+    # Standardize cost features using robust statistics
+    mean_cost = np.mean(costs)
+    std_cost = np.std(costs) + 1e-8
+    z_scores = (costs - mean_cost) / std_cost
+    weights = 1.0 / (1.0 + np.exp(-z_scores))
+
+    # Utility formulation balancing edge length and usage history
+    utilities = (costs * (1.0 + 0.5 * weights)) / (1.0 + used)
+
+    # Targeted selective penalization: penalize top 25% highest utility edges (instead of coarse median 50%)
+    # Always penalize at least 1 and at most max(2, n // 4) edges to avoid destructive landscape shifts
+    k_penalize = max(2, min(n // 4, int(np.ceil(0.25 * n))))
+    threshold = np.partition(utilities, n - k_penalize)[n - k_penalize]
+    penalize_mask = utilities >= threshold
+
+    p_u = u_idx[penalize_mask]
+    p_v = v_idx[penalize_mask]
+    p_costs = costs[penalize_mask]
+    p_used = used[penalize_mask]
+    p_utils = utilities[penalize_mask]
+    max_util = np.max(utilities) + 1e-8
+
+    # Scaled penalty calibrated to problem scale (average edge cost)
+    lambda_scale = 0.3 * mean_cost
+    penalties = lambda_scale * (p_costs / (mean_cost + 1e-8)) * (1.0 + p_utils / max_util) / np.sqrt(1.0 + p_used)
+
+    updated_edge_distance[p_u, p_v] += penalties
+    updated_edge_distance[p_v, p_u] += penalties
+
+    # Counterbalancing intensification: selectively discount only the nearest k promising unvisited neighbors
+    penalized_nodes = np.unique(np.concatenate((p_u, p_v)))
+    k_nearest = min(5, n - 1)
+    decay_ratio = 0.02
+
+    for u in penalized_nodes:
+        # Mask out self and currently used edges
+        candidate_mask = (edge_n_used[u] == 0)
+        candidate_mask[u] = False
+
+        cand_indices = np.where(candidate_mask)[0]
+        if len(cand_indices) > 0:
+            # Prioritize geometrically close unvisited neighbors
+            base_distances = edge_distance[u, cand_indices]
+            if len(cand_indices) > k_nearest:
+                top_k_local = np.argpartition(base_distances, k_nearest)[:k_nearest]
+                selected_neighbors = cand_indices[top_k_local]
+            else:
+                selected_neighbors = cand_indices
+
+            # Apply targeted incentive discount
+            discount = updated_edge_distance[u, selected_neighbors] * decay_ratio
+            updated_edge_distance[u, selected_neighbors] -= discount
+            updated_edge_distance[selected_neighbors, u] = updated_edge_distance[u, selected_neighbors]
+
+    return updated_edge_distance
+# ===== Eval Output =====
+[*] Running ...
+[*] mode=val, data=/home/ducanh/projects/EAs_project/MoH/problems/tsp_gls/data/val/val_instance_data_sol_50.pkl, seed=0, n_instances=8
+[*] instance_indices=[6, 9, 0, 2, 4, 3, 5, 1]
+[*] instance 6: obj=5.7136, gap=0.5983
+[*] instance 9: obj=6.0217, gap=0.9695
+[*] instance 0: obj=5.8546, gap=1.3193
+[*] instance 2: obj=5.8071, gap=0.0000
+[*] instance 4: obj=5.5821, gap=3.4387
+[*] instance 3: obj=5.8806, gap=2.1487
+[*] instance 5: obj=5.6187, gap=0.0000
+[*] instance 1: obj=5.3071, gap=2.7501
+[*] ave_gap on size 50: 1.4030780809943966
+1.4030780809943966

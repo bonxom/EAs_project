@@ -1,0 +1,72 @@
+# ===== Heuristic Code =====
+#{Normalized Residual Discrepancy Penalization: Compute edge utility by evaluating the excess cost of tour edges above the k-nearest neighbor lower-bound baselines of their endpoint vertices, scaled inversely by usage counts, and penalize those edges exhibiting the most egregious geometric discrepancies.}#
+
+import numpy as np
+
+def update_edge_distance(edge_distance, local_opt_tour, edge_n_used):
+    # Copy edge distance matrix to avoid modifying original array directly
+    updated_edge_distance = np.copy(edge_distance)
+    n = edge_distance.shape[0]
+
+    # Extract consecutive edge endpoints along the local optimal tour
+    u_idx = local_opt_tour
+    v_idx = np.roll(local_opt_tour, -1)
+
+    # Compute k-nearest neighbor lower bound baseline for each vertex
+    # Exclude self-distance (diagonal)
+    k = min(3, max(1, n - 2))
+    # Using partition along axis 1 to find the smallest non-zero distances
+    # Copy distances with infinity along diagonal to safely extract nearest neighbors
+    dist_no_diag = np.copy(edge_distance)
+    np.fill_diagonal(dist_no_diag, np.inf)
+    knn_part = np.partition(dist_no_diag, k - 1, axis=1)[:, :k]
+    knn_baseline = np.mean(knn_part, axis=1)
+
+    # Calculate actual lengths and lower-bound discrepancy for each tour edge
+    actual_lengths = edge_distance[u_idx, v_idx]
+    # Edge baseline is the average of the k-NN baselines of its endpoints
+    edge_baselines = 0.5 * (knn_baseline[u_idx] + knn_baseline[v_idx])
+    residuals = np.maximum(0.0, actual_lengths - edge_baselines)
+
+    # Incorporate edge usage count into utility evaluation
+    counts = edge_n_used[u_idx, v_idx]
+    utilities = residuals / (1.0 + counts)
+
+    # If all residuals are near zero, fall back to normalized raw length GLS
+    max_utility = np.max(utilities)
+    if max_utility <= 1e-8:
+        utilities = actual_lengths / (1.0 + counts)
+        max_utility = np.max(utilities)
+
+    # Select edges that exhibit near-maximum discrepancy
+    threshold = 0.95 * max_utility
+    selected_mask = utilities >= threshold
+    sel_u = u_idx[selected_mask]
+    sel_v = v_idx[selected_mask]
+
+    # Base penalty derived from the median or mean tour length
+    avg_tour_edge = np.mean(actual_lengths)
+    penalty_magnitude = 0.35 * avg_tour_edge
+
+    # Apply penalty symmetrically to the selected egregious edges
+    updated_edge_distance[sel_u, sel_v] += penalty_magnitude
+    updated_edge_distance[sel_v, sel_u] += penalty_magnitude
+
+    # Ensure self-distances remain 0.0
+    np.fill_diagonal(updated_edge_distance, 0.0)
+
+    return updated_edge_distance
+# ===== Eval Output =====
+[*] Running ...
+[*] mode=val, data=/home/ducanh/projects/EAs_project/MoH/problems/tsp_gls/data/val/val_instance_data_sol_20.pkl, seed=0, n_instances=8
+[*] instance_indices=[6, 9, 0, 2, 4, 3, 5, 1]
+[*] instance 6: obj=3.7045, gap=0.0000
+[*] instance 9: obj=4.1442, gap=0.0000
+[*] instance 0: obj=3.6827, gap=0.0000
+[*] instance 2: obj=3.8184, gap=0.0000
+[*] instance 4: obj=3.8385, gap=0.0000
+[*] instance 3: obj=3.6971, gap=0.0000
+[*] instance 5: obj=3.4281, gap=0.0000
+[*] instance 1: obj=3.6958, gap=0.0000
+[*] ave_gap on size 20: 1.2218318606871392e-06
+1.2218318606871392e-06

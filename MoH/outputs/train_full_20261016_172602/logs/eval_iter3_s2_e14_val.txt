@@ -1,0 +1,107 @@
+# ===== Heuristic Code =====
+#{This algorithm replaces isolated edge penalization with a contiguous subpath ruin operator that identifies tour segments of peak cumulative geometric tension and jointly penalizes entire connected chains alongside shortcut incentives.}
+
+import numpy as np
+
+def update_edge_distance(edge_distance, local_opt_tour, edge_n_used):
+    updated_edge_distance = np.copy(edge_distance)
+    num_nodes = len(local_opt_tour)
+    tour = np.asarray(local_opt_tour)
+
+    # Identify consecutive nodes along the tour
+    u_idx = tour
+    v_idx = np.roll(tour, -1)
+    w_idx = np.roll(tour, -2)
+
+    # Decay usage frequency
+    edge_n_used *= 0.96
+
+    d_uv = edge_distance[u_idx, v_idx]
+    d_vw = edge_distance[v_idx, w_idx]
+    d_uw = edge_distance[u_idx, w_idx]
+
+    # Detour and angle deficit calculations for local geometric tension
+    detour_ratio = (d_uv + d_vw) / (d_uw + 1e-8)
+    denom = 2.0 * d_uv * d_vw + 1e-8
+    cos_turn = np.clip((d_uv**2 + d_vw**2 - d_uw**2) / denom, -1.0, 1.0)
+    acute_deficit = 1.0 - cos_turn
+    geom_inefficiency = detour_ratio * (1.0 + 0.5 * acute_deficit)
+
+    # Local edge utilities combining distance, historical frequency, and local geometry
+    base_freq = edge_n_used[u_idx, v_idx]
+    local_geom = 0.5 * (geom_inefficiency + np.roll(geom_inefficiency, 1))
+    edge_tension = (d_uv / (1.0 + base_freq)) * (1.0 + 0.35 * local_geom)
+
+    # Contiguous subpath ruin: evaluate rolling window tension across segments
+    window_size = max(2, int(np.clip(np.ceil(0.04 * num_nodes), 2, 8)))
+    # Compute circular rolling sum of tension for contiguous chains
+    extended_tension = np.concatenate([edge_tension, edge_tension[:window_size - 1]])
+    tension_cumsum = np.cumsum(extended_tension)
+    window_sums = tension_cumsum[window_size - 1:] - np.concatenate([[0], tension_cumsum[:num_nodes - 1]])
+
+    # Greedily select top non-overlapping contiguous subpaths
+    total_budget = max(1, int(np.ceil(0.14 * num_nodes)))
+    num_chains = max(1, total_budget // window_size)
+
+    ranked_start_indices = np.argsort(window_sums)[::-1]
+    selected_edges = set()
+    penalized_subpaths = 0
+
+    for start in ranked_start_indices:
+        segment_indices = [(start + offset) % num_nodes for offset in range(window_size)]
+        # Allow segment if it has minimal overlap with already selected edges
+        if not any(idx in selected_edges for idx in segment_indices):
+            for idx in segment_indices:
+                selected_edges.add(idx)
+            penalized_subpaths += 1
+            if penalized_subpaths >= num_chains or len(selected_edges) >= total_budget:
+                break
+
+    # If remaining budget, supplement with highest single-tension edges
+    if len(selected_edges) < total_budget:
+        for idx in np.argsort(edge_tension)[::-1]:
+            selected_edges.add(int(idx))
+            if len(selected_edges) >= total_budget:
+                break
+
+    global_mean_dist = np.mean(edge_distance)
+    adaptive_lambda = 0.30 * global_mean_dist
+
+    # Jointly penalize connected chains
+    for idx in selected_edges:
+        u, v = u_idx[idx], v_idx[idx]
+        edge_n_used[u, v] += 1.0
+        edge_n_used[v, u] += 1.0
+        freq_penalty = 1.0 + np.log1p(edge_n_used[u, v])
+        geom_weight = 1.0 + 0.5 * local_geom[idx]
+        penalty = adaptive_lambda * freq_penalty * geom_weight
+        updated_edge_distance[u, v] += penalty
+        updated_edge_distance[v, u] += penalty
+
+    # Recreate incentives: discount shortcuts bridging acute detours
+    k_shortcuts = max(1, int(np.ceil(0.10 * num_nodes)))
+    high_detour_indices = np.argsort(detour_ratio)[-k_shortcuts:]
+    for idx in high_detour_indices:
+        u, w = u_idx[idx], w_idx[idx]
+        freq = edge_n_used[u, w]
+        if freq < 1.0:
+            discount = 0.10 * global_mean_dist * (1.0 / (1.0 + freq))
+            new_dist = max(1e-6, updated_edge_distance[u, w] - discount)
+            updated_edge_distance[u, w] = new_dist
+            updated_edge_distance[w, u] = new_dist
+
+    return updated_edge_distance
+# ===== Eval Output =====
+[*] Running ...
+[*] mode=val, data=/home/ducanh/projects/EAs_project/MoH/problems/tsp_gls/data/val/val_instance_data_sol_100.pkl, seed=0, n_instances=8
+[*] instance_indices=[6, 9, 0, 2, 4, 3, 5, 1]
+[*] instance 6: obj=7.7627, gap=0.0399
+[*] instance 9: obj=8.0474, gap=0.0512
+[*] instance 0: obj=8.0001, gap=0.0000
+[*] instance 2: obj=8.0746, gap=0.0094
+[*] instance 4: obj=7.8131, gap=0.0000
+[*] instance 3: obj=7.3713, gap=0.0000
+[*] instance 5: obj=7.6365, gap=0.0000
+[*] instance 1: obj=7.5570, gap=0.0000
+[*] ave_gap on size 100: 0.012574909433646364
+0.012574909433646364

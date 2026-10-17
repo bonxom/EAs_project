@@ -1,0 +1,63 @@
+# ===== Heuristic Code =====
+#{This heuristic guides search away from local optima by penalizing high-utility edges present in the current tour while symmetrically rewarding unexplored edges within the k-nearest-neighbor subgraph via distance discounts.}
+
+import numpy as np
+
+def update_edge_distance(edge_distance, local_opt_tour, edge_n_used):
+    updated_edge_distance = np.copy(edge_distance)
+    n = edge_distance.shape[0]
+
+    # 1. Penalize high-utility edges in the current local optimum tour
+    tour_edges = [(local_opt_tour[i], local_opt_tour[(i + 1) % n]) for i in range(n)]
+    tour_lengths = [edge_distance[u, v] for u, v in tour_edges]
+    avg_tour_edge = np.mean(tour_lengths) if tour_lengths else 1.0
+
+    utilities = [edge_distance[u, v] / (1.0 + edge_n_used[u, v]) for u, v in tour_edges]
+    max_utility = max(utilities) if utilities else 0.0
+    penalty_scale = 0.3 * avg_tour_edge
+
+    for (u, v), util in zip(tour_edges, utilities):
+        if util >= 0.75 * max_utility:
+            add_penalty = penalty_scale / (1.0 + edge_n_used[u, v])
+            updated_edge_distance[u, v] += add_penalty
+            updated_edge_distance[v, u] += add_penalty
+
+    # 2. Reward unused/under-explored edges in the k-nearest-neighbor subgraph
+    k = min(10, n - 1)
+    if k > 0:
+        # Determine k-nearest neighbors based on the original edge distances
+        # np.argpartition finds the indices of the smallest distances efficiently
+        knn_indices = np.argpartition(edge_distance, kth=k, axis=1)[:, :k + 1]
+
+        row_indices = np.arange(n)[:, None]
+        knn_mask = np.zeros((n, n), dtype=bool)
+        knn_mask[row_indices, knn_indices] = True
+
+        # Remove self-loops and make symmetric
+        np.fill_diagonal(knn_mask, False)
+        knn_mask = np.logical_or(knn_mask, knn_mask.T)
+
+        # Reward edges in the KNN graph that have zero or low historical usage
+        reward_scale = 0.05 * avg_tour_edge
+        reward_condition = knn_mask & (edge_n_used == 0)
+
+        # Apply discount to incentivize exploring these promising structural connections
+        updated_edge_distance[reward_condition] = np.maximum(
+            0.0, updated_edge_distance[reward_condition] - reward_scale
+        )
+
+    return updated_edge_distance
+# ===== Eval Output =====
+[*] Running ...
+[*] mode=val, data=/home/ducanh/projects/EAs_project/MoH/problems/tsp_gls/data/val/val_instance_data_sol_20.pkl, seed=0, n_instances=8
+[*] instance_indices=[6, 9, 0, 2, 4, 3, 5, 1]
+[*] instance 6: obj=3.7045, gap=0.0000
+[*] instance 9: obj=4.1442, gap=0.0000
+[*] instance 0: obj=3.6827, gap=0.0000
+[*] instance 2: obj=3.8184, gap=0.0000
+[*] instance 4: obj=3.8385, gap=0.0000
+[*] instance 3: obj=3.6971, gap=0.0000
+[*] instance 5: obj=3.4281, gap=0.0000
+[*] instance 1: obj=3.6958, gap=0.0000
+[*] ave_gap on size 20: 1.2218318606871392e-06
+1.2218318606871392e-06

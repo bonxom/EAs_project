@@ -1,0 +1,78 @@
+# ===== Heuristic Code =====
+#{A subpath-contextualized GLS update that evaluates edge utility via adjacent 2-edge path strain and triangle-slack bottlenecks, penalizing correlated consecutive suboptimal edges while discounting alternative edges at affected vertices.}#
+
+import numpy as np
+
+def update_edge_distance(edge_distance, local_opt_tour, edge_n_used):
+    updated_edge_distance = np.copy(edge_distance)
+    n = len(local_opt_tour)
+    if n < 3:
+        return updated_edge_distance
+
+    tour = np.array(local_opt_tour, dtype=np.intp)
+    u_idx = tour
+    v_idx = np.roll(tour, -1)
+    prev_idx = np.roll(tour, 1)
+    next2_idx = np.roll(tour, -2)
+
+    costs = edge_distance[u_idx, v_idx].astype(np.float64)
+    used = edge_n_used[u_idx, v_idx].astype(np.float64)
+
+    # Contextual subpath evaluation: evaluate adjacent edge costs and triangle shortcuts
+    prev_costs = np.roll(costs, 1)
+    next_costs = np.roll(costs, -1)
+    path_strain = costs + 0.5 * (prev_costs + next_costs)
+
+    # Triangle slack: detour ratio relative to chord shortcuts (prev -> v and u -> next2)
+    chord_prev_v = edge_distance[prev_idx, v_idx].astype(np.float64) + 1e-12
+    chord_u_next = edge_distance[u_idx, next2_idx].astype(np.float64) + 1e-12
+    slack_left = (prev_costs + costs) / chord_prev_v
+    slack_right = (costs + next_costs) / chord_u_next
+    subpath_slack = 0.5 * (slack_left + slack_right)
+
+    # Combined contextual utility dampened by prior penalization frequency
+    subpath_metric = path_strain * subpath_slack
+    utilities = subpath_metric / (1.0 + np.sqrt(used + 1.0))
+
+    threshold = np.median(utilities)
+    penalize_mask = utilities >= threshold
+
+    p_u = u_idx[penalize_mask]
+    p_v = v_idx[penalize_mask]
+    p_costs = costs[penalize_mask]
+    p_used = used[penalize_mask]
+    p_utils = utilities[penalize_mask]
+
+    max_util = np.max(utilities) + 1e-8
+    penalties = (p_costs / (1.0 + np.sqrt(p_used + 1.0))) * (1.0 + p_utils / max_util)
+
+    # Apply symmetric penalties to selected edges
+    np.add.at(updated_edge_distance, (p_u, p_v), penalties)
+    np.add.at(updated_edge_distance, (p_v, p_u), penalties)
+
+    # Discount unused promising incident edges at perturbed vertices
+    penalized_nodes = np.unique(np.concatenate((p_u, p_v)))
+    decay_ratio = 0.02
+    for node in penalized_nodes:
+        unused_mask = (edge_n_used[node] == 0)
+        unused_mask[node] = False
+        if np.any(unused_mask):
+            vals = updated_edge_distance[node, unused_mask]
+            updated_edge_distance[node, unused_mask] -= vals * decay_ratio
+            updated_edge_distance[unused_mask, node] = updated_edge_distance[node, unused_mask]
+
+    return updated_edge_distance
+# ===== Eval Output =====
+[*] Running ...
+[*] mode=val, data=/home/ducanh/projects/EAs_project/MoH/problems/tsp_gls/data/val/val_instance_data_sol_50.pkl, seed=0, n_instances=8
+[*] instance_indices=[6, 9, 0, 2, 4, 3, 5, 1]
+[*] instance 6: obj=5.7136, gap=0.5983
+[*] instance 9: obj=5.9639, gap=0.0000
+[*] instance 0: obj=5.7783, gap=0.0000
+[*] instance 2: obj=5.8071, gap=0.0000
+[*] instance 4: obj=5.3965, gap=0.0000
+[*] instance 3: obj=5.8123, gap=0.9633
+[*] instance 5: obj=5.6187, gap=0.0000
+[*] instance 1: obj=5.3071, gap=2.7501
+[*] ave_gap on size 50: 0.5389645243044777
+0.5389645243044777

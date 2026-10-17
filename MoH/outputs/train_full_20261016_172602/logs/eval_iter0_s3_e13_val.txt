@@ -1,0 +1,66 @@
+# ===== Heuristic Code =====
+#{Incorporate a geometric crossing proxy via quadrilateral diagonal comparison around adjacent tour segments to heavily penalize twisted or entangled edges, steering local search toward uncrossing operations while balancing usage frequency and edge scale.}#
+
+import numpy as np
+
+def update_edge_distance(edge_distance, local_opt_tour, edge_n_used):
+    updated_edge_distance = np.copy(edge_distance)
+    n = len(local_opt_tour)
+    u = local_opt_tour
+    v = np.roll(local_opt_tour, -1)
+    p = np.roll(local_opt_tour, 1)
+    w = np.roll(local_opt_tour, -2)
+
+    tour_lens = edge_distance[u, v]
+    usage = edge_n_used[u, v]
+
+    # K-nearest neighbor scale
+    k = min(6, n - 1)
+    k_nn_dists = np.partition(edge_distance, k, axis=1)[:, 1:k]
+    node_scale = np.mean(k_nn_dists, axis=1) + 1e-6
+    cluster_scale = np.sqrt(node_scale[u] * node_scale[v])
+    bridging_ratio = tour_lens / cluster_scale
+
+    # Local context and global relative lengths
+    local_adj_mean = 0.5 * (edge_distance[p, u] + edge_distance[v, w]) + 1e-6
+    slack_ratio = tour_lens / local_adj_mean
+    mean_l = np.mean(tour_lens) + 1e-6
+    std_l = np.std(tour_lens)
+    cv = std_l / mean_l
+    rel_global = tour_lens / mean_l
+
+    # Geometric cross-edge / entanglement proxy using quadrilateral diagonals
+    # For quad (p, u, v, w), compare diagonals d(p, v) + d(u, w) against tour segments d(u, v) + d(p, w)
+    quad_cross = (edge_distance[p, v] + edge_distance[u, w]) / (tour_lens + edge_distance[p, w] + 1e-6)
+    # Lower quad_cross indicates a twisted/crossing configuration where shortcut diagonals are comparatively short
+    twist_proxy = np.clip(1.5 - quad_cross, 0.0, 2.0)
+
+    usage_factor = 1.0 / (1.0 + 0.35 * usage)
+    bridge_weight = np.tanh(bridging_ratio - 1.0)
+
+    # Combined topology score integrating twist proxy
+    topology_score = 0.40 * rel_global + 0.25 * slack_ratio + 0.15 * (bridge_weight + 1.0) + 0.20 * twist_proxy
+
+    cutoff_pct = np.clip(75.0 - 15.0 * cv, 50.0, 85.0)
+    threshold = np.percentile(topology_score, cutoff_pct)
+    penalties = topology_score * usage_factor
+    boost_mask = topology_score >= threshold
+    penalties[boost_mask] *= (1.25 + 0.25 * np.clip(cv, 0.0, 1.0))
+
+    np.add.at(updated_edge_distance, (u, v), penalties)
+    np.add.at(updated_edge_distance, (v, u), penalties)
+    return updated_edge_distance
+# ===== Eval Output =====
+[*] Running ...
+[*] mode=val, data=/home/ducanh/projects/EAs_project/MoH/problems/tsp_gls/data/val/val_instance_data_sol_200.pkl, seed=0, n_instances=8
+[*] instance_indices=[6, 9, 0, 2, 4, 3, 5, 1]
+[*] instance 6: obj=10.5144, gap=0.6563
+[*] instance 9: obj=10.6984, gap=0.3320
+[*] instance 0: obj=10.8857, gap=0.0000
+[*] instance 2: obj=10.9690, gap=0.1935
+[*] instance 4: obj=10.8873, gap=0.3697
+[*] instance 3: obj=10.6132, gap=0.1070
+[*] instance 5: obj=10.9080, gap=0.2250
+[*] instance 1: obj=11.0754, gap=0.4645
+[*] ave_gap on size 200: 0.2935110672402541
+0.2935110672402541

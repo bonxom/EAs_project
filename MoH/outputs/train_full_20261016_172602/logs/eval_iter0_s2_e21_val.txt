@@ -1,0 +1,93 @@
+# ===== Heuristic Code =====
+#{HarmonicSpatialCentralitySelectiveGLS combines memory decay, top-k utility-guided edge selection, adjacent-segment continuity weighting, harmonic spatial centrality, and entropy-rigidity modulation to penalize critical tour edges without cycle trapping.}#
+
+import numpy as np
+
+def update_edge_distance(edge_distance, local_opt_tour, edge_n_used):
+    updated_edge_distance = np.copy(edge_distance)
+    num_nodes = len(local_opt_tour)
+
+    # 1. Memory decay on historical edge counts
+    edge_n_used *= 0.95
+
+    # 2. Extract consecutive tour indices
+    u_idx = np.asarray(local_opt_tour)
+    v_idx = np.roll(u_idx, -1)
+    w_idx = np.roll(u_idx, -2)
+
+    # 3. Compute edge utilities and select top-k candidate edges
+    tour_dist = edge_distance[u_idx, v_idx]
+    tour_used = edge_n_used[u_idx, v_idx]
+    utilities = tour_dist / (1.0 + tour_used)
+
+    k = max(1, int(np.ceil(0.15 * num_nodes)))
+    top_k_indices = np.argsort(utilities)[-k:]
+
+    # Increment usage for selected top-k edges
+    for idx in top_k_indices:
+        u, v = u_idx[idx], v_idx[idx]
+        edge_n_used[u, v] += 1.0
+        edge_n_used[v, u] += 1.0
+
+    # 4. Stagnation factor based on tour usage overlap and maximum usage
+    tour_usage = edge_n_used[u_idx, v_idx]
+    avg_tour_usage = np.mean(tour_usage)
+    max_used = np.max(edge_n_used) + 1e-12
+    overlap_ratio = np.mean(tour_usage > 1.0)
+    stagnation_factor = 1.0 + 1.5 * overlap_ratio + (avg_tour_usage / max_used)
+
+    # 5. Dual rigidity field: Entropy of usage distribution per node
+    total_node_usage = np.sum(edge_n_used, axis=1, keepdims=True) + 1e-12
+    usage_probs = edge_n_used / total_node_usage
+    node_entropy = -np.sum(usage_probs * np.log(usage_probs + 1e-12), axis=1)
+    max_entropy = np.log(num_nodes) + 1e-12
+    entropy_rigidity = 1.0 - (node_entropy / max_entropy)
+
+    # 6. Segment continuity weights (adjacent edge usage)
+    segment_weights = np.zeros(num_nodes)
+    for i in range(num_nodes):
+        u, v, w = u_idx[i], v_idx[i], w_idx[i]
+        segment_weights[v] = 0.5 * (edge_n_used[u, v] + edge_n_used[v, w])
+    norm_segment_weights = segment_weights / (np.max(segment_weights) + 1e-12)
+
+    # 7. Harmonic spatial centrality (higher for tightly clustered nodes)
+    # Using reciprocal distances with diagonal masked to zero
+    dist_safe = np.where(edge_distance > 1e-12, edge_distance, np.nan)
+    reciprocal_sum = np.nansum(1.0 / dist_safe, axis=1)
+    harmonic_dist = (num_nodes - 1.0) / (reciprocal_sum + 1e-12)
+    global_harmonic_mean = np.mean(harmonic_dist)
+    harmonic_centrality = global_harmonic_mean / (harmonic_dist + 1e-12)
+    norm_harmonic_centrality = harmonic_centrality / (np.max(harmonic_centrality) + 1e-12)
+
+    # 8. Adaptive scaling factor lambda
+    global_mean_dist = np.mean(edge_distance)
+    adaptive_lambda = (0.15 + 0.20 * np.tanh(stagnation_factor)) * global_mean_dist
+
+    # 9. Selective penalty updates with path continuity and spatial-rigidity context
+    for idx in top_k_indices:
+        u, v = u_idx[idx], v_idx[idx]
+        h_mod = 0.30 * (norm_harmonic_centrality[u] + norm_harmonic_centrality[v])
+        r_mod = 0.25 * (entropy_rigidity[u] + entropy_rigidity[v])
+        s_mod = 0.20 * (norm_segment_weights[u] + norm_segment_weights[v])
+
+        modulation = 1.0 + h_mod + r_mod + s_mod
+        penalty = adaptive_lambda * edge_n_used[u, v] * modulation
+
+        updated_edge_distance[u, v] += penalty
+        updated_edge_distance[v, u] += penalty
+
+    return updated_edge_distance
+# ===== Eval Output =====
+[*] Running ...
+[*] mode=val, data=/home/ducanh/projects/EAs_project/MoH/problems/tsp_gls/data/val/val_instance_data_sol_100.pkl, seed=0, n_instances=8
+[*] instance_indices=[6, 9, 0, 2, 4, 3, 5, 1]
+[*] instance 6: obj=7.7730, gap=0.1720
+[*] instance 9: obj=8.0501, gap=0.0846
+[*] instance 0: obj=8.0001, gap=0.0000
+[*] instance 2: obj=8.0739, gap=0.0000
+[*] instance 4: obj=7.8131, gap=0.0000
+[*] instance 3: obj=7.3713, gap=0.0000
+[*] instance 5: obj=7.6365, gap=0.0000
+[*] instance 1: obj=7.5570, gap=0.0000
+[*] ave_gap on size 100: 0.03207324854928306
+0.03207324854928306

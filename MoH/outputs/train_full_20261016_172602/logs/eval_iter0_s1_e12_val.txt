@@ -1,0 +1,97 @@
+# ===== Heuristic Code =====
+#{A Guided Local Search distance update that dampens penalties on edges adjacent to already penalized nodes to prevent localized metric collapse and smoothly balance structural perturbation across the tour.}#
+
+import numpy as np
+
+def update_edge_distance(edge_distance, local_opt_tour, edge_n_used):
+    updated_edge_distance = np.copy(edge_distance)
+    n = len(local_opt_tour)
+    tour_edges = [(local_opt_tour[i], local_opt_tour[(i + 1) % n]) for i in range(n)]
+    costs = np.array([edge_distance[u, v] for u, v in tour_edges], dtype=np.float64)
+
+    mean_cost = np.mean(costs)
+    std_cost = np.std(costs) + 1e-8
+
+    utilities = np.zeros(n, dtype=np.float64)
+    for i in range(n):
+        u, v = tour_edges[i]
+        used = edge_n_used[u, v]
+        z_score = (costs[i] - mean_cost) / std_cost
+        weight = 1.0 / (1.0 + np.exp(-z_score))
+        utilities[i] = (costs[i] * (1.0 + weight)) / (1.0 + used)
+
+    threshold = np.median(utilities)
+    max_util = np.max(utilities) + 1e-8
+
+    # Sort candidate edges by utility descending to prioritize the most promising edges
+    candidate_indices = [i for i in range(n) if utilities[i] >= threshold]
+    candidate_indices.sort(key=lambda idx: utilities[idx], reverse=True)
+
+    node_penalty_count = np.zeros(edge_distance.shape[0], dtype=np.int32)
+    penalized_nodes = set()
+
+    for idx in candidate_indices:
+        u, v = tour_edges[idx]
+        used = edge_n_used[u, v]
+
+        # Incident-vertex penalty balancing: dampen penalty if incident vertices already penalized
+        incident_load = node_penalty_count[u] + node_penalty_count[v]
+        damping = 1.0 / (1.0 + 0.4 * incident_load)
+
+        base_penalty = (costs[idx] / (1.0 + np.sqrt(used + 1.0))) * (1.0 + utilities[idx] / max_util)
+        penalty = base_penalty * damping
+
+        updated_edge_distance[u, v] += penalty
+        updated_edge_distance[v, u] += penalty
+
+        node_penalty_count[u] += 1
+        node_penalty_count[v] += 1
+        penalized_nodes.add(u)
+        penalized_nodes.add(v)
+
+    k_neighbors = min(8, max(3, n // 15))
+    base_decay = 0.035
+    candidate_neighbors = {}
+    for u in penalized_nodes:
+        dists = edge_distance[u].copy()
+        dists[u] = np.inf
+        sorted_indices = np.argsort(dists)
+        valid_candidates = []
+        for v in sorted_indices:
+            if edge_n_used[u, v] <= 1:
+                valid_candidates.append(int(v))
+                if len(valid_candidates) >= k_neighbors:
+                    break
+        candidate_neighbors[u] = valid_candidates
+
+    visited_pairs = set()
+    for u in penalized_nodes:
+        u_cand = candidate_neighbors[u]
+        for rank_u, v in enumerate(u_cand):
+            pair = (min(u, v), max(u, v))
+            if pair in visited_pairs:
+                continue
+            if v in candidate_neighbors and u in candidate_neighbors[v]:
+                rank_v = candidate_neighbors[v].index(u)
+                avg_rank = 0.5 * (rank_u + rank_v)
+                rank_factor = 1.0 / (1.0 + avg_rank * 0.3)
+                decay = updated_edge_distance[u, v] * base_decay * rank_factor
+                updated_edge_distance[u, v] -= decay
+                updated_edge_distance[v, u] -= decay
+                visited_pairs.add(pair)
+
+    return updated_edge_distance
+# ===== Eval Output =====
+[*] Running ...
+[*] mode=val, data=/home/ducanh/projects/EAs_project/MoH/problems/tsp_gls/data/val/val_instance_data_sol_50.pkl, seed=0, n_instances=8
+[*] instance_indices=[6, 9, 0, 2, 4, 3, 5, 1]
+[*] instance 6: obj=5.7136, gap=0.5983
+[*] instance 9: obj=5.9639, gap=0.0000
+[*] instance 0: obj=5.7783, gap=0.0000
+[*] instance 2: obj=5.8071, gap=0.0000
+[*] instance 4: obj=5.5109, gap=2.1181
+[*] instance 3: obj=5.8128, gap=0.9724
+[*] instance 5: obj=5.6187, gap=0.0000
+[*] instance 1: obj=5.1651, gap=0.0000
+[*] ave_gap on size 50: 0.46111168618718223
+0.46111168618718223

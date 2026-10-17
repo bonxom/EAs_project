@@ -1,0 +1,78 @@
+# ===== Heuristic Code =====
+#{Guided local search edge distance update that selectively penalizes top-quantile tour edge utilities scaled by graph-wide usage variance while applying dynamic nearest-neighbor incentive boosts instead of unguided decay.}#
+
+import numpy as np
+
+def update_edge_distance(edge_distance, local_opt_tour, edge_n_used):
+    updated_edge_distance = np.copy(edge_distance)
+    n = len(local_opt_tour)
+    if n < 3:
+        return updated_edge_distance
+
+    u_idx = np.array(local_opt_tour, dtype=np.intp)
+    v_idx = np.roll(u_idx, -1)
+
+    costs = edge_distance[u_idx, v_idx].astype(np.float64)
+    used = edge_n_used[u_idx, v_idx].astype(np.float64)
+
+    # Calculate utilities based on GLS formulation
+    mean_cost = np.mean(costs)
+    std_cost = np.std(costs) + 1e-8
+    z_scores = (costs - mean_cost) / std_cost
+    weights = 1.0 / (1.0 + np.exp(-z_scores))
+    utilities = (costs * (1.0 + 0.5 * weights)) / (1.0 + used)
+
+    # Sharper, selective threshold: penalize top 25-30% edges (75th percentile)
+    threshold = np.percentile(utilities, 75.0)
+    penalize_mask = utilities >= threshold
+    if not np.any(penalize_mask):
+        penalize_mask = utilities == np.max(utilities)
+
+    p_u = u_idx[penalize_mask]
+    p_v = v_idx[penalize_mask]
+    p_costs = costs[penalize_mask]
+    p_used = used[penalize_mask]
+
+    # Dynamic penalty scaling modulated inversely by usage concentration
+    used_all = edge_n_used[np.triu_indices(len(edge_distance), k=1)]
+    usage_std = np.std(used_all) + 1.0
+    entropy_scale = 1.0 / np.log1p(usage_std)
+
+    base_penalties = 0.3 * (p_costs / (1.0 + np.sqrt(p_used))) * entropy_scale
+
+    # Symmetrically apply penalties
+    np.add.at(updated_edge_distance, (p_u, p_v), base_penalties)
+    np.add.at(updated_edge_distance, (p_v, p_u), base_penalties)
+
+    # Reward closest unused neighbors of penalized nodes rather than blanket discount
+    penalized_nodes = np.unique(np.concatenate((p_u, p_v)))
+    k_neighbors = min(4, len(edge_distance) - 1)
+
+    for u in penalized_nodes:
+        row_dist = edge_distance[u].copy()
+        row_dist[u] = np.inf
+        # Find nearest candidate neighbors for node u
+        near_indices = np.argpartition(row_dist, k_neighbors)[:k_neighbors]
+        valid_near = near_indices[edge_n_used[u, near_indices] == 0]
+        if len(valid_near) > 0:
+            incentive = 0.03 * edge_distance[u, valid_near]
+            updated_edge_distance[u, valid_near] -= incentive
+            updated_edge_distance[valid_near, u] -= incentive
+
+    # Ensure non-negative edge distances
+    np.maximum(updated_edge_distance, 0.0, out=updated_edge_distance)
+    return updated_edge_distance
+# ===== Eval Output =====
+[*] Running ...
+[*] mode=val, data=/home/ducanh/projects/EAs_project/MoH/problems/tsp_gls/data/val/val_instance_data_sol_50.pkl, seed=0, n_instances=8
+[*] instance_indices=[6, 9, 0, 2, 4, 3, 5, 1]
+[*] instance 6: obj=5.7136, gap=0.5983
+[*] instance 9: obj=6.0108, gap=0.7860
+[*] instance 0: obj=5.8546, gap=1.3193
+[*] instance 2: obj=5.8071, gap=0.0000
+[*] instance 4: obj=5.5821, gap=3.4387
+[*] instance 3: obj=5.8230, gap=1.1483
+[*] instance 5: obj=5.6187, gap=0.0000
+[*] instance 1: obj=5.3071, gap=2.7501
+[*] ave_gap on size 50: 1.255085615396273
+1.255085615396273

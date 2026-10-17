@@ -1,0 +1,57 @@
+# ===== Heuristic Code =====
+#{Replaces rigid convex weighting with a unified continuous topological score that couples hyperbolic bridging tension, local k-NN contour slack, and edge-specific frequency decay into a smoothly scaled additive penalty.}#
+
+import numpy as np
+
+def update_edge_distance(edge_distance, local_opt_tour, edge_n_used):
+    updated_edge_distance = np.copy(edge_distance)
+    n = len(local_opt_tour)
+    if n < 3:
+        return updated_edge_distance
+
+    # Measure local topological scales using k-NN neighborhood distances
+    k = min(6, n - 1)
+    sorted_dists = np.partition(edge_distance, k, axis=1)[:, 1:k + 1]
+    local_scale = np.mean(sorted_dists, axis=1) + 1e-6
+
+    # Extract tour directed transitions
+    u_idx = local_opt_tour
+    v_idx = np.roll(local_opt_tour, -1)
+
+    lengths = edge_distance[u_idx, v_idx]
+    mean_length = np.mean(lengths) + 1e-6
+    relative_global = lengths / mean_length
+
+    # Local contour slack: ratio of edge length to the joint k-NN ambient scale of endpoints
+    contour_slack = lengths / (0.5 * (local_scale[u_idx] + local_scale[v_idx]))
+
+    # Bounded non-linear bridging tension identifying long cluster-spanning bottlenecks
+    bridging_tension = np.tanh(1.5 * (contour_slack - 1.0)) + 1.0
+
+    # Edge-specific frequency attenuation
+    usage = edge_n_used[u_idx, v_idx]
+    usage_decay = 1.0 / (1.0 + 0.35 * usage)
+
+    # Unified continuous topological score
+    # Scales proportionally with edge length and dynamic bridging impact
+    penalty = (mean_length * 0.15) * relative_global * bridging_tension * usage_decay
+
+    # Symmetrically apply penalties along the tour edges
+    np.add.at(updated_edge_distance, (u_idx, v_idx), penalty)
+    np.add.at(updated_edge_distance, (v_idx, u_idx), penalty)
+
+    return updated_edge_distance
+# ===== Eval Output =====
+[*] Running ...
+[*] mode=val, data=/home/ducanh/projects/EAs_project/MoH/problems/tsp_gls/data/val/val_instance_data_sol_200.pkl, seed=0, n_instances=8
+[*] instance_indices=[6, 9, 0, 2, 4, 3, 5, 1]
+[*] instance 6: obj=10.6573, gap=2.0244
+[*] instance 9: obj=10.9597, gap=2.7825
+[*] instance 0: obj=11.4240, gap=4.9448
+[*] instance 2: obj=11.2182, gap=2.4702
+[*] instance 4: obj=11.1006, gap=2.3366
+[*] instance 3: obj=10.8628, gap=2.4615
+[*] instance 5: obj=11.2029, gap=2.9343
+[*] instance 1: obj=11.3698, gap=3.1346
+[*] ave_gap on size 200: 2.886110457605609
+2.886110457605609

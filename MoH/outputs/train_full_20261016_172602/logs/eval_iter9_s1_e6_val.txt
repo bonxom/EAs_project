@@ -1,0 +1,85 @@
+# ===== Heuristic Code =====
+#{A vectorized guided local search update penalizing high-utility tour edges while selectively discounting incident unvisited connections to k-nearest neighbors weighted by inverse base distances.}
+
+import numpy as np
+
+def update_edge_distance(edge_distance, local_opt_tour, edge_n_used):
+    updated_edge_distance = np.copy(edge_distance)
+    n = len(local_opt_tour)
+    if n < 4:
+        return updated_edge_distance
+
+    u_idx = np.array(local_opt_tour, dtype=np.intp)
+    v_idx = np.roll(u_idx, -1)
+
+    costs = edge_distance[u_idx, v_idx].astype(np.float64)
+    used = edge_n_used[u_idx, v_idx].astype(np.float64)
+
+    mean_cost = np.mean(costs)
+    std_cost = np.std(costs) + 1e-8
+    z_scores = (costs - mean_cost) / std_cost
+    weights = 1.0 / (1.0 + np.exp(-z_scores))
+
+    utilities = (costs * (1.0 + weights)) / (1.0 + used)
+    threshold = np.median(utilities)
+    max_util = np.max(utilities) + 1e-8
+
+    penalize_mask = utilities >= threshold
+    p_u = u_idx[penalize_mask]
+    p_v = v_idx[penalize_mask]
+    p_costs = costs[penalize_mask]
+    p_used = used[penalize_mask]
+    p_utils = utilities[penalize_mask]
+
+    penalties = (p_costs / (1.0 + np.sqrt(p_used + 1.0))) * (1.0 + p_utils / max_util)
+    updated_edge_distance[p_u, p_v] += penalties
+    updated_edge_distance[p_v, p_u] += penalties
+
+    penalized_nodes = np.unique(np.concatenate((p_u, p_v)))
+    if len(penalized_nodes) == 0:
+        return updated_edge_distance
+
+    sub_used = edge_n_used[penalized_nodes]
+    sub_orig = edge_distance[penalized_nodes]
+
+    unvisited_mask = (sub_used == 0)
+    unvisited_mask[np.arange(len(penalized_nodes)), penalized_nodes] = False
+
+    k = min(5, n - 1)
+    if k > 0:
+        masked_dists = np.where(unvisited_mask, sub_orig, np.inf)
+        k_indices = np.argpartition(masked_dists, kth=k - 1, axis=1)[:, :k]
+
+        row_indices = np.arange(len(penalized_nodes))[:, None]
+        valid_k = np.take_along_axis(unvisited_mask, k_indices, axis=1)
+
+        sel_rows = np.repeat(penalized_nodes, k)[valid_k.ravel()]
+        sel_cols = k_indices[valid_k]
+
+        if len(sel_rows) > 0:
+            target_orig = edge_distance[sel_rows, sel_cols]
+            row_means = np.take(mean_cost, np.zeros_like(sel_rows))
+            inv_weights = np.clip(row_means / (target_orig + 1e-8), 0.5, 2.0)
+            discount_factors = 0.03 * (inv_weights / 2.0)
+
+            cur_vals = updated_edge_distance[sel_rows, sel_cols]
+            reduced_vals = np.maximum(cur_vals * (1.0 - discount_factors), target_orig * 0.75)
+
+            updated_edge_distance[sel_rows, sel_cols] = reduced_vals
+            updated_edge_distance[sel_cols, sel_rows] = reduced_vals
+
+    return updated_edge_distance
+# ===== Eval Output =====
+[*] Running ...
+[*] mode=val, data=/home/ducanh/projects/EAs_project/MoH/problems/tsp_gls/data/val/val_instance_data_sol_50.pkl, seed=0, n_instances=8
+[*] instance_indices=[6, 9, 0, 2, 4, 3, 5, 1]
+[*] instance 6: obj=5.7136, gap=0.5983
+[*] instance 9: obj=5.9639, gap=0.0000
+[*] instance 0: obj=5.7783, gap=0.0000
+[*] instance 2: obj=5.8071, gap=0.0000
+[*] instance 4: obj=5.3965, gap=0.0000
+[*] instance 3: obj=5.7569, gap=0.0000
+[*] instance 5: obj=5.6492, gap=0.5441
+[*] instance 1: obj=5.1651, gap=0.0000
+[*] ave_gap on size 50: 0.14279541467067947
+0.14279541467067947

@@ -1,0 +1,94 @@
+# ===== Heuristic Code =====
+#{A Pareto-guided selective penalty strategy that focuses penalties strictly on non-dominated, high-cost and high-utility tour edges with dynamic depth-scaled dampening, coupled with targeted distance incentives restricted to the k-nearest geometric candidate neighbors.}#
+
+import numpy as np
+
+def update_edge_distance(edge_distance, local_opt_tour, edge_n_used):
+    updated_edge_distance = np.copy(edge_distance)
+    n = len(local_opt_tour)
+    if n < 4:
+        return updated_edge_distance
+
+    u_idx = np.array(local_opt_tour, dtype=np.intp)
+    v_idx = np.roll(u_idx, -1)
+
+    costs = edge_distance[u_idx, v_idx].astype(np.float64)
+    used = edge_n_used[u_idx, v_idx].astype(np.float64)
+
+    # Tour statistics
+    tour_length = np.sum(costs)
+    avg_cost = tour_length / n
+    std_cost = np.std(costs) + 1e-8
+
+    # Standard GLS utility with normalized cost influence
+    utilities = costs / (1.0 + used)
+    max_util = np.max(utilities)
+
+    # Multi-criteria Pareto-like frontier filtering:
+    # Instead of penalizing 50% (median) indiscriminately, identify sharp bottleneck edges:
+    # Criteria: Edge cost exceeds average and utility is high relative to current tour
+    z_costs = (costs - avg_cost) / std_cost
+    relative_utils = utilities / (max_util + 1e-8)
+
+    # Combined selection score emphasizing high cost with low saturation, adjusted by depth
+    total_penalty_accum = np.sum(edge_n_used) / 2.0
+    depth_factor = 1.0 / (1.0 + 0.05 * np.log1p(total_penalty_accum))
+
+    selection_scores = relative_utils * (1.0 / (1.0 + np.exp(-z_costs)))
+    # Dynamic top-k quantile thresholding: focus on top 15% - 25% worst edges (minimum 1, maximum n//3)
+    k_penalize = max(1, min(n // 3, int(np.ceil(0.20 * n))))
+    top_indices = np.argpartition(selection_scores, -k_penalize)[-k_penalize:]
+
+    p_u = u_idx[top_indices]
+    p_v = v_idx[top_indices]
+    p_costs = costs[top_indices]
+    p_used = used[top_indices]
+    p_scores = selection_scores[top_indices]
+
+    # Adaptive penalty scaled by original average edge cost and depth dampening
+    penalty_magnitude = (avg_cost * 0.40 * depth_factor) * (p_costs / (avg_cost + 1e-8)) * (1.0 + p_scores) / (1.0 + np.sqrt(p_used))
+
+    # Apply symmetric penalties to identified structural bottlenecks
+    np.add.at(updated_edge_distance, (p_u, p_v), penalty_magnitude)
+    np.add.at(updated_edge_distance, (p_v, p_u), penalty_magnitude)
+
+    # Targeted geometric incentive: reward only the closest candidate edges incident to penalized nodes
+    penalized_nodes = np.unique(np.concatenate((p_u, p_v)))
+    k_neighbors = min(4, n - 1)
+
+    for u in penalized_nodes:
+        # Get baseline distances from original matrix to identify true geometric nearest neighbors
+        orig_row = edge_distance[u].copy()
+        orig_row[u] = np.inf  # Exclude self-loop
+
+        # Select k nearest neighbors according to original geometric distance
+        nearest_neighbors = np.argpartition(orig_row, k_neighbors)[:k_neighbors]
+
+        # Filter for under-explored edges
+        valid_mask = edge_n_used[u, nearest_neighbors] <= np.median(edge_n_used[u])
+        candidates = nearest_neighbors[valid_mask]
+
+        if candidates.size > 0:
+            incentive = 0.015 * depth_factor * orig_row[candidates]
+            updated_edge_distance[u, candidates] -= incentive
+            updated_edge_distance[candidates, u] -= incentive
+
+    # Ensure metric validity (no negative edge distances)
+    np.maximum(updated_edge_distance, 1e-6, out=updated_edge_distance)
+    np.fill_diagonal(updated_edge_distance, 0.0)
+
+    return updated_edge_distance
+# ===== Eval Output =====
+[*] Running ...
+[*] mode=val, data=/home/ducanh/projects/EAs_project/MoH/problems/tsp_gls/data/val/val_instance_data_sol_50.pkl, seed=0, n_instances=8
+[*] instance_indices=[6, 9, 0, 2, 4, 3, 5, 1]
+[*] instance 6: obj=5.7136, gap=0.5983
+[*] instance 9: obj=6.0217, gap=0.9695
+[*] instance 0: obj=5.8546, gap=1.3193
+[*] instance 2: obj=5.8071, gap=0.0000
+[*] instance 4: obj=5.5821, gap=3.4387
+[*] instance 3: obj=5.8806, gap=2.1487
+[*] instance 5: obj=5.6187, gap=0.0000
+[*] instance 1: obj=5.3071, gap=2.7501
+[*] ave_gap on size 50: 1.4030780809943966
+1.4030780809943966

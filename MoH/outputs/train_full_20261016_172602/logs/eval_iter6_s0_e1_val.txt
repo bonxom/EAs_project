@@ -1,0 +1,53 @@
+# ===== Heuristic Code =====
+#{Dynamic instance-calibrated GLS edge penalization that blends the local tour's average and maximum edge lengths scaled adaptively by the global search frequency to penalize near-maximal utility edges without metric distortion.}
+
+import numpy as np
+
+def update_edge_distance(edge_distance, local_opt_tour, edge_n_used):
+    updated_edge_distance = np.copy(edge_distance)
+    u_idx = local_opt_tour
+    v_idx = np.roll(local_opt_tour, -1)
+
+    tour_lengths = edge_distance[u_idx, v_idx]
+    tour_counts = edge_n_used[u_idx, v_idx]
+
+    # Standard GLS edge utility
+    utilities = tour_lengths / (1.0 + tour_counts)
+    max_utility = np.max(utilities)
+
+    # Dynamic penalty scaling: blend average and maximum tour edge length,
+    # gently modulated by the search depth (average edge utilization across the tour)
+    avg_edge = np.mean(tour_lengths)
+    max_edge = np.max(tour_lengths)
+    avg_count = np.mean(tour_counts)
+
+    # Adaptive lambda parameter: balances fine-grained exploration with sufficient escape impulse
+    lambda_factor = 0.25 + 0.15 * (avg_edge / (max_edge + 1e-12))
+    scale_factor = 1.0 / np.sqrt(1.0 + 0.1 * avg_count)
+    penalty = lambda_factor * avg_edge * scale_factor
+
+    # Select edges with near-maximal utility for penalization
+    threshold = 0.99 * max_utility
+    selected_mask = utilities >= threshold
+    sel_u = u_idx[selected_mask]
+    sel_v = v_idx[selected_mask]
+
+    # Symmetrically update distances
+    updated_edge_distance[sel_u, sel_v] += penalty
+    updated_edge_distance[sel_v, sel_u] += penalty
+
+    return updated_edge_distance
+# ===== Eval Output =====
+[*] Running ...
+[*] mode=val, data=/home/ducanh/projects/EAs_project/MoH/problems/tsp_gls/data/val/val_instance_data_sol_20.pkl, seed=0, n_instances=8
+[*] instance_indices=[6, 9, 0, 2, 4, 3, 5, 1]
+[*] instance 6: obj=3.7045, gap=0.0000
+[*] instance 9: obj=4.1442, gap=0.0000
+[*] instance 0: obj=3.6827, gap=0.0000
+[*] instance 2: obj=3.8184, gap=0.0000
+[*] instance 4: obj=3.8385, gap=0.0000
+[*] instance 3: obj=3.6971, gap=0.0000
+[*] instance 5: obj=3.4281, gap=0.0000
+[*] instance 1: obj=3.6958, gap=0.0000
+[*] ave_gap on size 20: 1.2218318606871392e-06
+1.2218318606871392e-06

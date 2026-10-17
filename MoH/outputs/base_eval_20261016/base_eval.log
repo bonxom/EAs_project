@@ -1,0 +1,17 @@
+=== BASE size=500 mode=val 16:56:42 ===
+[*] instance 1: obj=16.9497, gap=1.8377
+[*] ave_gap on size 500: 2.1646996796607922
+2.1646996796607922
+=== BASE size=500 mode=test 16:57:07 ===
+[*] instance 99: obj=16.6534, gap=1.7244
+[*] ave_gap on size 500: 1.9035352882234016
+1.9035352882234016
+=== BASE size=1000 mode=val 17:01:46 ===
+[*] instance 1: obj=23.9453, gap=3.3338
+[*] ave_gap on size 1000: 3.202860623959311
+3.202860623959311
+=== BASE size=1000 mode=test 17:02:24 ===
+[*] instance 99: obj=23.8230, gap=2.3413
+[*] ave_gap on size 1000: 3.308630013989329
+3.308630013989329
+ALL_DONE 17:09:43

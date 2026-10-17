@@ -1,0 +1,74 @@
+# ===== Heuristic Code =====
+#{Apply volatile-evaporative decay towards baseline metric distances while awarding anti-penalty bonuses to unused incident edges and injecting bounded, usage-damped relative penalties on the active tour edges.}
+
+import numpy as np
+
+def update_edge_distance(edge_distance, local_opt_tour, edge_n_used):
+    updated_edge_distance = np.copy(edge_distance)
+    n = len(local_opt_tour)
+
+    # Global evaporation: evaporate accumulated distortions back toward baseline scale
+    decay_rate = 0.95
+    updated_edge_distance = updated_edge_distance * decay_rate
+
+    # Topology and local density evaluation
+    sorted_dists = np.sort(edge_distance, axis=1)
+    k_nn_avg = np.mean(sorted_dists[:, 1:min(6, n)], axis=1)
+    node_density = 1.0 / (k_nn_avg + 1e-6)
+    node_density = node_density / np.mean(node_density)
+
+    u_idx = local_opt_tour
+    v_idx = np.roll(local_opt_tour, -1)
+
+    tour_edge_lengths = edge_distance[u_idx, v_idx]
+    avg_tour_length = np.mean(tour_edge_lengths)
+    relative_length = tour_edge_lengths / (avg_tour_length + 1e-6)
+
+    # Controlled, bounded penalty formulation for tour edges
+    rank_penalty = 1.0 / (1.0 + np.exp(-4.0 * (relative_length - 1.0)))
+    usage_factor = 1.0 / (1.0 + 0.3 * edge_n_used[u_idx, v_idx])
+    density_factor = 0.5 * (node_density[u_idx] + node_density[v_idx])
+
+    local_penalty = relative_length * usage_factor * density_factor
+    combined_penalty = 0.5 * rank_penalty + 0.5 * local_penalty
+
+    threshold = np.percentile(tour_edge_lengths, 75)
+    high_penalty_mask = tour_edge_lengths >= threshold
+    combined_penalty[high_penalty_mask] *= 1.5
+
+    # Scale penalty by average tour step distance to ensure proper magnitude
+    scaled_penalty = combined_penalty * (0.1 * avg_tour_length)
+
+    # Apply anti-penalty bonus (attraction) to candidate unused incident edges of tour nodes
+    k_cand = min(4, n - 1)
+    cand_neighbors = np.argsort(edge_distance, axis=1)[:, 1:k_cand + 1]
+    for i in range(k_cand):
+        nbrs = cand_neighbors[:, i]
+        unused_mask = (edge_n_used[np.arange(n), nbrs] == 0)
+        bonus = 0.02 * avg_tour_length * unused_mask
+        updated_edge_distance[np.arange(n), nbrs] -= bonus
+        updated_edge_distance[nbrs, np.arange(n)] -= bonus
+
+    # Apply symmetric bounded penalty to local optimum tour edges
+    np.add.at(updated_edge_distance, (u_idx, v_idx), scaled_penalty)
+    np.add.at(updated_edge_distance, (v_idx, u_idx), scaled_penalty)
+
+    # Enforce non-negativity and zero diagonal
+    np.maximum(updated_edge_distance, 0.0, out=updated_edge_distance)
+    np.fill_diagonal(updated_edge_distance, 0.0)
+
+    return updated_edge_distance
+# ===== Eval Output =====
+[*] Running ...
+[*] mode=val, data=/home/ducanh/projects/EAs_project/MoH/problems/tsp_gls/data/val/val_instance_data_sol_200.pkl, seed=0, n_instances=8
+[*] instance_indices=[6, 9, 0, 2, 4, 3, 5, 1]
+[*] instance 6: obj=10.6670, gap=2.1169
+[*] instance 9: obj=10.9758, gap=2.9336
+[*] instance 0: obj=11.4240, gap=4.9448
+[*] instance 2: obj=11.2240, gap=2.5227
+[*] instance 4: obj=11.2036, gap=3.2865
+[*] instance 3: obj=10.8628, gap=2.4615
+[*] instance 5: obj=11.2029, gap=2.9343
+[*] instance 1: obj=11.4935, gap=4.2570
+[*] ave_gap on size 200: 3.1821598299824254
+3.1821598299824254

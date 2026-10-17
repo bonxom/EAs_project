@@ -1,0 +1,68 @@
+# ===== Heuristic Code =====
+#{Key idea: Guided Local Search edge penalty combining non-linear usage damping, normalized edge length utility, local 4-node context bottleneck detection, and dynamic threshold boosting to escape local attractors.}
+
+import numpy as np
+
+def update_edge_distance(edge_distance, local_opt_tour, edge_n_used):
+    updated_edge_distance = np.copy(edge_distance)
+    n = len(local_opt_tour)
+    if n < 4:
+        return updated_edge_distance
+
+    u = local_opt_tour
+    v = np.roll(local_opt_tour, -1)
+    p = np.roll(local_opt_tour, 1)
+    w = np.roll(local_opt_tour, -2)
+
+    tour_lens = edge_distance[u, v]
+    usage = edge_n_used[u, v]
+
+    # Recency/saturation proxy: non-linear sub-linear damping on usage to prevent stagnation
+    # while allowing repeated penalization of stubborn edges
+    usage_decay = 1.0 / (1.0 + np.log1p(usage.astype(np.float64)))
+
+    # Global scale of current tour edges
+    mean_len = np.mean(tour_lens) + 1e-8
+    std_len = np.std(tour_lens)
+    cv = std_len / mean_len
+    norm_len = tour_lens / mean_len
+
+    # Local context: comparative cost against adjacent edges (bottleneck detection)
+    adjacent_avg = 0.5 * (edge_distance[p, u] + edge_distance[v, w]) + 1e-8
+    local_ratio = tour_lens / adjacent_avg
+
+    # Guided Local Search utility formulation: length / (1 + usage) modulated by local slack
+    utility = (norm_len + 0.5 * np.tanh(local_ratio - 1.0)) * usage_decay
+
+    # Dynamic percentile selection for targeted edge penalization
+    # Adapt cutoff based on variation of tour edges
+    cutoff = np.clip(70.0 - 15.0 * cv, 45.0, 80.0)
+    threshold = np.percentile(utility, cutoff)
+
+    # Base penalty proportional to tour edge lengths and guided local search utility
+    penalties = 0.25 * mean_len * utility
+
+    # Selective boost for the worst offending local bottleneck edges
+    high_utility_mask = utility >= threshold
+    boost_factor = 1.35 + 0.35 * np.clip(cv, 0.0, 1.0)
+    penalties[high_utility_mask] *= boost_factor
+
+    # Apply symmetric edge penalties
+    np.add.at(updated_edge_distance, (u, v), penalties)
+    np.add.at(updated_edge_distance, (v, u), penalties)
+
+    return updated_edge_distance
+# ===== Eval Output =====
+[*] Running ...
+[*] mode=val, data=/home/ducanh/projects/EAs_project/MoH/problems/tsp_gls/data/val/val_instance_data_sol_200.pkl, seed=0, n_instances=8
+[*] instance_indices=[6, 9, 0, 2, 4, 3, 5, 1]
+[*] instance 6: obj=10.6573, gap=2.0244
+[*] instance 9: obj=10.9442, gap=2.6367
+[*] instance 0: obj=11.1855, gap=2.7538
+[*] instance 2: obj=11.2182, gap=2.4702
+[*] instance 4: obj=11.0291, gap=1.6774
+[*] instance 3: obj=10.6925, gap=0.8543
+[*] instance 5: obj=11.1653, gap=2.5886
+[*] instance 1: obj=11.2900, gap=2.4108
+[*] ave_gap on size 200: 2.1770300677947105
+2.1770300677947105

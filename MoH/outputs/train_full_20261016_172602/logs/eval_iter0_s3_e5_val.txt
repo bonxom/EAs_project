@@ -1,0 +1,73 @@
+# ===== Heuristic Code =====
+# {Adaptive multi-scale geometric gating combines sigmoid-ranked tour lengths, k-NN node density, and 4-node adjacent context slack dynamically weighted by tour variance to penalize inefficient structural bridge edges.}
+
+import numpy as np
+
+def update_edge_distance(edge_distance, local_opt_tour, edge_n_used):
+    updated_edge_distance = np.copy(edge_distance)
+    n = len(local_opt_tour)
+
+    # 4-node tour context: predecessor (p), edge start (u), edge end (v), successor (w)
+    u = local_opt_tour
+    v = np.roll(local_opt_tour, -1)
+    p = np.roll(local_opt_tour, 1)
+    w = np.roll(local_opt_tour, -2)
+
+    tour_lens = edge_distance[u, v]
+    usage = edge_n_used[u, v]
+
+    # Global distribution metrics
+    mean_l = np.mean(tour_lens) + 1e-6
+    std_l = np.std(tour_lens)
+    cv = np.clip(std_l / mean_l, 0.0, 2.0)
+    rel_len = tour_lens / mean_l
+
+    # Sigmoid-based rank penalty
+    rank_penalty = 1.0 / (1.0 + np.exp(-4.0 * (rel_len - 1.0)))
+
+    # Local context: adjacent predecessor and successor edge lengths
+    adj_mean = 0.5 * (edge_distance[p, u] + edge_distance[v, w]) + 1e-6
+    slack_ratio = tour_lens / adj_mean
+    slack_penalty = np.tanh(np.maximum(0.0, slack_ratio - 1.0))
+
+    # Node density normalization using k-NN
+    k = min(6, n - 1)
+    k_nn_dists = np.partition(edge_distance, k, axis=1)[:, 1:k]
+    node_scale = np.mean(k_nn_dists, axis=1) + 1e-6
+    cluster_scale = np.sqrt(node_scale[u] * node_scale[v])
+    bridge_factor = np.clip(tour_lens / cluster_scale, 0.5, 3.0)
+
+    # Adaptive gating based on coefficient of variation (CV)
+    # High CV favors local slack bypasses; low CV balances global rank and density
+    w_slack = np.clip(0.3 + 0.3 * cv, 0.2, 0.7)
+    w_global = 1.0 - w_slack
+
+    geometric_utility = (w_global * rank_penalty + w_slack * slack_penalty) * bridge_factor
+    usage_attenuation = 1.0 / (1.0 + 0.35 * usage)
+    penalties = geometric_utility * usage_attenuation
+
+    # Dynamic selective amplification for the most critical bottleneck edges
+    cutoff_pct = np.clip(75.0 - 15.0 * cv, 55.0, 80.0)
+    threshold = np.percentile(penalties, cutoff_pct)
+    boost_mask = penalties >= threshold
+    penalties[boost_mask] *= (1.3 + 0.2 * np.clip(cv, 0.0, 1.0))
+
+    # Symmetric edge distance update
+    np.add.at(updated_edge_distance, (u, v), penalties)
+    np.add.at(updated_edge_distance, (v, u), penalties)
+
+    return updated_edge_distance
+# ===== Eval Output =====
+[*] Running ...
+[*] mode=val, data=/home/ducanh/projects/EAs_project/MoH/problems/tsp_gls/data/val/val_instance_data_sol_200.pkl, seed=0, n_instances=8
+[*] instance_indices=[6, 9, 0, 2, 4, 3, 5, 1]
+[*] instance 6: obj=10.4460, gap=0.0019
+[*] instance 9: obj=10.7126, gap=0.4651
+[*] instance 0: obj=10.8947, gap=0.0821
+[*] instance 2: obj=11.0134, gap=0.5999
+[*] instance 4: obj=10.8598, gap=0.1163
+[*] instance 3: obj=10.6280, gap=0.2464
+[*] instance 5: obj=10.8963, gap=0.1170
+[*] instance 1: obj=11.1172, gap=0.8438
+[*] ave_gap on size 200: 0.30905769825604334
+0.30905769825604334

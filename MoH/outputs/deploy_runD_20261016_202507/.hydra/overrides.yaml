@@ -1,0 +1,5 @@
+- checkpoint=checkpoints/tsp_gls_20_50_100_200_fresh_20261016_runD
+- target_sizes=[500,1000]
+- inference_iterations=10
+- evaluate_test=true
+- heu.base_url=http://172.25.16.1:20128/v1

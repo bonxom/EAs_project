@@ -1,0 +1,73 @@
+# ===== Heuristic Code =====
+#{Dynamic recency-weighted exponential penalty assignment combined with memory-based utility normalization and dissipation across long-unvisited adjacent edges to systematically escape local optima.}
+
+import numpy as np
+
+def update_edge_distance(edge_distance, local_opt_tour, edge_n_used):
+    updated_edge_distance = np.copy(edge_distance)
+    n = len(local_opt_tour)
+
+    u_idx = np.array(local_opt_tour, dtype=np.intp)
+    v_idx = np.roll(u_idx, -1)
+
+    costs = edge_distance[u_idx, v_idx].astype(np.float64)
+    used = edge_n_used[u_idx, v_idx].astype(np.float64)
+
+    # Recency-weighted frequency surrogate via sub-linear saturating exponential scale
+    effective_frequency = 1.0 - np.exp(-0.25 * used)
+
+    # Cost-to-frequency utility metric balancing high edge cost against historical entrapment
+    utilities = costs / (1.0 + 3.0 * effective_frequency)
+
+    # Dynamic selection of high-utility edges to disrupt local optimality
+    util_median = np.median(utilities)
+    util_max = np.max(utilities) + 1e-12
+    penalize_mask = utilities >= util_median
+
+    p_u = u_idx[penalize_mask]
+    p_v = v_idx[penalize_mask]
+    p_costs = costs[penalize_mask]
+    p_eff_freq = effective_frequency[penalize_mask]
+    p_utils = utilities[penalize_mask]
+
+    # Penalties scaled by normalized utility and inversely modulated by effective saturation
+    penalties = (0.35 * p_costs) * (1.0 + (p_utils / util_max)) / (1.0 + p_eff_freq)
+
+    updated_edge_distance[p_u, p_v] += penalties
+    updated_edge_distance[p_v, p_u] += penalties
+
+    # Memory-based penalty dissipation on long-unvisited/underutilized incident edges
+    penalized_nodes = np.unique(np.concatenate((p_u, p_v)))
+    sub_matrix_used = edge_n_used[penalized_nodes]
+    sub_matrix_dist = updated_edge_distance[penalized_nodes]
+
+    # Dissipate distance for edges that have experienced negligible recent visits
+    dissipation_rate = 0.05
+    unvisited_mask = (sub_matrix_used == 0)
+    # Exclude self-loops
+    unvisited_mask[np.arange(len(penalized_nodes)), penalized_nodes] = False
+
+    dissipation_amounts = sub_matrix_dist * dissipation_rate * unvisited_mask
+    updated_edge_distance[penalized_nodes] -= dissipation_amounts
+
+    # Enforce exact matrix symmetry after dissipation
+    updated_edge_distance[:, penalized_nodes] = updated_edge_distance[penalized_nodes, :].T
+
+    # Enforce non-negativity constraint
+    np.maximum(updated_edge_distance, 0.0, out=updated_edge_distance)
+
+    return updated_edge_distance
+# ===== Eval Output =====
+[*] Running ...
+[*] mode=val, data=/home/ducanh/projects/EAs_project/MoH/problems/tsp_gls/data/val/val_instance_data_sol_50.pkl, seed=0, n_instances=8
+[*] instance_indices=[6, 9, 0, 2, 4, 3, 5, 1]
+[*] instance 6: obj=5.7136, gap=0.5983
+[*] instance 9: obj=5.9639, gap=0.0000
+[*] instance 0: obj=5.7783, gap=0.0000
+[*] instance 2: obj=5.8071, gap=0.0000
+[*] instance 4: obj=5.3965, gap=0.0000
+[*] instance 3: obj=5.8224, gap=1.1392
+[*] instance 5: obj=5.6187, gap=0.0000
+[*] instance 1: obj=5.1651, gap=0.0000
+[*] ave_gap on size 50: 0.21718291265821477
+0.21718291265821477

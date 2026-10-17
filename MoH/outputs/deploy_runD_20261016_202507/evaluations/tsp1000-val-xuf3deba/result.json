@@ -1,0 +1,71 @@
+{
+  "code_sha256": "f6f3d6b8dc489e67f9484bc3836c5022c01d9d4fffc0d64981fc132add62332f",
+  "count": 8,
+  "dataset_sha256": "d547996b8786b97096b9af70647aa7eb245709be555038e63babbeb76bd030e8",
+  "elapsed_seconds": 34.49318164299984,
+  "failures": 0,
+  "indices": [
+    6,
+    9,
+    0,
+    2,
+    4,
+    3,
+    5,
+    1
+  ],
+  "instances": [
+    {
+      "gap_pct": 3.041261647645288,
+      "objective": 23.53527486588949,
+      "status": "ok"
+    },
+    {
+      "gap_pct": 2.939126713923068,
+      "objective": 23.55791324556632,
+      "status": "ok"
+    },
+    {
+      "gap_pct": 3.2846617184851823,
+      "objective": 23.577315242837436,
+      "status": "ok"
+    },
+    {
+      "gap_pct": 3.219801203201822,
+      "objective": 23.880598670997074,
+      "status": "ok"
+    },
+    {
+      "gap_pct": 2.8889680491869463,
+      "objective": 23.992860778641287,
+      "status": "ok"
+    },
+    {
+      "gap_pct": 2.7188941708632175,
+      "objective": 23.650049656065526,
+      "status": "ok"
+    },
+    {
+      "gap_pct": 2.731354955043952,
+      "objective": 23.966803604262374,
+      "status": "ok"
+    },
+    {
+      "gap_pct": 3.261898504372196,
+      "objective": 23.928645129384766,
+      "status": "ok"
+    }
+  ],
+  "mean_gap_pct": 3.010745870340209,
+  "mode": "val",
+  "seed": 0,
+  "size": 1000,
+  "solver_settings": {
+    "instance_timeout": 90,
+    "iteration_limit": 1000,
+    "perturbation_moves": 1,
+    "time_limit": 20,
+    "workers": 8
+  },
+  "status": "ok"
+}

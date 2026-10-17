@@ -1,0 +1,79 @@
+# ===== Heuristic Code =====
+#{Self-tuning adaptive Guided Local Search that scales penalties using an instance-calibrated lambda proportional to the average tour edge cost modulated by edge persistence, while selectively rewarding unvisited incident alternatives to escape local optima.}#
+
+import numpy as np
+
+def update_edge_distance(edge_distance, local_opt_tour, edge_n_used):
+    updated_edge_distance = np.copy(edge_distance)
+    n = len(local_opt_tour)
+    if n < 3:
+        return updated_edge_distance
+
+    u_idx = np.array(local_opt_tour, dtype=np.intp)
+    v_idx = np.roll(u_idx, -1)
+
+    costs = edge_distance[u_idx, v_idx].astype(np.float64)
+    used = edge_n_used[u_idx, v_idx].astype(np.float64)
+
+    # Core GLS formulation: utility as cost normalized by utilization count
+    utilities = costs / (1.0 + used)
+
+    # Adaptive penalty calibration parameter (GLS lambda) proportional to average tour edge length
+    tour_cost = np.sum(costs)
+    avg_edge_cost = tour_cost / float(n)
+    alpha = 0.3  # Standard GLS scaling factor
+    lambda_param = alpha * avg_edge_cost
+
+    # Identify edges with high utility to break local optimum structures
+    max_util = np.max(utilities)
+    util_threshold = max_util * 0.85
+    penalize_mask = utilities >= util_threshold
+
+    # Fallback to top edge if none strictly exceed the relative threshold
+    if not np.any(penalize_mask):
+        penalize_mask = utilities == max_util
+
+    p_u = u_idx[penalize_mask]
+    p_v = v_idx[penalize_mask]
+    p_costs = costs[penalize_mask]
+    p_used = used[penalize_mask]
+    p_utils = utilities[penalize_mask]
+
+    # Modulate penalty using edge persistence (frequency of visits) to break cyclic attractor loops
+    # Higher persistence scales penalty non-linearly to force diversification
+    persistence_factor = 1.0 + np.log1p(p_used)
+    relative_util_factor = p_utils / (max_util + 1e-12)
+    penalties = lambda_param * persistence_factor * (p_costs / (avg_edge_cost + 1e-12)) * relative_util_factor
+
+    # Apply symmetric penalties to selected tour edges
+    updated_edge_distance[p_u, p_v] += penalties
+    updated_edge_distance[p_v, p_u] += penalties
+
+    # Symmetrically discount untried/underutilized incident edges connected to penalized nodes
+    penalized_nodes = np.unique(np.concatenate((p_u, p_v)))
+    discount_ratio = 0.015
+
+    for u in penalized_nodes:
+        # Find unused incident edges (excluding self-loop)
+        unused_mask = (edge_n_used[u] == 0)
+        unused_mask[u] = False
+        if np.any(unused_mask):
+            delta = updated_edge_distance[u, unused_mask] * discount_ratio
+            updated_edge_distance[u, unused_mask] -= delta
+            updated_edge_distance[unused_mask, u] -= delta
+
+    return updated_edge_distance
+# ===== Eval Output =====
+[*] Running ...
+[*] mode=val, data=/home/ducanh/projects/EAs_project/MoH/problems/tsp_gls/data/val/val_instance_data_sol_50.pkl, seed=0, n_instances=8
+[*] instance_indices=[6, 9, 0, 2, 4, 3, 5, 1]
+[*] instance 6: obj=5.7136, gap=0.5983
+[*] instance 9: obj=5.9639, gap=0.0000
+[*] instance 0: obj=5.7783, gap=0.0000
+[*] instance 2: obj=5.8071, gap=0.0000
+[*] instance 4: obj=5.3965, gap=0.0000
+[*] instance 3: obj=5.7569, gap=0.0000
+[*] instance 5: obj=5.6187, gap=0.0000
+[*] instance 1: obj=5.1651, gap=0.0000
+[*] ave_gap on size 50: 0.07478878681544121
+0.07478878681544121

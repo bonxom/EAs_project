@@ -1,0 +1,76 @@
+# ===== Heuristic Code =====
+#{A dynamic Guided Local Search matrix update that adapts edge penalty thresholds, penalty scale, and unvisited edge decay rates using tour cost dispersion and search-depth usage statistics.}#
+
+import numpy as np
+
+def update_edge_distance(edge_distance, local_opt_tour, edge_n_used):
+    updated_edge_distance = np.copy(edge_distance)
+    n = len(local_opt_tour)
+    if n < 3:
+        return updated_edge_distance
+
+    u_idx = np.array(local_opt_tour, dtype=np.intp)
+    v_idx = np.roll(u_idx, -1)
+
+    costs = edge_distance[u_idx, v_idx].astype(np.float64)
+    used = edge_n_used[u_idx, v_idx].astype(np.float64)
+
+    # Adaptive search depth tracking via usage statistics across the current tour
+    mean_used = np.mean(used)
+    max_used = np.max(used)
+    depth_factor = 1.0 / (1.0 + np.log1p(mean_used))
+
+    # Classical guided local search edge utility: cost / (1 + count)
+    utilities = costs / (1.0 + used)
+    max_util = np.max(utilities)
+
+    # Dynamic thresholding based on dispersion: selectively penalize top candidates
+    # As search depth progresses (higher mean_used), threshold slightly relaxes to diversify
+    std_util = np.std(utilities)
+    threshold = max_util - std_util * (0.5 + 0.5 * (1.0 - depth_factor))
+    penalize_mask = utilities >= threshold
+
+    # Guarantee at least the maximum utility edge is penalized
+    if not np.any(penalize_mask):
+        penalize_mask[np.argmax(utilities)] = True
+
+    p_u = u_idx[penalize_mask]
+    p_v = v_idx[penalize_mask]
+    p_costs = costs[penalize_mask]
+    p_used = used[penalize_mask]
+    p_utils = utilities[penalize_mask]
+
+    # Adaptive penalty scaling: proportional to mean tour edge cost, modulated by Cauchy-type tenure decay
+    tour_mean_cost = np.mean(costs)
+    lambda_factor = 0.3 * (tour_mean_cost / (max_util + 1e-12))
+    penalties = lambda_factor * p_utils / (1.0 + p_used * depth_factor)
+
+    updated_edge_distance[p_u, p_v] += penalties
+    updated_edge_distance[p_v, p_u] += penalties
+
+    # Reactive decay on unvisited incident edges: decay rate scales inversely with search progress
+    penalized_nodes = np.unique(np.concatenate((p_u, p_v)))
+    adaptive_decay = 0.01 * depth_factor
+
+    for u in penalized_nodes:
+        unused_mask = (edge_n_used[u] == 0)
+        unused_mask[u] = False
+        if np.any(unused_mask):
+            updated_edge_distance[u, unused_mask] *= (1.0 - adaptive_decay)
+            updated_edge_distance[unused_mask, u] = updated_edge_distance[u, unused_mask]
+
+    return updated_edge_distance
+# ===== Eval Output =====
+[*] Running ...
+[*] mode=val, data=/home/ducanh/projects/EAs_project/MoH/problems/tsp_gls/data/val/val_instance_data_sol_50.pkl, seed=0, n_instances=8
+[*] instance_indices=[6, 9, 0, 2, 4, 3, 5, 1]
+[*] instance 6: obj=5.7136, gap=0.5983
+[*] instance 9: obj=6.0516, gap=1.4712
+[*] instance 0: obj=5.8546, gap=1.3193
+[*] instance 2: obj=5.8274, gap=0.3500
+[*] instance 4: obj=5.5821, gap=3.4387
+[*] instance 3: obj=5.8975, gap=2.4424
+[*] instance 5: obj=5.6187, gap=0.0000
+[*] instance 1: obj=5.3071, gap=2.7501
+[*] ave_gap on size 50: 1.5462627502294461
+1.5462627502294461

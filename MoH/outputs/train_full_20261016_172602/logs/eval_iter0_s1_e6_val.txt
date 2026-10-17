@@ -1,0 +1,87 @@
+# ===== Heuristic Code =====
+# {A dual-phase Guided Local Search operator combining z-score and structural entropy penalties for trapped edges with an entropy-directed incentive decay that selectively discounts unused edges connected to rigid nodes.}
+
+import numpy as np
+
+def update_edge_distance(edge_distance, local_opt_tour, edge_n_used):
+    updated_edge_distance = np.copy(edge_distance)
+    n = len(local_opt_tour)
+
+    u_idx = np.array(local_opt_tour, dtype=np.intp)
+    v_idx = np.roll(u_idx, -1)
+
+    costs = edge_distance[u_idx, v_idx].astype(np.float64)
+    used = edge_n_used[u_idx, v_idx].astype(np.float64)
+
+    # Compute node-level usage entropy to assess structural rigidity
+    total_node_usage = np.sum(edge_n_used, axis=1, dtype=np.float64)
+    safe_totals = np.where(total_node_usage > 0, total_node_usage, 1.0)
+    p_matrix = edge_n_used / safe_totals[:, None]
+
+    # Entropy per node
+    log_p = np.zeros_like(p_matrix)
+    pos_mask = p_matrix > 0
+    log_p[pos_mask] = np.log(p_matrix[pos_mask])
+    node_entropy = -np.sum(p_matrix * log_p, axis=1)
+
+    max_entropy = np.log(max(n - 1, 1))
+    norm_entropy = node_entropy / (max_entropy + 1e-9)
+    node_rigidity = np.clip(1.0 - norm_entropy, 0.0, 1.0)
+
+    # Edge rigidity from incident vertices
+    edge_rigidity = 0.5 * (node_rigidity[u_idx] + node_rigidity[v_idx])
+
+    # Z-score guided utility modulated by rigidity and visit frequency
+    mean_cost = np.mean(costs)
+    std_cost = np.std(costs) + 1e-8
+    z_scores = (costs - mean_cost) / std_cost
+    z_weights = 1.0 / (1.0 + np.exp(-z_scores))
+
+    utilities = (costs * (1.0 + z_weights) * (1.0 + edge_rigidity)) / (1.0 + used)
+
+    # Median-cutoff penalization phase
+    threshold = np.median(utilities)
+    max_util = np.max(utilities) + 1e-8
+    penalize_mask = utilities >= threshold
+
+    p_u = u_idx[penalize_mask]
+    p_v = v_idx[penalize_mask]
+    p_costs = costs[penalize_mask]
+    p_used = used[penalize_mask]
+    p_utils = utilities[penalize_mask]
+    p_rigidity = edge_rigidity[penalize_mask]
+
+    penalties = (p_costs / (1.0 + np.sqrt(p_used + 1.0))) * (1.0 + p_utils / max_util) * (0.5 + 0.5 * p_rigidity)
+
+    updated_edge_distance[p_u, p_v] += penalties
+    updated_edge_distance[p_v, p_u] += penalties
+
+    # Entropy-directed incentive phase: discount unused edges prioritized by node rigidity
+    penalized_nodes = np.unique(np.concatenate((p_u, p_v)))
+    base_decay = 0.02
+
+    for u in penalized_nodes:
+        rigidity_u = node_rigidity[u]
+        decay_rate = base_decay * (1.0 + rigidity_u)
+        unused_mask = (edge_n_used[u] == 0)
+        unused_mask[u] = False
+        if np.any(unused_mask):
+            discount = updated_edge_distance[u, unused_mask] * decay_rate
+            updated_edge_distance[u, unused_mask] -= discount
+            updated_edge_distance[unused_mask, u] -= discount
+
+    return updated_edge_distance
+# ===== Eval Output =====
+[*] Running ...
+[*] mode=val, data=/home/ducanh/projects/EAs_project/MoH/problems/tsp_gls/data/val/val_instance_data_sol_50.pkl, seed=0, n_instances=8
+[*] instance_indices=[6, 9, 0, 2, 4, 3, 5, 1]
+[*] instance 6: obj=5.7136, gap=0.5983
+[*] instance 9: obj=5.9639, gap=0.0000
+[*] instance 0: obj=5.7783, gap=0.0000
+[*] instance 2: obj=5.8071, gap=0.0000
+[*] instance 4: obj=5.3965, gap=0.0000
+[*] instance 3: obj=5.8123, gap=0.9633
+[*] instance 5: obj=5.6492, gap=0.5441
+[*] instance 1: obj=5.1651, gap=0.0000
+[*] ave_gap on size 50: 0.26321031999863576
+0.26321031999863576

@@ -1,0 +1,56 @@
+# ===== Heuristic Code =====
+#{Evaluate compound 2-hop sub-path utilities combining consecutive edge lengths and usage counts, penalizing entire high-cost path segments symmetrically to dismantle multi-edge local basin traps.}
+
+import numpy as np
+
+def update_edge_distance(edge_distance, local_opt_tour, edge_n_used):
+    updated_edge_distance = np.copy(edge_distance)
+
+    # Form 2-hop edge index chains along the tour: u -> v -> w
+    u_idx = local_opt_tour
+    v_idx = np.roll(local_opt_tour, -1)
+    w_idx = np.roll(local_opt_tour, -2)
+
+    # Extract lengths and usage counts for both consecutive edges
+    len1 = edge_distance[u_idx, v_idx]
+    len2 = edge_distance[v_idx, w_idx]
+    cnt1 = edge_n_used[u_idx, v_idx]
+    cnt2 = edge_n_used[v_idx, w_idx]
+
+    # Compound 2-hop utility evaluation penalizing long, under-penalized sub-sequences
+    compound_utilities = (len1 + len2) / (2.0 + cnt1 + cnt2)
+
+    max_utility = np.max(compound_utilities)
+    avg_edge = np.mean(len1)
+    penalty = 0.3 * avg_edge
+    threshold = 0.95 * max_utility
+
+    # Identify compound sub-paths exceeding threshold
+    selected_mask = compound_utilities >= threshold
+
+    # Extract both edges belonging to the high-utility chains
+    sel_u1, sel_v1 = u_idx[selected_mask], v_idx[selected_mask]
+    sel_u2, sel_v2 = v_idx[selected_mask], w_idx[selected_mask]
+
+    all_u = np.concatenate([sel_u1, sel_u2])
+    all_v = np.concatenate([sel_v1, sel_v2])
+
+    # Symmetrically penalize all identified sub-path edges
+    np.add.at(updated_edge_distance, (all_u, all_v), penalty)
+    np.add.at(updated_edge_distance, (all_v, all_u), penalty)
+
+    return updated_edge_distance
+# ===== Eval Output =====
+[*] Running ...
+[*] mode=val, data=/home/ducanh/projects/EAs_project/MoH/problems/tsp_gls/data/val/val_instance_data_sol_20.pkl, seed=0, n_instances=8
+[*] instance_indices=[6, 9, 0, 2, 4, 3, 5, 1]
+[*] instance 6: obj=3.7045, gap=0.0000
+[*] instance 9: obj=4.1442, gap=0.0000
+[*] instance 0: obj=3.6827, gap=0.0000
+[*] instance 2: obj=3.8184, gap=0.0000
+[*] instance 4: obj=3.8385, gap=0.0000
+[*] instance 3: obj=3.6971, gap=0.0000
+[*] instance 5: obj=3.4281, gap=0.0000
+[*] instance 1: obj=3.6958, gap=0.0000
+[*] ave_gap on size 20: 1.2218318606871392e-06
+1.2218318606871392e-06

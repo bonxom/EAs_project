@@ -1,0 +1,93 @@
+# ===== Heuristic Code =====
+#{This algorithm applies targeted guided penalties to high-utility tour edges while utilizing a relative neighborhood graph proxy based on planar empty-region proximity tests to selectively incentivize Delaunay-like topological shortcuts.}
+
+import numpy as np
+
+def update_edge_distance(edge_distance, local_opt_tour, edge_n_used):
+    updated_edge_distance = np.copy(edge_distance)
+    n = len(local_opt_tour)
+
+    tour_edges = [(local_opt_tour[i], local_opt_tour[(i + 1) % n]) for i in range(n)]
+    costs = np.array([edge_distance[u, v] for u, v in tour_edges], dtype=np.float64)
+    mean_cost = np.mean(costs)
+    std_cost = np.std(costs) + 1e-8
+
+    utilities = np.zeros(n, dtype=np.float64)
+    for i in range(n):
+        u, v = tour_edges[i]
+        used = edge_n_used[u, v]
+        z_score = (costs[i] - mean_cost) / std_cost
+        logistic_weight = 1.0 / (1.0 + np.exp(-z_score))
+        utilities[i] = (costs[i] * (1.0 + logistic_weight)) / (1.0 + used)
+
+    threshold = np.median(utilities)
+    max_util = np.max(utilities) + 1e-8
+    penalized_nodes = set()
+
+    for idx in range(n):
+        if utilities[idx] >= threshold:
+            u, v = tour_edges[idx]
+            used = edge_n_used[u, v]
+            penalty = (costs[idx] / (1.0 + np.sqrt(used + 1.0))) * (1.0 + utilities[idx] / max_util)
+            updated_edge_distance[u, v] += penalty
+            updated_edge_distance[v, u] += penalty
+            penalized_nodes.add(u)
+            penalized_nodes.add(v)
+
+    penalized_list = sorted(list(penalized_nodes))
+    if not penalized_list:
+        return updated_edge_distance
+
+    k_candidate = min(12, max(4, n // 10))
+    base_incentive = 0.05
+    visited_pairs = set()
+
+    # Planar Delaunay/Gabriel topological proxy:
+    # A candidate edge (u, v) is topologically consistent if no third node w lies inside its empty-region sphere
+    for u in penalized_list:
+        dists_u = edge_distance[u].copy()
+        dists_u[u] = np.inf
+        nearest_indices = np.argsort(dists_u)[:k_candidate]
+
+        for rank_u, v in enumerate(nearest_indices):
+            if v <= u:
+                continue
+            pair = (u, v)
+            if pair in visited_pairs:
+                continue
+
+            d_uv = edge_distance[u, v]
+            used_uv = edge_n_used[u, v]
+            if used_uv > 1:
+                continue
+
+            # Empty-lune test proxy for Delaunay/Relative Neighborhood Graph:
+            # Check violation across common nearest neighbors
+            d_u_all = edge_distance[u, nearest_indices]
+            d_v_all = edge_distance[v, nearest_indices]
+            # Nodes strictly inside the Gabriel sphere satisfy d(u,w)^2 + d(v,w)^2 < d(u,v)^2
+            gabriel_violations = np.sum((d_u_all**2 + d_v_all**2) < (0.95 * d_uv**2))
+
+            if gabriel_violations <= 1:
+                topological_factor = 1.0 / (1.0 + gabriel_violations * 0.5)
+                rank_factor = 1.0 / (1.0 + rank_u * 0.25)
+                incentive = updated_edge_distance[u, v] * base_incentive * topological_factor * rank_factor
+                updated_edge_distance[u, v] -= incentive
+                updated_edge_distance[v, u] -= incentive
+                visited_pairs.add(pair)
+
+    return updated_edge_distance
+# ===== Eval Output =====
+[*] Running ...
+[*] mode=val, data=/home/ducanh/projects/EAs_project/MoH/problems/tsp_gls/data/val/val_instance_data_sol_50.pkl, seed=0, n_instances=8
+[*] instance_indices=[6, 9, 0, 2, 4, 3, 5, 1]
+[*] instance 6: obj=5.7136, gap=0.5983
+[*] instance 9: obj=6.0108, gap=0.7860
+[*] instance 0: obj=5.7783, gap=0.0000
+[*] instance 2: obj=5.8071, gap=0.0000
+[*] instance 4: obj=5.3965, gap=0.0000
+[*] instance 3: obj=5.8224, gap=1.1392
+[*] instance 5: obj=5.6492, gap=0.5441
+[*] instance 1: obj=5.1651, gap=0.0000
+[*] ave_gap on size 50: 0.3834339567544809
+0.3834339567544809

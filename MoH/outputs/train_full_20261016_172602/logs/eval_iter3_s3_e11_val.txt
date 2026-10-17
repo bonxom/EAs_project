@@ -1,0 +1,69 @@
+# ===== Heuristic Code =====
+#{A co-evolutionary hybrid edge penalty strategy combining partitioned k-NN local density scaling with usage-decayed sigmoid rank penalties and a continuous bridge-damping modulator on upper-quartile tour edges to selectively penalize intra-cluster detours while safeguarding essential long connections.}#
+
+import numpy as np
+
+def update_edge_distance(edge_distance, local_opt_tour, edge_n_used):
+    updated_edge_distance = np.copy(edge_distance)
+    n = len(local_opt_tour)
+    if n < 4:
+        return updated_edge_distance
+
+    # Calculate k-NN density normalization to distinguish dense clusters from sparse areas
+    k = min(6, n - 1)
+    # Using partition for efficiency
+    partitioned = np.partition(edge_distance, kth=k, axis=1)
+    k_nn_avg = np.mean(partitioned[:, 1:k+1], axis=1)
+    node_density = 1.0 / (k_nn_avg + 1e-6)
+    node_density = node_density / np.mean(node_density)
+
+    u_idx = local_opt_tour
+    v_idx = np.roll(local_opt_tour, -1)
+    tour_edge_lengths = edge_distance[u_idx, v_idx]
+    avg_tour_length = np.mean(tour_edge_lengths)
+    relative_length = tour_edge_lengths / (avg_tour_length + 1e-6)
+
+    # Sigmoidal rank-based penalty reflecting relative edge length
+    rank_penalty = 1.0 / (1.0 + np.exp(-4.0 * (relative_length - 1.0)))
+
+    # Historical usage decay to avoid over-penalizing frequently broken edges
+    usage_factor = 1.0 / (1.0 + 0.3 * edge_n_used[u_idx, v_idx])
+
+    # Local density factor: higher penalty in dense clusters, lower in sparse transitions
+    density_factor = 0.5 * (node_density[u_idx] + node_density[v_idx])
+    local_penalty = relative_length * usage_factor * density_factor
+
+    # Adaptive global vs local weighting based on search progression
+    freq_mean = np.mean(edge_n_used[u_idx, v_idx])
+    w_global = 0.6 / (1.0 + 0.1 * freq_mean)
+    w_local = 1.0 - w_global
+    combined_penalty = w_global * rank_penalty + w_local * local_penalty
+
+    # Bridge-damping logic: continuous boost on upper-quartile edges that are not essential bridges
+    # An edge between two high-density nodes is likely an intra-cluster detour, whereas between low-density is a bridge
+    p75 = np.percentile(tour_edge_lengths, 75)
+    bridge_factor = np.clip(density_factor, 0.5, 2.0)
+    upper_mask = tour_edge_lengths >= p75
+
+    # Progressively boost upper-quartile edges proportional to local density (detour likelihood)
+    combined_penalty[upper_mask] *= (1.0 + 0.5 * (bridge_factor[upper_mask] / 1.25))
+
+    # Apply symmetric perturbation to distance matrix
+    np.add.at(updated_edge_distance, (u_idx, v_idx), combined_penalty)
+    np.add.at(updated_edge_distance, (v_idx, u_idx), combined_penalty)
+
+    return updated_edge_distance
+# ===== Eval Output =====
+[*] Running ...
+[*] mode=val, data=/home/ducanh/projects/EAs_project/MoH/problems/tsp_gls/data/val/val_instance_data_sol_200.pkl, seed=0, n_instances=8
+[*] instance_indices=[6, 9, 0, 2, 4, 3, 5, 1]
+[*] instance 6: obj=10.4549, gap=0.0868
+[*] instance 9: obj=10.7044, gap=0.3876
+[*] instance 0: obj=10.8904, gap=0.0432
+[*] instance 2: obj=10.9730, gap=0.2303
+[*] instance 4: obj=10.8766, gap=0.2719
+[*] instance 3: obj=10.6112, gap=0.0878
+[*] instance 5: obj=10.9294, gap=0.4216
+[*] instance 1: obj=11.0580, gap=0.3061
+[*] ave_gap on size 200: 0.22942588642962947
+0.22942588642962947

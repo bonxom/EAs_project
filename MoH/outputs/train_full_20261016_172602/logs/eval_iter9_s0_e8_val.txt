@@ -1,0 +1,86 @@
+# ===== Heuristic Code =====
+#{This algorithm replaces static additive penalization with an adaptive ruin-and-recreate sub-path ejection strategy that identifies contiguous high-utility chains to heavily inflate, while applying a deterministic distance-decay regularization on historically over-penalized edges.}
+
+import numpy as np
+
+def update_edge_distance(edge_distance, local_opt_tour, edge_n_used):
+    updated_edge_distance = np.copy(edge_distance)
+    n = len(local_opt_tour)
+    if n < 3:
+        return updated_edge_distance
+
+    u_idx = local_opt_tour
+    v_idx = np.roll(local_opt_tour, -1)
+
+    tour_lengths = edge_distance[u_idx, v_idx]
+    tour_counts = edge_n_used[u_idx, v_idx]
+
+    # Base guided local search utilities
+    utilities = tour_lengths / (1.0 + tour_counts)
+
+    # Ruin: Identify top contiguous sub-chains of high utility
+    k_ruin = max(2, int(np.ceil(0.15 * n)))
+
+    # Calculate rolling window utility of size 3 to find structurally bad sub-chains
+    w_size = min(3, n)
+    rolled_utils = np.zeros(n, dtype=np.float64)
+    for shift in range(w_size):
+        rolled_utils += np.roll(utilities, -shift)
+
+    # Pick seed indices with highest cumulative ruin utility deterministically
+    sorted_seeds = np.argsort(-rolled_utils)
+
+    eject_mask = np.zeros(n, dtype=bool)
+    num_ejected = 0
+    for seed in sorted_seeds:
+        if num_ejected >= k_ruin:
+            break
+        # Mark contiguous segment starting at seed
+        seg_indices = (seed + np.arange(w_size)) % n
+        if not np.any(eject_mask[seg_indices]):
+            eject_mask[seg_indices] = True
+            num_ejected += w_size
+
+    # Fallback to top utilities if not enough edges ejected
+    if num_ejected < k_ruin:
+        remaining_needed = k_ruin - num_ejected
+        unselected = np.where(~eject_mask)[0]
+        top_remaining = unselected[np.argsort(-utilities[unselected])[:remaining_needed]]
+        eject_mask[top_remaining] = True
+
+    # Compute a dynamic pseudo-infinite penalty proportional to the tour scale
+    max_edge = np.max(tour_lengths)
+    avg_edge = np.mean(tour_lengths)
+    ejection_penalty = 10.0 * (max_edge + avg_edge)
+
+    eject_u = u_idx[eject_mask]
+    eject_v = v_idx[eject_mask]
+
+    # Apply structural ejection to break local optima
+    updated_edge_distance[eject_u, eject_v] += ejection_penalty
+    updated_edge_distance[eject_v, eject_u] += ejection_penalty
+
+    # Distance-decay regularization: relax historically over-penalized edges across the matrix
+    decay_threshold = np.percentile(edge_n_used, 95)
+    if decay_threshold > 0:
+        overused_mask = edge_n_used >= decay_threshold
+        decay_factor = 0.05 * avg_edge
+        updated_edge_distance[overused_mask] = np.maximum(
+            0.0, updated_edge_distance[overused_mask] - decay_factor
+        )
+
+    return updated_edge_distance
+# ===== Eval Output =====
+[*] Running ...
+[*] mode=val, data=/home/ducanh/projects/EAs_project/MoH/problems/tsp_gls/data/val/val_instance_data_sol_20.pkl, seed=0, n_instances=8
+[*] instance_indices=[6, 9, 0, 2, 4, 3, 5, 1]
+[*] instance 6: obj=3.7045, gap=0.0000
+[*] instance 9: obj=4.1442, gap=0.0000
+[*] instance 0: obj=3.6827, gap=0.0000
+[*] instance 2: obj=3.8184, gap=0.0000
+[*] instance 4: obj=3.8385, gap=0.0000
+[*] instance 3: obj=3.6971, gap=0.0000
+[*] instance 5: obj=3.4281, gap=0.0000
+[*] instance 1: obj=3.6958, gap=0.0000
+[*] ave_gap on size 20: 1.2218318606871392e-06
+1.2218318606871392e-06

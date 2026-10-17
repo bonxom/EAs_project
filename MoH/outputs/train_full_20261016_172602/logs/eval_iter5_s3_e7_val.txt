@@ -1,0 +1,81 @@
+# ===== Heuristic Code =====
+#{A dual-scale GLS penalty scheme that applies exponential memory decay to historical edge penalties while targeting bottleneck cross-cluster edges in the current tour with quadratic stress penalties scaled by mutual k-nearest neighbor sparsity.}
+
+import numpy as np
+
+def update_edge_distance(edge_distance, local_opt_tour, edge_n_used):
+    updated_edge_distance = np.copy(edge_distance)
+    n = len(local_opt_tour)
+
+    # Identify tour edges (symmetric pairs)
+    u_idx = local_opt_tour
+    v_idx = np.roll(local_opt_tour, -1)
+
+    # Calculate baseline local density via k-NN graph
+    k = min(8, n - 1)
+    sorted_dists = np.partition(edge_distance, k, axis=1)[:, :k+1]
+    sorted_dists = np.sort(sorted_dists, axis=1)
+    knn_mean = np.mean(sorted_dists[:, 1:k+1], axis=1)
+    density = 1.0 / (knn_mean + 1e-6)
+    density /= np.mean(density)
+
+    # Global decay / evaporation on previously penalized edges not in the current tour
+    # Detect penalized edges via edge_n_used history
+    decay_rate = 0.98
+    tour_mask = np.zeros((n, n), dtype=bool)
+    tour_mask[u_idx, v_idx] = True
+    tour_mask[v_idx, u_idx] = True
+
+    penalized_mask = (edge_n_used > 0) & (~tour_mask)
+    if np.any(penalized_mask):
+        # Slightly contract edges that were previously amplified but are absent from the current local optimum
+        delta = updated_edge_distance[penalized_mask] - np.minimum(updated_edge_distance[penalized_mask], edge_distance[penalized_mask])
+        updated_edge_distance[penalized_mask] -= (1.0 - decay_rate) * delta
+
+    # Tour edge characteristics
+    tour_lengths = edge_distance[u_idx, v_idx]
+    mean_len = np.mean(tour_lengths) + 1e-6
+    std_len = np.std(tour_lengths) + 1e-6
+    rel_lengths = tour_lengths / mean_len
+
+    # Mutual sparsity factor (bridging cross-cluster metric)
+    bridge_factor = 0.5 * (1.0 / (density[u_idx] + 1e-6) + 1.0 / (density[v_idx] + 1e-6))
+    bridge_factor /= np.mean(bridge_factor) + 1e-6
+
+    # Diminishing returns frequency scaling
+    freq = edge_n_used[u_idx, v_idx]
+    freq_discount = 1.0 / (1.0 + 0.25 * freq)
+
+    # Standard standard-score based GLS penalty
+    z_scores = (tour_lengths - mean_len) / std_len
+    logistic_penalty = 1.0 / (1.0 + np.exp(-3.0 * z_scores))
+    base_penalties = rel_lengths * logistic_penalty * freq_discount
+
+    # Targeted quadratic stress ruin for bottleneck/cross-cluster edges (top 20% longest)
+    bottleneck_thresh = np.percentile(tour_lengths, 80)
+    bottleneck_mask = tour_lengths >= bottleneck_thresh
+
+    quadratic_stress = np.zeros_like(tour_lengths)
+    quadratic_stress[bottleneck_mask] = (rel_lengths[bottleneck_mask] ** 2) * bridge_factor[bottleneck_mask] * 1.8
+
+    total_penalty = base_penalties + quadratic_stress
+
+    # Apply symmetric updates
+    np.add.at(updated_edge_distance, (u_idx, v_idx), total_penalty)
+    np.add.at(updated_edge_distance, (v_idx, u_idx), total_penalty)
+
+    return updated_edge_distance
+# ===== Eval Output =====
+[*] Running ...
+[*] mode=val, data=/home/ducanh/projects/EAs_project/MoH/problems/tsp_gls/data/val/val_instance_data_sol_200.pkl, seed=0, n_instances=8
+[*] instance_indices=[6, 9, 0, 2, 4, 3, 5, 1]
+[*] instance 6: obj=10.5707, gap=1.1955
+[*] instance 9: obj=10.7713, gap=1.0156
+[*] instance 0: obj=11.0287, gap=1.3131
+[*] instance 2: obj=11.0255, gap=0.7102
+[*] instance 4: obj=10.9439, gap=0.8916
+[*] instance 3: obj=10.7114, gap=1.0332
+[*] instance 5: obj=11.0067, gap=1.1314
+[*] instance 1: obj=11.1889, gap=1.4936
+[*] ave_gap on size 200: 1.0980166797227686
+1.0980166797227686

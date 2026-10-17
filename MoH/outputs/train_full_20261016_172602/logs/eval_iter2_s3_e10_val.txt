@@ -1,0 +1,72 @@
+# ===== Heuristic Code =====
+#{This algorithm replaces static thresholding with a subgraph-aware detour efficiency metric comparing consecutive tour edges against direct k-hop shortcuts, selectively scaling penalties on structural detours.}
+
+import numpy as np
+
+def update_edge_distance(edge_distance, local_opt_tour, edge_n_used):
+    updated_edge_distance = np.copy(edge_distance)
+    n = len(local_opt_tour)
+    if n < 4:
+        return updated_edge_distance
+
+    # Calculate k-NN structural node density
+    sorted_dists = np.sort(edge_distance, axis=1)
+    k_nn_avg = np.mean(sorted_dists[:, 1:min(6, n)], axis=1)
+    node_density = 1.0 / (k_nn_avg + 1e-6)
+    node_density = node_density / np.mean(node_density)
+
+    # Tour indexing
+    u_idx = local_opt_tour
+    v_idx = np.roll(local_opt_tour, -1)
+    w_idx = np.roll(local_opt_tour, -2)
+    prev_u_idx = np.roll(local_opt_tour, 1)
+
+    # Base GLS penalty components
+    tour_edge_lengths = edge_distance[u_idx, v_idx]
+    avg_tour_length = np.mean(tour_edge_lengths)
+    relative_length = tour_edge_lengths / (avg_tour_length + 1e-6)
+    rank_penalty = 1.0 / (1.0 + np.exp(-4.0 * (relative_length - 1.0)))
+    usage_factor = 1.0 / (1.0 + 0.3 * edge_n_used[u_idx, v_idx])
+    density_factor = 0.5 * (node_density[u_idx] + node_density[v_idx])
+    local_penalty = relative_length * usage_factor * density_factor
+
+    freq_mean = np.mean(edge_n_used[u_idx, v_idx])
+    w_global = 0.6 / (1.0 + 0.1 * freq_mean)
+    w_local = 1.0 - w_global
+    combined_penalty = w_global * rank_penalty + w_local * local_penalty
+
+    # Recreate: Subgraph-aware detour utility
+    # Measure detour excess of 2-edge paths: (u -> v -> w) vs shortcut (u -> w)
+    forward_cost = tour_edge_lengths + edge_distance[v_idx, w_idx]
+    forward_shortcut = edge_distance[u_idx, w_idx]
+    forward_detour_ratio = forward_cost / (forward_shortcut + 1e-6)
+
+    # Measure detour excess of 2-edge paths: (prev_u -> u -> v) vs shortcut (prev_u -> v)
+    backward_cost = edge_distance[prev_u_idx, u_idx] + tour_edge_lengths
+    backward_shortcut = edge_distance[prev_u_idx, v_idx]
+    backward_detour_ratio = backward_cost / (backward_shortcut + 1e-6)
+
+    # Composite detour factor representing path suboptimality around each edge
+    detour_score = 0.5 * (forward_detour_ratio + backward_detour_ratio)
+    detour_multiplier = 1.0 + np.tanh(np.maximum(0.0, detour_score - 1.0))
+    combined_penalty = combined_penalty * detour_multiplier
+
+    # Symmetric distance updates
+    np.add.at(updated_edge_distance, (u_idx, v_idx), combined_penalty)
+    np.add.at(updated_edge_distance, (v_idx, u_idx), combined_penalty)
+
+    return updated_edge_distance
+# ===== Eval Output =====
+[*] Running ...
+[*] mode=val, data=/home/ducanh/projects/EAs_project/MoH/problems/tsp_gls/data/val/val_instance_data_sol_200.pkl, seed=0, n_instances=8
+[*] instance_indices=[6, 9, 0, 2, 4, 3, 5, 1]
+[*] instance 6: obj=10.4480, gap=0.0209
+[*] instance 9: obj=10.7234, gap=0.5658
+[*] instance 0: obj=10.9043, gap=0.1706
+[*] instance 2: obj=10.9587, gap=0.0994
+[*] instance 4: obj=10.8816, gap=0.3179
+[*] instance 3: obj=10.6107, gap=0.0829
+[*] instance 5: obj=10.9248, gap=0.3788
+[*] instance 1: obj=11.0700, gap=0.4158
+[*] ave_gap on size 200: 0.25650903483485366
+0.25650903483485366

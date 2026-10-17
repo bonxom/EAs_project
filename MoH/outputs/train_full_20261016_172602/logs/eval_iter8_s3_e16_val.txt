@@ -1,0 +1,73 @@
+# ===== Heuristic Code =====
+#{This strategy evaluates structural bottlenecks by measuring detour ratios and shortcut inefficiencies across contiguous 2-edge and 3-edge sub-chains, applying targeted structural penalties to disrupt entangled sub-paths while incorporating edge usage frequency.}#
+
+import numpy as np
+
+def update_edge_distance(edge_distance, local_opt_tour, edge_n_used):
+    updated_edge_distance = np.copy(edge_distance)
+    n = len(local_opt_tour)
+    if n < 4:
+        return updated_edge_distance
+
+    # Indices of tour nodes with forward circular offsets
+    t0 = local_opt_tour
+    t1 = np.roll(local_opt_tour, -1)
+    t2 = np.roll(local_opt_tour, -2)
+    t3 = np.roll(local_opt_tour, -3)
+
+    # Edge distances for single steps
+    d01 = edge_distance[t0, t1]
+    d12 = edge_distance[t1, t2]
+    d23 = edge_distance[t2, t3]
+
+    # Shortcut distances across sub-chains
+    d02 = edge_distance[t0, t2]
+    d03 = edge_distance[t0, t3]
+
+    avg_edge_cost = np.mean(d01) + 1e-8
+
+    # 2-edge chain detour ratio: (d01 + d12) / d02 (measures sharp turn / inefficient triangle detour)
+    chain2_detour = (d01 + d12) / (d02 + 1e-6)
+    norm_chain2 = chain2_detour / (np.mean(chain2_detour) + 1e-8)
+
+    # 3-edge chain detour ratio: (d01 + d12 + d23) / d03 (measures larger structural detour)
+    chain3_detour = (d01 + d12 + d23) / (d03 + 1e-8)
+    norm_chain3 = chain3_detour / (np.mean(chain3_detour) + 1e-8)
+
+    # Edge-level cost and frequency terms
+    usage_factor = 1.0 / (1.0 + 0.3 * edge_n_used[t0, t1])
+    relative_edge_cost = d01 / avg_edge_cost
+
+    # Distribute chain penalties back to constituent edges:
+    # Edge (t0, t1) is part of 2-edge chains at t0 and np.roll(..., 1), and 3-edge chains at t0, roll 1, roll 2
+    p_chain2 = 0.5 * (norm_chain2 + np.roll(norm_chain2, 1))
+    p_chain3 = (1.0 / 3.0) * (norm_chain3 + np.roll(norm_chain3, 1) + np.roll(norm_chain3, 2))
+
+    # Combine chain detour metrics into a structural disruption multiplier
+    structural_metric = 0.4 * relative_edge_cost + 0.35 * p_chain2 + 0.25 * p_chain3
+    base_penalty = structural_metric * usage_factor * avg_edge_cost * 0.15
+
+    # Identify most severe structural bottlenecks to disrupt
+    q75 = np.percentile(structural_metric, 75)
+    high_bottleneck_mask = structural_metric >= q75
+    base_penalty[high_bottleneck_mask] *= 1.6
+
+    # Symmetric distance update
+    np.add.at(updated_edge_distance, (t0, t1), base_penalty)
+    np.add.at(updated_edge_distance, (t1, t0), base_penalty)
+
+    return updated_edge_distance
+# ===== Eval Output =====
+[*] Running ...
+[*] mode=val, data=/home/ducanh/projects/EAs_project/MoH/problems/tsp_gls/data/val/val_instance_data_sol_200.pkl, seed=0, n_instances=8
+[*] instance_indices=[6, 9, 0, 2, 4, 3, 5, 1]
+[*] instance 6: obj=10.6574, gap=2.0250
+[*] instance 9: obj=10.9442, gap=2.6367
+[*] instance 0: obj=11.4240, gap=4.9448
+[*] instance 2: obj=11.2182, gap=2.4702
+[*] instance 4: obj=11.0780, gap=2.1280
+[*] instance 3: obj=10.8628, gap=2.4615
+[*] instance 5: obj=11.2178, gap=3.0709
+[*] instance 1: obj=11.3493, gap=2.9486
+[*] ave_gap on size 200: 2.835697372587209
+2.835697372587209

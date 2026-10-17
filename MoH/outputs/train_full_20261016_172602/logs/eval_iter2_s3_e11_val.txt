@@ -1,0 +1,73 @@
+# ===== Heuristic Code =====
+#{A guided local search penalty mechanism combining density-weighted relative edge utilities with an evaporative memory decay on inactive edges and baseline-proportional penalty scaling to prevent metric distortion and permanent edge lockout.}#
+
+import numpy as np
+
+def update_edge_distance(edge_distance, local_opt_tour, edge_n_used):
+    updated_edge_distance = np.copy(edge_distance)
+    n = len(local_opt_tour)
+
+    # 1. Estimate baseline distance proxy and identify active tour edges
+    u_idx = local_opt_tour
+    v_idx = np.roll(local_opt_tour, -1)
+
+    tour_edge_lengths = edge_distance[u_idx, v_idx]
+    avg_tour_length = np.mean(tour_edge_lengths) + 1e-6
+
+    # 2. Structural density estimation via k-NN context
+    k = min(6, n)
+    sorted_dists = np.sort(edge_distance, axis=1)
+    k_nn_avg = np.mean(sorted_dists[:, 1:k], axis=1)
+    node_density = 1.0 / (k_nn_avg + 1e-6)
+    node_density = node_density / (np.mean(node_density) + 1e-6)
+    density_factor = 0.5 * (node_density[u_idx] + node_density[v_idx])
+
+    # 3. Soft evaporative memory decay: slightly relax previously penalized edges not in current tour
+    penalized_mask = edge_n_used > 0
+    decay_factor = 0.98
+    updated_edge_distance[penalized_mask] = (
+        updated_edge_distance[penalized_mask] * decay_factor
+    )
+
+    # 4. Proportional utility computation for current local optimum edges
+    relative_length = tour_edge_lengths / avg_tour_length
+    rank_penalty = 1.0 / (1.0 + np.exp(-4.0 * (relative_length - 1.0)))
+    usage_factor = 1.0 / (1.0 + 0.3 * edge_n_used[u_idx, v_idx])
+    local_penalty = relative_length * usage_factor * density_factor
+
+    freq_mean = np.mean(edge_n_used[u_idx, v_idx])
+    w_global = 0.6 / (1.0 + 0.1 * freq_mean)
+    w_local = 1.0 - w_global
+    combined_utility = w_global * rank_penalty + w_local * local_penalty
+
+    # Selective emphasis on long edges
+    threshold = np.percentile(tour_edge_lengths, 75)
+    high_penalty_mask = tour_edge_lengths >= threshold
+    combined_utility[high_penalty_mask] *= 1.5
+
+    # Scale penalty proportionally to local edge lengths to maintain metric balance
+    penalty_magnitude = 0.15 * tour_edge_lengths * combined_utility
+
+    # 5. Apply symmetric updates to distance matrix
+    np.add.at(updated_edge_distance, (u_idx, v_idx), penalty_magnitude)
+    np.add.at(updated_edge_distance, (v_idx, u_idx), penalty_magnitude)
+
+    # Ensure symmetry is preserved and self-distances remain zero
+    updated_edge_distance = 0.5 * (updated_edge_distance + updated_edge_distance.T)
+    np.fill_diagonal(updated_edge_distance, 0.0)
+
+    return updated_edge_distance
+# ===== Eval Output =====
+[*] Running ...
+[*] mode=val, data=/home/ducanh/projects/EAs_project/MoH/problems/tsp_gls/data/val/val_instance_data_sol_200.pkl, seed=0, n_instances=8
+[*] instance_indices=[6, 9, 0, 2, 4, 3, 5, 1]
+[*] instance 6: obj=10.6573, gap=2.0244
+[*] instance 9: obj=10.9442, gap=2.6367
+[*] instance 0: obj=11.4240, gap=4.9448
+[*] instance 2: obj=11.2189, gap=2.4770
+[*] instance 4: obj=11.0336, gap=1.7191
+[*] instance 3: obj=10.7784, gap=1.6649
+[*] instance 5: obj=11.2528, gap=3.3928
+[*] instance 1: obj=11.3711, gap=3.1463
+[*] ave_gap on size 200: 2.750758470636114
+2.750758470636114

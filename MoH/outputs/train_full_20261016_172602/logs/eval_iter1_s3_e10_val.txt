@@ -1,0 +1,73 @@
+# ===== Heuristic Code =====
+#{This heuristic replaces the static percentile step multiplier with an entropy-annealed continuous soft-gating mechanism, scaling edge penalties smoothly via a sigmoid transition modulated by tour length coefficient of variation and edge usage stagnation.}
+
+import numpy as np
+
+def update_edge_distance(edge_distance, local_opt_tour, edge_n_used):
+    updated_edge_distance = np.copy(edge_distance)
+    n = len(local_opt_tour)
+
+    # Compute local topological density via k-nearest neighbors
+    sorted_dists = np.sort(edge_distance, axis=1)
+    k_nn_avg = np.mean(sorted_dists[:, 1:min(6, n)], axis=1)
+    node_density = 1.0 / (k_nn_avg + 1e-6)
+    node_density = node_density / (np.mean(node_density) + 1e-6)
+
+    # Extract edges forming the local optimum tour
+    u_idx = local_opt_tour
+    v_idx = np.roll(local_opt_tour, -1)
+    tour_edge_lengths = edge_distance[u_idx, v_idx]
+
+    # Standardized edge length properties
+    avg_tour_length = np.mean(tour_edge_lengths)
+    std_tour_length = np.std(tour_edge_lengths)
+    cov_tour = std_tour_length / (avg_tour_length + 1e-6)
+    relative_length = tour_edge_lengths / (avg_tour_length + 1e-6)
+
+    # Frequency and stagnation assessment
+    edges_usage = edge_n_used[u_idx, v_idx]
+    mean_usage = np.mean(edges_usage)
+    max_usage = np.max(edges_usage)
+    stagnation_ratio = mean_usage / (max_usage + 1.0)
+
+    # Baseline ranking and cluster-aware local penalties
+    rank_penalty = 1.0 / (1.0 + np.exp(-4.0 * (relative_length - 1.0)))
+    usage_factor = 1.0 / (1.0 + 0.3 * edges_usage)
+    density_factor = 0.5 * (node_density[u_idx] + node_density[v_idx])
+    local_penalty = relative_length * usage_factor * density_factor
+
+    # Adaptive mixture weight balancing global versus local structure
+    w_global = 0.6 / (1.0 + 0.1 * mean_usage)
+    w_local = 1.0 - w_global
+    base_penalty = w_global * rank_penalty + w_local * local_penalty
+
+    # Continuous adaptive soft-gating ruin:
+    # Smoothly transitions penalty amplification based on tour dispersion and search stagnation
+    gate_center = np.median(tour_edge_lengths) + (0.5 - 0.25 * stagnation_ratio) * std_tour_length
+    temperature = (cov_tour + 0.2) * (std_tour_length + 1e-6)
+    normalized_diff = (tour_edge_lengths - gate_center) / (temperature + 1e-6)
+    soft_gate = 1.0 / (1.0 + np.exp(-np.clip(normalized_diff, -15.0, 15.0)))
+
+    # Dynamic amplification envelope (between 1.0x and 1.75x) without discrete thresholds
+    amplification = 1.0 + (0.5 + 0.25 * np.tanh(mean_usage)) * soft_gate
+    final_penalty = base_penalty * amplification
+
+    # Apply symmetric updates to edge distances
+    np.add.at(updated_edge_distance, (u_idx, v_idx), final_penalty)
+    np.add.at(updated_edge_distance, (v_idx, u_idx), final_penalty)
+
+    return updated_edge_distance
+# ===== Eval Output =====
+[*] Running ...
+[*] mode=val, data=/home/ducanh/projects/EAs_project/MoH/problems/tsp_gls/data/val/val_instance_data_sol_200.pkl, seed=0, n_instances=8
+[*] instance_indices=[6, 9, 0, 2, 4, 3, 5, 1]
+[*] instance 6: obj=10.4524, gap=0.0627
+[*] instance 9: obj=10.6684, gap=0.0507
+[*] instance 0: obj=10.8957, gap=0.0916
+[*] instance 2: obj=10.9758, gap=0.2564
+[*] instance 4: obj=10.8924, gap=0.4170
+[*] instance 3: obj=10.6107, gap=0.0829
+[*] instance 5: obj=10.9440, gap=0.5558
+[*] instance 1: obj=11.0595, gap=0.3201
+[*] ave_gap on size 200: 0.22964511491259665
+0.22964511491259665

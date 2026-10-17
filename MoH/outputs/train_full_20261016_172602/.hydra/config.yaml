@@ -1,0 +1,35 @@
+n_iterations: 10
+seed: 0
+pop_size: 10
+timeout: 90
+optimizer_timeout: 7200
+max_eval_calls: 1000
+problem:
+  problem_name: tsp_gls
+  obj_type: min
+  problem_size:
+  - 20
+  - 50
+  - 100
+  - 200
+  threshold:
+    100: 4
+    200: 5
+  func_name: heuristics
+  description: Solving Traveling Salesman Problem (TSP) via guided local search. TSP
+    requires finding the shortest path that visits all given nodes and returns to
+    the starting node.
+heu:
+  _target_: utils.llm_client.openai.OpenAIClient
+  model: ag/gemini-3.8-flash-low
+  temperature: 1.0
+  batch_size: 5
+  base_url: http://172.25.16.1:20128/v1
+  api_key: ${oc.env:LOCAL_LLM_API_KEY}
+meta:
+  _target_: utils.llm_client.openai.OpenAIClient
+  model: ag/gemini-3.8-flash-low
+  temperature: 1.0
+  batch_size: 5
+  base_url: http://172.25.16.1:20128/v1
+  api_key: ${oc.env:LOCAL_LLM_API_KEY}

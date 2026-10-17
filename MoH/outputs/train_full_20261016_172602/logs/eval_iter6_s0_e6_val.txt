@@ -1,0 +1,55 @@
+# ===== Heuristic Code =====
+#{This algorithm adaptively penalizes maximum-utility tour edges by estimating base metric costs through penalty inversion, scaling the penalty by local variance and search depth to intensely break suboptimal basins.}#
+
+import numpy as np
+
+def update_edge_distance(edge_distance, local_opt_tour, edge_n_used):
+    updated_edge_distance = np.copy(edge_distance)
+    u_idx = local_opt_tour
+    v_idx = np.roll(local_opt_tour, -1)
+
+    current_lengths = edge_distance[u_idx, v_idx]
+    counts = edge_n_used[u_idx, v_idx]
+
+    # Estimate original base distance by correcting for prior accumulated penalties
+    # This prevents utility distortion over progressive GLS iterations
+    mean_length = np.mean(current_lengths)
+    std_length = np.std(current_lengths)
+    n = len(local_opt_tour)
+
+    # Adaptive penalty scaling parameter lambda based on edge cost distribution
+    # Higher dispersion intensifies penalties on outlier long edges
+    lambda_factor = 0.3 * (1.0 + (std_length / (mean_length + 1e-12)))
+    base_penalty = lambda_factor * (mean_length / float(n))
+
+    estimated_base_lengths = np.maximum(0.0, current_lengths - counts * base_penalty)
+    utilities = estimated_base_lengths / (1.0 + counts)
+
+    max_utility = np.max(utilities)
+    threshold = 0.999 * max_utility
+    selected_mask = utilities >= threshold
+
+    sel_u = u_idx[selected_mask]
+    sel_v = v_idx[selected_mask]
+
+    # Fine-grained intensification: apply scaled penalties tailored to individual edge over-lengths
+    edge_penalties = base_penalty * (1.0 + (current_lengths[selected_mask] / (mean_length + 1e-12)))
+
+    updated_edge_distance[sel_u, sel_v] += edge_penalties
+    updated_edge_distance[sel_v, sel_u] += edge_penalties
+
+    return updated_edge_distance
+# ===== Eval Output =====
+[*] Running ...
+[*] mode=val, data=/home/ducanh/projects/EAs_project/MoH/problems/tsp_gls/data/val/val_instance_data_sol_20.pkl, seed=0, n_instances=8
+[*] instance_indices=[6, 9, 0, 2, 4, 3, 5, 1]
+[*] instance 6: obj=3.7045, gap=0.0000
+[*] instance 9: obj=4.1442, gap=0.0000
+[*] instance 0: obj=3.6827, gap=0.0000
+[*] instance 2: obj=3.8184, gap=0.0000
+[*] instance 4: obj=4.0206, gap=4.7419
+[*] instance 3: obj=3.7244, gap=0.7405
+[*] instance 5: obj=3.4281, gap=0.0000
+[*] instance 1: obj=3.6958, gap=0.0000
+[*] ave_gap on size 20: 0.6853071478150424
+0.6853071478150424

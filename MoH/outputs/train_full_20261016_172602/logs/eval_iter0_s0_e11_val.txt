@@ -1,0 +1,43 @@
+# ===== Heuristic Code =====
+#{Refine the Guided Local Search edge penalty update by properly penalizing high-utility tour edges scaled by average tour length while applying genuine multiplicative decay to accumulated penalties over previously penalized edges.}#
+
+import numpy as np
+
+def update_edge_distance(edge_distance, local_opt_tour, edge_n_used):
+    updated_edge_distance = np.copy(edge_distance)
+    n = edge_distance.shape[0]
+    decay_factor = 0.95
+
+    tour_edges = [(local_opt_tour[i], local_opt_tour[(i + 1) % n]) for i in range(n)]
+    tour_lengths = [edge_distance[u, v] for u, v in tour_edges]
+    avg_tour_edge = np.mean(tour_lengths) if len(tour_lengths) > 0 else 1.0
+
+    utilities = [edge_distance[u, v] / (1.0 + edge_n_used[u, v]) for u, v in tour_edges]
+    max_utility = max(utilities) if utilities else 0.0
+
+    # Genuine decay: edge_n_used represents accumulated penalty counts; apply mild decay to penalized edges
+    mask = edge_n_used > 0
+    updated_edge_distance[mask] = edge_distance[mask] * decay_factor
+
+    penalty_scale = 0.25 * avg_tour_edge
+    for (u, v), util in zip(tour_edges, utilities):
+        if util >= 0.85 * max_utility:
+            add_penalty = penalty_scale / (1.0 + edge_n_used[u, v])
+            updated_edge_distance[u, v] += add_penalty
+            updated_edge_distance[v, u] += add_penalty
+
+    return updated_edge_distance
+# ===== Eval Output =====
+[*] Running ...
+[*] mode=val, data=/home/ducanh/projects/EAs_project/MoH/problems/tsp_gls/data/val/val_instance_data_sol_20.pkl, seed=0, n_instances=8
+[*] instance_indices=[6, 9, 0, 2, 4, 3, 5, 1]
+[*] instance 6: obj=3.7045, gap=0.0000
+[*] instance 9: obj=4.1442, gap=0.0000
+[*] instance 0: obj=3.6827, gap=0.0000
+[*] instance 2: obj=3.8184, gap=0.0000
+[*] instance 4: obj=4.0206, gap=4.7419
+[*] instance 3: obj=3.7244, gap=0.7405
+[*] instance 5: obj=3.4281, gap=0.0000
+[*] instance 1: obj=3.6958, gap=0.0000
+[*] ave_gap on size 20: 0.6853071478150397
+0.6853071478150397

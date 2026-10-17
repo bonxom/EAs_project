@@ -1,0 +1,103 @@
+# ===== Heuristic Code =====
+#{Adaptive guided local search with stagnation-triggered penalty relaxation: applies logistic z-score edge penalties on high-utility tour edges while tracking visitation frequency to exponentially decay accumulated distance distortions when recurring tours indicate basin stagnation.}#
+
+import numpy as np
+
+def update_edge_distance(edge_distance, local_opt_tour, edge_n_used):
+    updated_edge_distance = np.copy(edge_distance)
+    n = len(local_opt_tour)
+    if n < 3:
+        return updated_edge_distance
+
+    # State tracking via function attribute for stagnation detection and base distance recovery
+    if not hasattr(update_edge_distance, "history"):
+        update_edge_distance.history = set()
+        update_edge_distance.base_distance = np.copy(edge_distance)
+        update_edge_distance.stagnation_counter = 0
+
+    # Represent tour cyclically to detect revisited basins invariant to shift or reversal
+    tour_arr = np.array(local_opt_tour, dtype=np.intp)
+    min_idx = int(np.argmin(tour_arr))
+    canonical_forward = np.roll(tour_arr, -min_idx)
+    next_node = canonical_forward[1]
+    prev_node = canonical_forward[-1]
+    if prev_node < next_node:
+        canonical_tour = np.concatenate(([canonical_forward[0]], canonical_forward[:0:-1]))
+    else:
+        canonical_tour = canonical_forward
+
+    tour_key = canonical_tour.tobytes()
+    if tour_key in update_edge_distance.history:
+        update_edge_distance.stagnation_counter += 1
+    else:
+        update_edge_distance.history.add(tour_key)
+        update_edge_distance.stagnation_counter = max(0, update_edge_distance.stagnation_counter - 1)
+
+    # Stagnation-driven geometric relaxation
+    if update_edge_distance.stagnation_counter >= 2:
+        decay_factor = 0.85 ** (update_edge_distance.stagnation_counter - 1)
+        base = update_edge_distance.base_distance
+        excess_penalty = updated_edge_distance - base
+        np.maximum(excess_penalty, 0.0, out=excess_penalty)
+        updated_edge_distance = base + excess_penalty * decay_factor
+
+    # Extract active tour edges
+    u_idx = tour_arr
+    v_idx = np.roll(tour_arr, -1)
+    costs = updated_edge_distance[u_idx, v_idx].astype(np.float64)
+    used = edge_n_used[u_idx, v_idx].astype(np.float64)
+
+    # Compute z-score modulated Guided Local Search utilities
+    mean_cost = np.mean(costs)
+    std_cost = np.std(costs) + 1e-8
+    z_scores = (costs - mean_cost) / std_cost
+    weights = 1.0 / (1.0 + np.exp(-np.clip(z_scores, -20.0, 20.0)))
+    utilities = (costs * (1.0 + weights)) / (1.0 + used)
+
+    # Select edges in upper utility quantile for penalization
+    threshold = np.median(utilities)
+    max_util = np.max(utilities) + 1e-8
+    penalize_mask = utilities >= threshold
+
+    p_u = u_idx[penalize_mask]
+    p_v = v_idx[penalize_mask]
+    p_costs = costs[penalize_mask]
+    p_used = used[penalize_mask]
+    p_utils = utilities[penalize_mask]
+
+    # Calculate sub-linear penalty scaling
+    penalties = (p_costs / (1.0 + np.sqrt(p_used + 1.0))) * (1.0 + (p_utils / max_util))
+
+    # Apply symmetric edge penalization
+    updated_edge_distance[p_u, p_v] += penalties
+    updated_edge_distance[p_v, p_u] += penalties
+
+    # Controlled local relaxation for top alternative candidate edges
+    penalized_nodes = np.unique(np.concatenate((p_u, p_v)))
+    for u in penalized_nodes:
+        unused_mask = (edge_n_used[u] == 0)
+        unused_mask[u] = False
+        if np.any(unused_mask):
+            cand_indices = np.where(unused_mask)[0]
+            cand_costs = updated_edge_distance[u, cand_indices]
+            best_k = min(3, len(cand_indices))
+            k_smallest_idx = cand_indices[np.argpartition(cand_costs, best_k - 1)[:best_k]]
+            delta = 0.015 * updated_edge_distance[u, k_smallest_idx]
+            updated_edge_distance[u, k_smallest_idx] -= delta
+            updated_edge_distance[k_smallest_idx, u] -= delta
+
+    return updated_edge_distance
+# ===== Eval Output =====
+[*] Running ...
+[*] mode=val, data=/home/ducanh/projects/EAs_project/MoH/problems/tsp_gls/data/val/val_instance_data_sol_50.pkl, seed=0, n_instances=8
+[*] instance_indices=[6, 9, 0, 2, 4, 3, 5, 1]
+[*] instance 6: obj=5.7136, gap=0.5983
+[*] instance 9: obj=5.9639, gap=0.0000
+[*] instance 0: obj=5.7783, gap=0.0000
+[*] instance 2: obj=5.8071, gap=0.0000
+[*] instance 4: obj=5.3965, gap=0.0000
+[*] instance 3: obj=5.7569, gap=0.0000
+[*] instance 5: obj=5.6187, gap=0.0000
+[*] instance 1: obj=5.1651, gap=0.0000
+[*] ave_gap on size 50: 0.07478878681544121
+0.07478878681544121

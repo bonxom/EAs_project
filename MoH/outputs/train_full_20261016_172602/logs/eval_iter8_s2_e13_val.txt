@@ -1,0 +1,119 @@
+# ===== Heuristic Code =====
+#{Multi-scale chordal bypass evaluation detects high-slack k-hop subpaths (k in {2, 3, 4}) and applies dual surrogate-guided discounts scaled by nodal spatial closeness and path-displacement entropy to aggressively carve out high-exploration shortcut conduits.}
+
+import numpy as np
+
+def update_edge_distance(edge_distance, local_opt_tour, edge_n_used):
+    updated_edge_distance = np.copy(edge_distance)
+    num_nodes = len(local_opt_tour)
+    if num_nodes < 4:
+        return updated_edge_distance
+
+    tour = np.asarray(local_opt_tour)
+    u_idx = tour
+    v_idx = np.roll(tour, -1)
+    w_idx = np.roll(tour, -2)
+
+    # Decayed edge usage memory
+    edge_n_used *= 0.96
+
+    # 1-hop and 2-hop baseline geometric profiles
+    d_uv = edge_distance[u_idx, v_idx]
+    d_vw = edge_distance[v_idx, w_idx]
+    d_uw = edge_distance[u_idx, w_idx]
+
+    detour_ratio = (d_uv + d_vw) / (d_uw + 1e-8)
+    denom = 2.0 * d_uv * d_vw + 1e-8
+    cos_turn = (d_uv**2 + d_vw**2 - d_uw**2) / denom
+    cos_turn = np.clip(cos_turn, -1.0, 1.0)
+    acute_deficit = 1.0 - cos_turn
+    geom_inefficiency = detour_ratio * (1.0 + 0.5 * acute_deficit)
+
+    base_dist = d_uv
+    base_freq = edge_n_used[u_idx, v_idx]
+    local_geom_factor = 0.5 * (geom_inefficiency + np.roll(geom_inefficiency, 1))
+
+    # GLS-style utility penalization on top inefficient tour edges
+    utilities = (base_dist / (1.0 + base_freq)) * (1.0 + 0.35 * local_geom_factor)
+    k_pen = max(1, int(np.ceil(0.14 * num_nodes)))
+    top_k_indices = np.argsort(utilities)[-k_pen:]
+
+    global_mean_dist = float(np.mean(edge_distance))
+    adaptive_lambda = 0.30 * global_mean_dist
+
+    for idx in top_k_indices:
+        u, v = u_idx[idx], v_idx[idx]
+        edge_n_used[u, v] += 1.0
+        edge_n_used[v, u] += 1.0
+        freq_penalty = 1.0 + np.log1p(edge_n_used[u, v])
+        geom_weight = 1.0 + 0.5 * local_geom_factor[idx]
+        penalty = adaptive_lambda * freq_penalty * geom_weight
+        updated_edge_distance[u, v] += penalty
+        updated_edge_distance[v, u] += penalty
+
+    # Nodal spatial closeness centrality surrogate (normalized inverse mean distance to all nodes)
+    mean_node_dist = np.mean(edge_distance, axis=1) + 1e-8
+    closeness = global_mean_dist / mean_node_dist
+
+    # Multi-scale chordal bypass evaluation across window sizes k in {2, 3, 4}
+    max_k_hop = min(4, num_nodes - 1)
+    for hop in range(2, max_k_hop + 1):
+        target_idx = np.roll(tour, -hop)
+        chord_dist = edge_distance[tour, target_idx]
+
+        # Compute cumulative path distance along the tour for the hop window
+        path_dist = np.zeros(num_nodes, dtype=np.float64)
+        for step in range(hop):
+            step_u = np.roll(tour, -step)
+            step_v = np.roll(tour, -(step + 1))
+            path_dist += edge_distance[step_u, step_v]
+
+        slack = path_dist - chord_dist
+        ratio = path_dist / (chord_dist + 1e-8)
+
+        # Cross-entropy / divergence surrogate between perimeter path and chord displacement
+        p_path = path_dist / (path_dist + chord_dist + 1e-8)
+        p_chord = chord_dist / (path_dist + chord_dist + 1e-8)
+        geom_entropy = -(p_path * np.log(p_path + 1e-12) + p_chord * np.log(p_chord + 1e-12))
+
+        # Centrality affinity combining both chord endpoints
+        joint_closeness = 0.5 * (closeness[tour] + closeness[target_idx])
+
+        # Priority surrogate for carving shortcut conduits
+        priority = slack * ratio * joint_closeness * (1.0 + geom_entropy)
+
+        # Scale budget adaptively with hop depth to balance exploration
+        k_discount = max(1, int(np.ceil((0.14 / (hop - 0.5)) * num_nodes)))
+        top_chord_indices = np.argsort(priority)[-k_discount:]
+
+        for idx in top_chord_indices:
+            u = tour[idx]
+            w = target_idx[idx]
+            freq = edge_n_used[u, w]
+            if freq < 2.5:
+                # Dynamic dual-surrogate discount scaled by slack strength and closeness
+                hop_weight = 0.16 / np.sqrt(hop)
+                closeness_mod = np.clip(joint_closeness[idx], 0.7, 1.4)
+                slack_mod = np.clip(ratio[idx] / 2.0, 0.8, 2.0)
+                freq_decay = 1.0 / (1.0 + 0.7 * freq)
+
+                discount = hop_weight * global_mean_dist * closeness_mod * slack_mod * freq_decay
+                new_dist = max(1e-6, updated_edge_distance[u, w] - discount)
+                updated_edge_distance[u, w] = new_dist
+                updated_edge_distance[w, u] = new_dist
+
+    return updated_edge_distance
+# ===== Eval Output =====
+[*] Running ...
+[*] mode=val, data=/home/ducanh/projects/EAs_project/MoH/problems/tsp_gls/data/val/val_instance_data_sol_100.pkl, seed=0, n_instances=8
+[*] instance_indices=[6, 9, 0, 2, 4, 3, 5, 1]
+[*] instance 6: obj=7.7627, gap=0.0399
+[*] instance 9: obj=8.0672, gap=0.2969
+[*] instance 0: obj=8.0001, gap=0.0000
+[*] instance 2: obj=8.0907, gap=0.2088
+[*] instance 4: obj=7.8131, gap=0.0000
+[*] instance 3: obj=7.3713, gap=0.0000
+[*] instance 5: obj=7.6365, gap=0.0000
+[*] instance 1: obj=7.5570, gap=0.0000
+[*] ave_gap on size 100: 0.0682106842626401
+0.0682106842626401

@@ -1,0 +1,80 @@
+# ===== Heuristic Code =====
+#{This algorithm penalizes edges in the local optimal tour by computing a cross-shortcutting opportunity cost via k-nearest neighbor 2-opt bypass slack combined with edge length and frequency-damping penalties to actively encourage escaping local optima.}
+
+import numpy as np
+
+def update_edge_distance(edge_distance, local_opt_tour, edge_n_used):
+    updated_edge_distance = np.copy(edge_distance)
+    n = len(local_opt_tour)
+    if n < 4:
+        return updated_edge_distance
+
+    u_idx = np.asarray(local_opt_tour)
+    v_idx = np.roll(u_idx, -1)
+
+    tour_edge_lengths = edge_distance[u_idx, v_idx]
+    avg_tour_length = np.mean(tour_edge_lengths) + 1e-6
+
+    # Structural fragility / bypass slack evaluation via 2-opt shortcut potential
+    k = min(8, n - 3)
+    k_nn = np.argsort(edge_distance, axis=1)[:, 1:k + 1]
+
+    tour_pos = np.empty(edge_distance.shape[0], dtype=np.int32)
+    tour_pos[u_idx] = np.arange(n)
+
+    # For each edge (u, v) on the tour, evaluate bypass slack against candidate pairs (w, z)
+    opportunity_readiness = np.zeros(n, dtype=np.float64)
+    for i in range(n):
+        u = u_idx[i]
+        v = v_idx[i]
+        d_uv = tour_edge_lengths[i]
+
+        # Consider nearest neighbors of u as candidate reconnection nodes w
+        w_candidates = k_nn[u]
+        best_slack = np.inf
+
+        for w in w_candidates:
+            pos_w = tour_pos[w]
+            # Avoid adjacent edges to (u, v)
+            if pos_w == i or pos_w == (i + 1) % n or pos_w == (i - 1 + n) % n:
+                continue
+
+            z = local_opt_tour[(pos_w + 1) % n]
+            d_wz = edge_distance[w, z]
+            # 2-opt gain / move delta: (d(u, w) + d(v, z)) - (d(u, v) + d(w, z))
+            slack = (edge_distance[u, w] + edge_distance[v, z]) - (d_uv + d_wz)
+            if slack < best_slack:
+                best_slack = slack
+
+        if np.isinf(best_slack):
+            opportunity_readiness[i] = 0.5
+        else:
+            # Lower slack means higher readiness for 2-opt move; map via sigmoid
+            normalized_slack = best_slack / avg_tour_length
+            opportunity_readiness[i] = 1.0 / (1.0 + np.exp(3.0 * normalized_slack))
+
+    # Base penalty derived from edge length, usage frequency, and bypass readiness
+    relative_length = tour_edge_lengths / avg_tour_length
+    usage_factor = 1.0 / (1.0 + 0.25 * edge_n_used[u_idx, v_idx])
+
+    penalty = avg_tour_length * 0.15 * (0.4 * relative_length + 0.6 * opportunity_readiness) * usage_factor
+
+    # Apply penalty to both symmetric directions of the tour edges
+    np.add.at(updated_edge_distance, (u_idx, v_idx), penalty)
+    np.add.at(updated_edge_distance, (v_idx, u_idx), penalty)
+
+    return updated_edge_distance
+# ===== Eval Output =====
+[*] Running ...
+[*] mode=val, data=/home/ducanh/projects/EAs_project/MoH/problems/tsp_gls/data/val/val_instance_data_sol_200.pkl, seed=0, n_instances=8
+[*] instance_indices=[6, 9, 0, 2, 4, 3, 5, 1]
+[*] instance 6: obj=10.8219, gap=3.6006
+[*] instance 9: obj=11.0360, gap=3.4977
+[*] instance 0: obj=11.4240, gap=4.9448
+[*] instance 2: obj=11.2240, gap=2.5227
+[*] instance 4: obj=11.2655, gap=3.8566
+[*] instance 3: obj=10.8628, gap=2.4615
+[*] instance 5: obj=11.2508, gap=3.3741
+[*] instance 1: obj=11.4922, gap=4.2453
+[*] ave_gap on size 200: 3.562911352902959
+3.562911352902959

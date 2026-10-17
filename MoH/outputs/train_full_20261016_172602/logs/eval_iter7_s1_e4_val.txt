@@ -1,0 +1,91 @@
+# ===== Heuristic Code =====
+#{Dynamic dual-potential landscape shaping combines structural centrality and usage surge penalties on median-exceeding tour edges with targeted exploratory discounts on low-cost unvisited incident edges to steer local search away from recurrent basins.}#
+
+import numpy as np
+
+def update_edge_distance(edge_distance, local_opt_tour, edge_n_used):
+    updated_edge_distance = np.copy(edge_distance)
+    n = len(local_opt_tour)
+    if n <= 3:
+        return updated_edge_distance
+
+    u_idx = np.array(local_opt_tour, dtype=np.intp)
+    v_idx = np.roll(u_idx, -1)
+
+    costs = edge_distance[u_idx, v_idx].astype(np.float64)
+    used = edge_n_used[u_idx, v_idx].astype(np.float64)
+
+    # Global evaporation to prevent runaway distortion
+    max_used = np.max(edge_n_used)
+    if max_used > 0:
+        evap_factor = 0.996
+        updated_edge_distance = updated_edge_distance * evap_factor + edge_distance * (1.0 - evap_factor)
+        costs = updated_edge_distance[u_idx, v_idx].astype(np.float64)
+
+    # Compute k-NN baseline for structural centrality (k=min(5, n-1))
+    k = min(5, n - 1)
+    # Exclude self-loop by partition
+    sorted_dists = np.partition(edge_distance, k, axis=1)[:, 1:k+1]
+    knn_mean = np.mean(sorted_dists, axis=1) + 1e-8
+    harmonic_knn = (2.0 * knn_mean[u_idx] * knn_mean[v_idx]) / (knn_mean[u_idx] + knn_mean[v_idx] + 1e-8)
+    centrality = costs / harmonic_knn
+
+    # Standardized utility calculation with structural weighting
+    mean_cost = np.mean(costs)
+    std_cost = np.std(costs) + 1e-8
+    z_scores = (costs - mean_cost) / std_cost
+    weights = 1.0 / (1.0 + np.exp(-z_scores))
+    utilities = (costs * (1.0 + weights) * (0.8 + 0.4 * np.tanh(centrality))) / (1.0 + used)
+
+    # Thresholding on median utility
+    threshold = np.median(utilities)
+    penalize_mask = utilities >= threshold
+    if not np.any(penalize_mask):
+        return updated_edge_distance
+
+    p_u = u_idx[penalize_mask]
+    p_v = v_idx[penalize_mask]
+    p_costs = costs[penalize_mask]
+    p_used = used[penalize_mask]
+    p_utils = utilities[penalize_mask]
+    max_util = np.max(utilities) + 1e-8
+
+    # Usage surge recurrence boost
+    mean_p_used = np.mean(p_used) + 1.0
+    surge_factor = 1.0 + 0.30 * np.minimum(p_used / mean_p_used, 2.5)
+
+    # Primary penalty calculation
+    penalties = (p_costs / (1.0 + np.sqrt(p_used + 1.0))) * (1.0 + p_utils / max_util) * surge_factor
+    updated_edge_distance[p_u, p_v] += penalties
+    updated_edge_distance[p_v, p_u] += penalties
+
+    # Exploratory credit discounting for unvisited incident edges
+    penalized_nodes = np.unique(np.concatenate((p_u, p_v)))
+    decay_ratio = 0.025
+    for u in penalized_nodes:
+        unused_mask = (edge_n_used[u] == 0)
+        unused_mask[u] = False
+        if np.any(unused_mask):
+            current_vals = updated_edge_distance[u, unused_mask]
+            # Prioritize edges that are naturally shorter to foster efficient alternative closures
+            orig_vals = edge_distance[u, unused_mask]
+            affinity = 1.0 / (1.0 + orig_vals / knn_mean[u])
+            discounts = current_vals * decay_ratio * (1.0 + affinity)
+            updated_edge_distance[u, unused_mask] -= discounts
+            updated_edge_distance[unused_mask, u] = updated_edge_distance[u, unused_mask]
+
+    return updated_edge_distance
+# ===== Eval Output =====
+[*] Running ...
+[*] mode=val, data=/home/ducanh/projects/EAs_project/MoH/problems/tsp_gls/data/val/val_instance_data_sol_50.pkl, seed=0, n_instances=8
+[*] instance_indices=[6, 9, 0, 2, 4, 3, 5, 1]
+[*] instance 6: obj=5.7136, gap=0.5983
+[*] instance 9: obj=5.9639, gap=0.0000
+[*] instance 0: obj=5.7783, gap=0.0000
+[*] instance 2: obj=5.8071, gap=0.0000
+[*] instance 4: obj=5.3965, gap=0.0000
+[*] instance 3: obj=5.8123, gap=0.9633
+[*] instance 5: obj=5.6492, gap=0.5441
+[*] instance 1: obj=5.1651, gap=0.0000
+[*] ave_gap on size 50: 0.26321031999863853
+0.26321031999863853

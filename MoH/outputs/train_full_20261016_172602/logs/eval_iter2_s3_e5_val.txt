@@ -1,0 +1,69 @@
+# ===== Heuristic Code =====
+#{A topology-aware ruin-and-recreate strategy that identifies bottleneck tour edges via k-nearest neighbor reciprocal sparsity to apply heavy progressive penalties, while simultaneously subsidizing high-potential unvisited k-NN candidate edges connected to the tour's endpoints to steer search toward unexplored peripheral structures.}
+
+import numpy as np
+
+def update_edge_distance(edge_distance, local_opt_tour, edge_n_used):
+    updated_edge_distance = np.copy(edge_distance)
+    n = len(local_opt_tour)
+    if n < 4:
+        return updated_edge_distance
+
+    k_nn = min(10, n - 1)
+    sorted_idx = np.argsort(edge_distance, axis=1)
+    knn_neighbors = sorted_idx[:, 1:k_nn + 1]
+
+    u_idx = local_opt_tour
+    v_idx = np.roll(local_opt_tour, -1)
+    tour_lengths = edge_distance[u_idx, v_idx]
+    mean_tour_len = np.mean(tour_lengths) + 1e-8
+
+    # Topological bottleneck detection: check mutual k-NN status and relative length
+    u_knn = knn_neighbors[u_idx]
+    v_knn = knn_neighbors[v_idx]
+    is_u_in_v_knn = np.any(u_knn == v_idx[:, None], axis=1)
+    is_v_in_u_knn = np.any(v_knn == u_idx[:, None], axis=1)
+    reciprocal_knn = is_u_in_v_knn & is_v_in_u_knn
+
+    relative_cost = tour_lengths / mean_tour_len
+    usage_damping = 1.0 / (1.0 + 0.25 * edge_n_used[u_idx, v_idx])
+
+    # Sever non-reciprocal long bridges more aggressively
+    bottleneck_weight = np.where(reciprocal_knn, 1.0, 2.2)
+    penalties = mean_tour_len * (0.35 * relative_cost + 0.15 * bottleneck_weight) * usage_damping
+
+    # Apply heavy penalization to current tour edges
+    np.add.at(updated_edge_distance, (u_idx, v_idx), penalties)
+    np.add.at(updated_edge_distance, (v_idx, u_idx), penalties)
+
+    # Subsidize promising, unvisited k-NN shortcut candidates connected to perturbed nodes
+    top_perturbed_idx = np.argsort(-penalties)[:max(1, n // 4)]
+    sub_nodes = u_idx[top_perturbed_idx]
+
+    candidate_targets = knn_neighbors[sub_nodes, :min(4, k_nn)]
+    for i, src in enumerate(sub_nodes):
+        dsts = candidate_targets[i]
+        valid_mask = (edge_n_used[src, dsts] == 0) & (dsts != src)
+        chosen_dsts = dsts[valid_mask]
+        if len(chosen_dsts) > 0:
+            subsidy = 0.12 * mean_tour_len
+            updated_edge_distance[src, chosen_dsts] = np.maximum(
+                0.01 * mean_tour_len, updated_edge_distance[src, chosen_dsts] - subsidy
+            )
+            updated_edge_distance[chosen_dsts, src] = updated_edge_distance[src, chosen_dsts]
+
+    return updated_edge_distance
+# ===== Eval Output =====
+[*] Running ...
+[*] mode=val, data=/home/ducanh/projects/EAs_project/MoH/problems/tsp_gls/data/val/val_instance_data_sol_200.pkl, seed=0, n_instances=8
+[*] instance_indices=[6, 9, 0, 2, 4, 3, 5, 1]
+[*] instance 6: obj=10.6573, gap=2.0244
+[*] instance 9: obj=10.9093, gap=2.3094
+[*] instance 0: obj=11.1294, gap=2.2387
+[*] instance 2: obj=11.1992, gap=2.2969
+[*] instance 4: obj=10.9366, gap=0.8247
+[*] instance 3: obj=10.7011, gap=0.9357
+[*] instance 5: obj=11.1718, gap=2.6487
+[*] instance 1: obj=11.3017, gap=2.5168
+[*] ave_gap on size 200: 1.9743998592671037
+1.9743998592671037

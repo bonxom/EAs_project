@@ -1,0 +1,85 @@
+# ===== Heuristic Code =====
+#{Adaptive Guided Local Search using stagnation-scaled quantile edge penalization and geometric distance-inverse incentive discounting on incident unvisited edges.}#
+
+import numpy as np
+
+def update_edge_distance(edge_distance, local_opt_tour, edge_n_used):
+    updated_edge_distance = np.copy(edge_distance)
+    n = len(local_opt_tour)
+    if n < 2:
+        return updated_edge_distance
+
+    u_idx = np.array(local_opt_tour, dtype=np.intp)
+    v_idx = np.roll(u_idx, -1)
+
+    costs = edge_distance[u_idx, v_idx].astype(np.float64)
+    used = edge_n_used[u_idx, v_idx].astype(np.float64)
+
+    # Base utility formulation accounting for cost and historical usage
+    mean_cost = np.mean(costs)
+    std_cost = np.std(costs) + 1e-8
+    z_scores = (costs - mean_cost) / std_cost
+    weights = 1.0 / (1.0 + np.exp(-z_scores))
+    utilities = (costs * (1.0 + weights)) / (1.0 + used)
+
+    # Estimate stagnation level from the distribution of edge usage along the local tour
+    mean_usage = np.mean(used)
+    max_usage = np.max(used)
+    # Stagnation indicator in [0, 1]: higher when tours reuse previously visited edges
+    stagnation_factor = np.clip(mean_usage / (max_usage + 1.0), 0.0, 1.0)
+
+    # Adaptive quantile cutoff: relaxes from top 15% (quantile 0.85) to top 45% (quantile 0.55) as stagnation grows
+    target_quantile = 0.85 - 0.30 * stagnation_factor
+    threshold = np.quantile(utilities, target_quantile)
+
+    penalize_mask = utilities >= threshold
+    if not np.any(penalize_mask):
+        penalize_mask = utilities == np.max(utilities)
+
+    p_u = u_idx[penalize_mask]
+    p_v = v_idx[penalize_mask]
+    p_costs = costs[penalize_mask]
+    p_used = used[penalize_mask]
+    p_utils = utilities[penalize_mask]
+
+    max_util = np.max(utilities) + 1e-8
+    # Dynamic penalty scaling guided by utility intensity and search saturation
+    penalties = (p_costs / (1.0 + np.sqrt(p_used + 1.0))) * (1.0 + p_utils / max_util) * (1.0 + 0.5 * stagnation_factor)
+
+    updated_edge_distance[p_u, p_v] += penalties
+    updated_edge_distance[p_v, p_u] += penalties
+
+    penalized_nodes = np.unique(np.concatenate((p_u, p_v)))
+
+    # Compute a global scale reference for non-zero distances
+    base_dist_scale = np.median(costs) + 1e-8
+
+    # Apply inverse geometric distance incentive discounts to unused incident edges
+    for u in penalized_nodes:
+        unused_mask = (edge_n_used[u] == 0)
+        unused_mask[u] = False
+        if np.any(unused_mask):
+            orig_dists = edge_distance[u, unused_mask].astype(np.float64)
+            # Inverse distance factor: incentivizes intrinsically shorter alternative connections
+            inv_scale = base_dist_scale / (orig_dists + base_dist_scale)
+            discount_ratio = np.clip(0.01 + 0.04 * inv_scale * (1.0 + stagnation_factor), 0.005, 0.10)
+
+            discounts = updated_edge_distance[u, unused_mask] * discount_ratio
+            updated_edge_distance[u, unused_mask] = np.maximum(0.0, updated_edge_distance[u, unused_mask] - discounts)
+            updated_edge_distance[unused_mask, u] = updated_edge_distance[u, unused_mask]
+
+    return updated_edge_distance
+# ===== Eval Output =====
+[*] Running ...
+[*] mode=val, data=/home/ducanh/projects/EAs_project/MoH/problems/tsp_gls/data/val/val_instance_data_sol_50.pkl, seed=0, n_instances=8
+[*] instance_indices=[6, 9, 0, 2, 4, 3, 5, 1]
+[*] instance 6: obj=5.7136, gap=0.5983
+[*] instance 9: obj=5.9639, gap=0.0000
+[*] instance 0: obj=5.7978, gap=0.3373
+[*] instance 2: obj=5.8071, gap=0.0000
+[*] instance 4: obj=5.3965, gap=0.0000
+[*] instance 3: obj=5.8123, gap=0.9633
+[*] instance 5: obj=5.6187, gap=0.0000
+[*] instance 1: obj=5.3071, gap=2.7501
+[*] ave_gap on size 50: 0.5811251913779653
+0.5811251913779653

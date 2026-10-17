@@ -1,0 +1,79 @@
+# ===== Heuristic Code =====
+#{Shift from ad-hoc edge manipulation to a Held-Karp inspired dual potential relaxation that penalizes congested incident nodes via dual potentials while penalizing high-utility bottleneck tour edges symmetrically to systematically perturb the local search landscape.}
+
+import numpy as np
+
+def update_edge_distance(edge_distance, local_opt_tour, edge_n_used):
+    updated_edge_distance = np.copy(edge_distance)
+    num_nodes = len(local_opt_tour)
+    tour = np.asarray(local_opt_tour, dtype=np.intp)
+
+    # Frequency memory decay
+    edge_n_used *= 0.95
+
+    u_idx = tour
+    v_idx = np.roll(tour, -1)
+
+    # Current tour edge lengths and usage counts
+    tour_dists = edge_distance[u_idx, v_idx]
+    tour_freqs = edge_n_used[u_idx, v_idx]
+
+    # GLS-style edge utility metric: cost-to-frequency ratio
+    edge_utilities = tour_dists / (1.0 + tour_freqs)
+
+    # Select top bottleneck edges to penalize
+    k = max(2, int(np.ceil(0.15 * num_nodes)))
+    top_k_edge_indices = np.argsort(edge_utilities)[-k:]
+
+    # Scale factor based on tour statistics
+    mean_tour_cost = np.mean(tour_dists)
+    base_penalty = 0.25 * mean_tour_cost
+
+    # Track node congestion based on bottleneck edge incidences
+    node_potential = np.zeros(num_nodes, dtype=np.float64)
+
+    for idx in top_k_edge_indices:
+        u, v = u_idx[idx], v_idx[idx]
+        edge_n_used[u, v] += 1.0
+        edge_n_used[v, u] += 1.0
+
+        # Incremental edge-specific penalty
+        edge_pen = base_penalty * (1.0 + np.log1p(edge_n_used[u, v]))
+        updated_edge_distance[u, v] += edge_pen
+        updated_edge_distance[v, u] += edge_pen
+
+        # Accumulate dual potential on incident bottleneck nodes
+        node_potential[u] += 0.5 * edge_pen
+        node_potential[v] += 0.5 * edge_pen
+
+    # Dual node potential adjustment (Held-Karp / Hungarian relaxation style)
+    # Redistribute node potential to elevate cost around congested nodes, forcing structural detour
+    max_pot = np.max(node_potential)
+    if max_pot > 1e-12:
+        normalized_pot = node_potential / max_pot
+        scaled_dual = 0.12 * mean_tour_cost * normalized_pot
+
+        # Symmetrically project node potentials: d'_ij = d_ij + pi_i + pi_j
+        dual_matrix = scaled_dual[:, None] + scaled_dual[None, :]
+        np.fill_diagonal(dual_matrix, 0.0)
+        updated_edge_distance += dual_matrix
+
+    # Ensure zero self-distance and strict non-negativity
+    np.fill_diagonal(updated_edge_distance, 0.0)
+    updated_edge_distance = np.maximum(updated_edge_distance, 0.0)
+
+    return updated_edge_distance
+# ===== Eval Output =====
+[*] Running ...
+[*] mode=val, data=/home/ducanh/projects/EAs_project/MoH/problems/tsp_gls/data/val/val_instance_data_sol_100.pkl, seed=0, n_instances=8
+[*] instance_indices=[6, 9, 0, 2, 4, 3, 5, 1]
+[*] instance 6: obj=7.8516, gap=1.1852
+[*] instance 9: obj=8.1138, gap=0.8765
+[*] instance 0: obj=8.1650, gap=2.0616
+[*] instance 2: obj=8.2863, gap=2.6312
+[*] instance 4: obj=7.9931, gap=2.3037
+[*] instance 3: obj=7.5300, gap=2.1525
+[*] instance 5: obj=7.7024, gap=0.8618
+[*] instance 1: obj=7.7273, gap=2.2533
+[*] ave_gap on size 100: 1.7907351111096481
+1.7907351111096481

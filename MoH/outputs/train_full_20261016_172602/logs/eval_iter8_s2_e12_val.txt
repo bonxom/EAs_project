@@ -1,0 +1,102 @@
+# ===== Heuristic Code =====
+#{Scale-invariant guided local search updating symmetric edge weights using vectorized k-NN local distance normalization, sublinear frequency penalties, and metric-preserving shortcut discounting.}#
+
+import numpy as np
+
+def update_edge_distance(edge_distance, local_opt_tour, edge_n_used):
+    updated_edge_distance = np.copy(edge_distance)
+    num_nodes = len(local_opt_tour)
+    tour = np.asarray(local_opt_tour, dtype=np.intp)
+
+    # 1. Decay historical edge usage frequencies
+    edge_n_used *= 0.95
+
+    # Extract sequential triplets along the tour
+    u_idx = tour
+    v_idx = np.roll(tour, -1)
+    w_idx = np.roll(tour, -2)
+
+    d_uv = edge_distance[u_idx, v_idx]
+    d_vw = edge_distance[v_idx, w_idx]
+    d_uw = edge_distance[u_idx, w_idx]
+
+    # 2. Local geometry calculation: detour ratio and turning angle
+    detour_ratio = (d_uv + d_vw) / np.maximum(d_uw, 1e-12)
+    denom = 2.0 * d_uv * d_vw
+    cos_turn = np.where(denom > 1e-12, (d_uv**2 + d_vw**2 - d_uw**2) / np.maximum(denom, 1e-12), 0.0)
+    cos_turn = np.clip(cos_turn, -1.0, 1.0)
+    acute_deficit = 1.0 - cos_turn
+    geom_inefficiency = detour_ratio * (1.0 + 0.5 * acute_deficit)
+    local_geom_factor = 0.5 * (geom_inefficiency + np.roll(geom_inefficiency, 1))
+
+    # 3. Scale-invariant reference: compute local k-nearest neighbor mean distance per node
+    knn_k = min(max(3, int(np.ceil(np.sqrt(num_nodes)))), num_nodes - 1)
+    # Partition row-wise to get the k smallest non-zero distances without full sorting
+    partitioned = np.partition(edge_distance, knn_k, axis=1)[:, :knn_k + 1]
+    # Mask out the self-loop distance (zero on diagonal)
+    knn_distances = np.where(partitioned == 0.0, np.inf, partitioned)
+    local_scale = np.mean(np.partition(knn_distances, knn_k - 1, axis=1)[:, :knn_k], axis=1)
+    # Average local scale for edge (u, v)
+    edge_local_scale = 0.5 * (local_scale[u_idx] + local_scale[v_idx])
+
+    # 4. Utilities for penalization based on local scale and decayed usage
+    base_freq = edge_n_used[u_idx, v_idx]
+    utilities = (d_uv / (1.0 + base_freq)) * (1.0 + 0.35 * local_geom_factor)
+
+    k_penalize = max(1, int(np.ceil(0.12 * num_nodes)))
+    top_penalize_idx = np.argpartition(utilities, -k_penalize)[-k_penalize:]
+    top_penalize_idx = top_penalize_idx[np.argsort(utilities[top_penalize_idx])[::-1]]
+
+    p_u = u_idx[top_penalize_idx]
+    p_v = v_idx[top_penalize_idx]
+
+    # Update frequencies and apply sublinear scale-invariant penalty
+    edge_n_used[p_u, p_v] += 1.0
+    edge_n_used[p_v, p_u] = edge_n_used[p_u, p_v]
+
+    freq_factor = np.sqrt(edge_n_used[p_u, p_v])
+    geom_weight = 1.0 + 0.5 * local_geom_factor[top_penalize_idx]
+    penalties = 0.35 * edge_local_scale[top_penalize_idx] * freq_factor * geom_weight
+
+    updated_edge_distance[p_u, p_v] += penalties
+    updated_edge_distance[p_v, p_u] = updated_edge_distance[p_u, p_v]
+
+    # 5. Vectorized metric-preserving shortcut discounting
+    k_discount = max(1, int(np.ceil(0.10 * num_nodes)))
+    top_shortcut_idx = np.argpartition(detour_ratio, -k_discount)[-k_discount:]
+
+    s_u = u_idx[top_shortcut_idx]
+    s_w = w_idx[top_shortcut_idx]
+    s_freq = edge_n_used[s_u, s_w]
+
+    # Eligible shortcuts: low prior frequency and positive current distance
+    eligible = (s_freq < 1.0) & (s_u != s_w)
+    if np.any(eligible):
+        s_u_el = s_u[eligible]
+        s_w_el = s_w[eligible]
+        curr_dist = updated_edge_distance[s_u_el, s_w_el]
+        scale_sw = 0.5 * (local_scale[s_u_el] + local_scale[s_w_el])
+
+        # Bounded discount avoiding triangle-inequality collapse (never discount by more than 30% of current cost)
+        raw_discount = 0.15 * scale_sw * (1.0 / (1.0 + s_freq[eligible]))
+        discount = np.minimum(raw_discount, 0.30 * curr_dist)
+
+        new_dist = curr_dist - discount
+        updated_edge_distance[s_u_el, s_w_el] = new_dist
+        updated_edge_distance[s_w_el, s_u_el] = new_dist
+
+    return updated_edge_distance
+# ===== Eval Output =====
+[*] Running ...
+[*] mode=val, data=/home/ducanh/projects/EAs_project/MoH/problems/tsp_gls/data/val/val_instance_data_sol_100.pkl, seed=0, n_instances=8
+[*] instance_indices=[6, 9, 0, 2, 4, 3, 5, 1]
+[*] instance 6: obj=7.8248, gap=0.8404
+[*] instance 9: obj=8.1052, gap=0.7697
+[*] instance 0: obj=8.0001, gap=0.0000
+[*] instance 2: obj=8.0900, gap=0.1994
+[*] instance 4: obj=7.9295, gap=1.4902
+[*] instance 3: obj=7.3713, gap=0.0000
+[*] instance 5: obj=7.6365, gap=0.0000
+[*] instance 1: obj=7.5570, gap=0.0000
+[*] ave_gap on size 100: 0.4124712697094024
+0.4124712697094024

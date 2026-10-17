@@ -1,0 +1,68 @@
+# ===== Heuristic Code =====
+#{This strategy replaces static k-NN density with endpoint 1-NN geometric normalization to penalize tour edges proportionally to localized proximity, relative tour length, and usage frequency while boosting upper-quartile outliers.}#
+
+import numpy as np
+
+def update_edge_distance(edge_distance, local_opt_tour, edge_n_used):
+    updated_edge_distance = np.copy(edge_distance)
+    n = len(local_opt_tour)
+    if n < 2:
+        return updated_edge_distance
+
+    # Mask diagonal to find true nearest neighbor distance for each node
+    diag_indices = np.arange(edge_distance.shape[0])
+    masked_dists = np.copy(edge_distance)
+    masked_dists[diag_indices, diag_indices] = np.inf
+    min_1nn = np.min(masked_dists, axis=1)
+
+    u_idx = local_opt_tour
+    v_idx = np.roll(local_opt_tour, -1)
+    tour_edge_lengths = edge_distance[u_idx, v_idx]
+
+    # Geometric mean of endpoints' 1-NN baseline distances for scale/cluster invariance
+    geom_baseline = np.sqrt(np.maximum(min_1nn[u_idx] * min_1nn[v_idx], 1e-12))
+    proximity_ratio = tour_edge_lengths / geom_baseline
+
+    avg_tour_length = np.mean(tour_edge_lengths)
+    relative_length = tour_edge_lengths / (avg_tour_length + 1e-6)
+
+    # Sigmoidal rank penalty on relative length
+    rank_penalty = 1.0 / (1.0 + np.exp(-4.0 * (relative_length - 1.0)))
+
+    # Usage factor inversely modulating historical occurrences
+    usage_factor = 1.0 / (1.0 + 0.3 * edge_n_used[u_idx, v_idx])
+
+    # Local penalty driven by the proximity ratio normalized by average proximity
+    norm_proximity = proximity_ratio / (np.mean(proximity_ratio) + 1e-6)
+    local_penalty = relative_length * usage_factor * norm_proximity
+
+    # Adaptive global vs local weighting based on mean tour edge usage
+    freq_mean = np.mean(edge_n_used[u_idx, v_idx])
+    w_global = 0.6 / (1.0 + 0.1 * freq_mean)
+    w_local = 1.0 - w_global
+
+    combined_penalty = (w_global * rank_penalty + w_local * local_penalty) * (avg_tour_length / (n + 1e-6))
+
+    # Boost penalty for structural outliers in the upper quartile
+    threshold = np.percentile(tour_edge_lengths, 75)
+    high_penalty_mask = tour_edge_lengths >= threshold
+    combined_penalty[high_penalty_mask] *= 1.5
+
+    np.add.at(updated_edge_distance, (u_idx, v_idx), combined_penalty)
+    np.add.at(updated_edge_distance, (v_idx, u_idx), combined_penalty)
+
+    return updated_edge_distance
+# ===== Eval Output =====
+[*] Running ...
+[*] mode=val, data=/home/ducanh/projects/EAs_project/MoH/problems/tsp_gls/data/val/val_instance_data_sol_200.pkl, seed=0, n_instances=8
+[*] instance_indices=[6, 9, 0, 2, 4, 3, 5, 1]
+[*] instance 6: obj=10.8470, gap=3.8409
+[*] instance 9: obj=11.0360, gap=3.4977
+[*] instance 0: obj=11.4340, gap=5.0367
+[*] instance 2: obj=11.2272, gap=2.5526
+[*] instance 4: obj=11.3402, gap=4.5454
+[*] instance 3: obj=10.8757, gap=2.5827
+[*] instance 5: obj=11.3787, gap=4.5497
+[*] instance 1: obj=11.5687, gap=4.9388
+[*] ave_gap on size 200: 3.943073637837413
+3.943073637837413

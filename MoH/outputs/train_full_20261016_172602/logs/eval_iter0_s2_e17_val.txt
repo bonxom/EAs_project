@@ -1,0 +1,83 @@
+# ===== Heuristic Code =====
+# {A streamlined Guided Local Search heuristic that combines adaptive stagnation scaling with a balanced spatial-entropy rigidity modulation to penalize structurally trapped edges in dense regions while safeguarding peripheral connections.}
+
+import numpy as np
+
+def update_edge_distance(edge_distance, local_opt_tour, edge_n_used):
+    updated_edge_distance = np.copy(edge_distance)
+    num_nodes = len(local_opt_tour)
+
+    # Vectorized tour edge indexing
+    u_idx = np.asarray(local_opt_tour)
+    v_idx = np.roll(u_idx, -1)
+
+    # Apply memory discount
+    edge_n_used *= 0.95
+
+    # Compute guided local search utility and select top candidate edges for penalization
+    tour_dist = edge_distance[u_idx, v_idx]
+    tour_used = edge_n_used[u_idx, v_idx]
+    utilities = tour_dist / (1.0 + tour_used)
+
+    k = max(1, int(np.ceil(0.15 * num_nodes)))
+    top_k_indices = np.argsort(utilities)[-k:]
+
+    for idx in top_k_indices:
+        u, v = u_idx[idx], v_idx[idx]
+        edge_n_used[u, v] += 1.0
+        edge_n_used[v, u] += 1.0
+
+    # Calculate stagnation factor based on tour edge overlap and usage concentration
+    tour_usage = edge_n_used[u_idx, v_idx]
+    avg_tour_usage = np.mean(tour_usage)
+    max_used = np.max(edge_n_used) + 1e-12
+    overlap_ratio = np.mean(tour_usage > 1.0)
+    stagnation_factor = 1.0 + 1.5 * overlap_ratio + (avg_tour_usage / max_used)
+
+    # Spatial centrality: identify nodes located centrally vs. peripheral bridges
+    node_mean_dist = np.mean(edge_distance, axis=1)
+    global_mean_dist = np.mean(node_mean_dist)
+    spatial_centrality = global_mean_dist / (node_mean_dist + 1e-12)
+    norm_spatial_centrality = spatial_centrality / (np.max(spatial_centrality) + 1e-12)
+
+    # Entropy-based rigidity: measures search concentration per node
+    total_node_usage = np.sum(edge_n_used, axis=1, keepdims=True) + 1e-12
+    usage_probs = edge_n_used / total_node_usage
+    node_entropy = -np.sum(usage_probs * np.log(usage_probs + 1e-12), axis=1)
+    max_entropy = np.log(num_nodes) + 1e-12
+    entropy_rigidity = 1.0 - (node_entropy / max_entropy)
+
+    # Usage centrality
+    node_centrality = np.sum(edge_n_used, axis=1)
+    norm_centrality = node_centrality / (np.max(node_centrality) + 1e-12)
+
+    # Base adaptive penalty strength
+    adaptive_lambda = (0.15 + 0.20 * np.tanh(stagnation_factor)) * global_mean_dist
+
+    # Penalize candidate edges with balanced spatial-topological modulation
+    for idx in top_k_indices:
+        u, v = u_idx[idx], v_idx[idx]
+        c_term = 0.30 * (norm_centrality[u] + norm_centrality[v])
+        sc_term = 0.30 * (norm_spatial_centrality[u] + norm_spatial_centrality[v])
+        r_term = 0.40 * (entropy_rigidity[u] + entropy_rigidity[v])
+        modulation = 1.0 + 0.5 * (c_term + sc_term + r_term)
+
+        penalty = adaptive_lambda * edge_n_used[u, v] * modulation
+        updated_edge_distance[u, v] += penalty
+        updated_edge_distance[v, u] += penalty
+
+    return updated_edge_distance
+# ===== Eval Output =====
+[*] Running ...
+[*] mode=val, data=/home/ducanh/projects/EAs_project/MoH/problems/tsp_gls/data/val/val_instance_data_sol_100.pkl, seed=0, n_instances=8
+[*] instance_indices=[6, 9, 0, 2, 4, 3, 5, 1]
+[*] instance 6: obj=7.7666, gap=0.0905
+[*] instance 9: obj=8.0512, gap=0.0975
+[*] instance 0: obj=8.0001, gap=0.0000
+[*] instance 2: obj=8.0746, gap=0.0094
+[*] instance 4: obj=7.8131, gap=0.0000
+[*] instance 3: obj=7.3713, gap=0.0000
+[*] instance 5: obj=7.6365, gap=0.0000
+[*] instance 1: obj=7.5570, gap=0.0000
+[*] ave_gap on size 100: 0.024674532057064602
+0.024674532057064602

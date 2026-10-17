@@ -1,0 +1,82 @@
+# ===== Heuristic Code =====
+#{Adaptive Guided Local Search dynamically selects the top utility percentile of tour edges using usage-stagnation metrics while applying variance-normalized, scale-aware incentive discounts to promising incident unused edges.}
+
+import numpy as np
+
+def update_edge_distance(edge_distance, local_opt_tour, edge_n_used):
+    updated_edge_distance = np.copy(edge_distance)
+    n = len(local_opt_tour)
+    if n < 3:
+        return updated_edge_distance
+
+    u_idx = np.array(local_opt_tour, dtype=np.intp)
+    v_idx = np.roll(u_idx, -1)
+
+    costs = edge_distance[u_idx, v_idx].astype(np.float64)
+    used = edge_n_used[u_idx, v_idx].astype(np.float64)
+
+    mean_cost = np.mean(costs)
+    std_cost = np.std(costs)
+    cv_cost = std_cost / (mean_cost + 1e-12)
+
+    # Normalized z-score weights for cost significance
+    z_scores = (costs - mean_cost) / (std_cost + 1e-8)
+    weights = 1.0 / (1.0 + np.exp(-np.clip(z_scores, -10.0, 10.0)))
+    utilities = (costs * (1.0 + weights)) / (1.0 + used)
+
+    # Dynamic percentile thresholding based on edge recurrence / stagnation
+    avg_tour_used = np.mean(used)
+    # Higher average usage indicates deep stagnation, penalizing a broader subset of edges
+    stagnation_factor = np.clip(avg_tour_used / (avg_tour_used + 5.0), 0.0, 1.0)
+    percentile_cutoff = 75.0 - (25.0 * stagnation_factor)  # Slides from 75th down to 50th percentile
+    threshold = np.percentile(utilities, percentile_cutoff)
+
+    penalize_mask = utilities >= threshold
+    if not np.any(penalize_mask):
+        penalize_mask = utilities >= np.median(utilities)
+
+    p_u = u_idx[penalize_mask]
+    p_v = v_idx[penalize_mask]
+    p_costs = costs[penalize_mask]
+    p_used = used[penalize_mask]
+    p_utils = utilities[penalize_mask]
+
+    max_util = np.max(p_utils) + 1e-12
+    # Scale-aware penalty preserving relative edge cost metrics
+    penalties = (p_costs / (1.0 + np.sqrt(p_used + 1.0))) * (0.5 + 0.5 * (p_utils / max_util))
+
+    updated_edge_distance[p_u, p_v] += penalties
+    updated_edge_distance[p_v, p_u] += penalties
+
+    # Variance-adaptive decay for incident unexplored candidate edges
+    # Base decay rate scales proportionally to the coefficient of variation
+    adaptive_decay_base = np.clip(0.01 + 0.04 * cv_cost, 0.005, 0.05)
+
+    penalized_nodes = np.unique(np.concatenate((p_u, p_v)))
+    for u in penalized_nodes:
+        unused_mask = (edge_n_used[u] == 0)
+        unused_mask[u] = False
+        if np.any(unused_mask):
+            cand_costs = updated_edge_distance[u, unused_mask]
+            # More attractive (shorter) alternative edges receive a higher incentive discount
+            rel_attractiveness = np.clip(mean_cost / (cand_costs + 1e-8), 0.5, 2.0)
+            decay_vector = adaptive_decay_base * rel_attractiveness
+            updated_vals = cand_costs * (1.0 - decay_vector)
+            updated_edge_distance[u, unused_mask] = updated_vals
+            updated_edge_distance[unused_mask, u] = updated_vals
+
+    return updated_edge_distance
+# ===== Eval Output =====
+[*] Running ...
+[*] mode=val, data=/home/ducanh/projects/EAs_project/MoH/problems/tsp_gls/data/val/val_instance_data_sol_50.pkl, seed=0, n_instances=8
+[*] instance_indices=[6, 9, 0, 2, 4, 3, 5, 1]
+[*] instance 6: obj=5.7136, gap=0.5983
+[*] instance 9: obj=6.0108, gap=0.7860
+[*] instance 0: obj=5.7783, gap=0.0000
+[*] instance 2: obj=5.8071, gap=0.0000
+[*] instance 4: obj=5.5821, gap=3.4387
+[*] instance 3: obj=5.8806, gap=2.1487
+[*] instance 5: obj=5.6187, gap=0.0000
+[*] instance 1: obj=5.1651, gap=0.0000
+[*] ave_gap on size 50: 0.8714573067584275
+0.8714573067584275

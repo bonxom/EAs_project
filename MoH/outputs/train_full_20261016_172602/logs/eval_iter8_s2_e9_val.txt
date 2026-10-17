@@ -1,0 +1,138 @@
+# ===== Heuristic Code =====
+#{Identifies tangled tour subchains via multi-scale quadric crossing proxies and long-chord displacement, penalizes all edges along the worst entangled segments, and injects symmetric distance bonuses on boundary-reconnecting 2-opt and 3-opt chords.}#
+
+import numpy as np
+
+def update_edge_distance(edge_distance, local_opt_tour, edge_n_used):
+    updated_edge_distance = np.copy(edge_distance)
+    num_nodes = len(local_opt_tour)
+    tour = np.asarray(local_opt_tour, dtype=np.int64)
+
+    # 1. Decay historical edge usage memory
+    edge_n_used *= 0.95
+
+    # 2. Extract edge lengths along the current tour
+    next_tour = np.roll(tour, -1)
+    prev_tour = np.roll(tour, 1)
+    tour_edge_dists = edge_distance[tour, next_tour]
+    mean_tour_edge = np.mean(tour_edge_dists)
+    global_mean_dist = np.mean(edge_distance)
+
+    # 3. Detect tangled segments using multi-scale metric:
+    # (a) Long-distance detour tension: compare path lengths vs direct shortcuts over window spans
+    window_sizes = [3, 5]
+    segment_strain = np.zeros(num_nodes, dtype=np.float64)
+
+    for w in window_sizes:
+        if w >= num_nodes - 1:
+            continue
+        w_tour = np.roll(tour, -w)
+        direct_dist = edge_distance[tour, w_tour]
+
+        # Compute cumulative path distance along tour of length w
+        cum_dist = np.zeros(num_nodes, dtype=np.float64)
+        curr = tour
+        for step in range(w):
+            nxt = np.roll(tour, -(step + 1))
+            cum_dist += edge_distance[curr, nxt]
+            curr = nxt
+
+        detour = cum_dist / (direct_dist + 1e-8)
+        segment_strain += detour / float(w)
+
+    # (b) Quadric crossing proxy: Detect mutual interference / near-intersections
+    # Two disjoint edges (u1, v1) and (u2, v2) cross in metric space if d(u1,v2) + d(u2,v1) < d(u1,v1) + d(u2,v2)
+    step_samples = [2, 3, 4]
+    cross_stress = np.zeros(num_nodes, dtype=np.float64)
+    for s in step_samples:
+        if s + 2 >= num_nodes:
+            continue
+        u1 = tour
+        v1 = next_tour
+        u2 = np.roll(tour, -s)
+        v2 = np.roll(tour, -(s + 1))
+
+        orig_sum = edge_distance[u1, v1] + edge_distance[u2, v2]
+        cross_sum = edge_distance[u1, v2] + edge_distance[u2, v1]
+
+        # Positive values imply crossing or near-crossing inefficiency
+        tension = (orig_sum - cross_sum) / (orig_sum + 1e-8)
+        cross_stress += np.maximum(0.0, tension)
+
+    # 4. Synthesize structural inefficiency utility for tour edges
+    freq_weights = 1.0 / (1.0 + edge_n_used[tour, next_tour])
+    edge_utility = (tour_edge_dists / (mean_tour_edge + 1e-8)) * (1.0 + 0.4 * segment_strain + 0.6 * cross_stress) * freq_weights
+
+    # 5. Identify the top continuous ruined chains
+    ruin_segment_len = max(2, int(np.ceil(0.08 * num_nodes)))
+    # Moving sum of edge utilities over contiguous chain of length ruin_segment_len
+    chain_utility = np.zeros(num_nodes, dtype=np.float64)
+    for offset in range(ruin_segment_len):
+        chain_utility += np.roll(edge_utility, -offset)
+
+    num_chains = max(1, int(np.ceil(0.04 * num_nodes)))
+    top_chain_starts = np.argsort(chain_utility)[-num_chains:]
+
+    penalized_edges = set()
+    boundary_nodes = []
+
+    # 6. Ruin: Penalize all edges in tangled chains and record chain boundaries
+    lambda_penalty = 0.35 * global_mean_dist
+    for start_idx in top_chain_starts:
+        b_start = tour[start_idx]
+        b_end_idx = (start_idx + ruin_segment_len) % num_nodes
+        b_end = tour[b_end_idx]
+        boundary_nodes.append((b_start, b_end, start_idx, b_end_idx))
+
+        for offset in range(ruin_segment_len):
+            idx1 = (start_idx + offset) % num_nodes
+            idx2 = (start_idx + offset + 1) % num_nodes
+            u, v = tour[idx1], tour[idx2]
+            edge_key = (min(u, v), max(u, v))
+
+            if edge_key not in penalized_edges:
+                penalized_edges.add(edge_key)
+                edge_n_used[u, v] += 1.0
+                edge_n_used[v, u] += 1.0
+
+                freq_factor = 1.0 + np.log1p(edge_n_used[u, v])
+                chain_factor = 1.0 + 0.5 * cross_stress[idx1]
+                penalty = lambda_penalty * freq_factor * chain_factor
+
+                updated_edge_distance[u, v] += penalty
+                updated_edge_distance[v, u] += penalty
+
+    # 7. Recreate: Provide dynamic reconnection bonuses to promising cross-boundary chords (2-opt/3-opt bridges)
+    for b_start, b_end, s_idx, e_idx in boundary_nodes:
+        # Candidate 1: Direct bridge bypassing the ruined subsegment
+        freq_bypass = edge_n_used[b_start, b_end]
+        if freq_bypass < 2.0:
+            bypass_bonus = 0.15 * global_mean_dist * (1.0 / (1.0 + freq_bypass))
+            updated_edge_distance[b_start, b_end] = max(1e-6, updated_edge_distance[b_start, b_end] - bypass_bonus)
+            updated_edge_distance[b_end, b_start] = updated_edge_distance[b_start, b_end]
+
+        # Candidate 2: Inversion reconnection chords across intermediate sub-chain pivots
+        mid_idx = (s_idx + ruin_segment_len // 2) % num_nodes
+        mid_node = tour[mid_idx]
+        for boundary_cand in (b_start, b_end):
+            freq_cand = edge_n_used[boundary_cand, mid_node]
+            if freq_cand < 1.0:
+                recon_bonus = 0.08 * global_mean_dist * (1.0 / (1.0 + freq_cand))
+                updated_edge_distance[boundary_cand, mid_node] = max(1e-6, updated_edge_distance[boundary_cand, mid_node] - recon_bonus)
+                updated_edge_distance[mid_node, boundary_cand] = updated_edge_distance[boundary_cand, mid_node]
+
+    return updated_edge_distance
+# ===== Eval Output =====
+[*] Running ...
+[*] mode=val, data=/home/ducanh/projects/EAs_project/MoH/problems/tsp_gls/data/val/val_instance_data_sol_100.pkl, seed=0, n_instances=8
+[*] instance_indices=[6, 9, 0, 2, 4, 3, 5, 1]
+[*] instance 6: obj=7.7599, gap=0.0039
+[*] instance 9: obj=8.0833, gap=0.4977
+[*] instance 0: obj=8.0001, gap=0.0000
+[*] instance 2: obj=8.0943, gap=0.2532
+[*] instance 4: obj=7.8131, gap=0.0000
+[*] instance 3: obj=7.3713, gap=0.0000
+[*] instance 5: obj=7.6670, gap=0.3984
+[*] instance 1: obj=7.5628, gap=0.0756
+[*] ave_gap on size 100: 0.15359221928415434
+0.15359221928415434

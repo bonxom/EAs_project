@@ -1,0 +1,58 @@
+# ===== Heuristic Code =====
+#{Guided local search edge penalization identifying maximum utility-ratio edges scaled by tour cost and bounded by structural usage frequency to execute targeted edge ejection.}#
+
+import numpy as np
+
+def update_edge_distance(edge_distance, local_opt_tour, edge_n_used):
+    updated_edge_distance = np.copy(edge_distance)
+    n = len(local_opt_tour)
+    if n < 4:
+        return updated_edge_distance
+
+    u_idx = local_opt_tour
+    v_idx = np.roll(local_opt_tour, -1)
+
+    tour_edge_costs = edge_distance[u_idx, v_idx]
+    edge_frequencies = edge_n_used[u_idx, v_idx]
+
+    # Guided Local Search utility calculation: cost / (1 + frequency)
+    utilities = tour_edge_costs / (1.0 + edge_frequencies)
+
+    # Target edges with highest utility to force targeted 2-opt/3-opt ejections
+    max_utility = np.max(utilities)
+    mean_cost = np.mean(tour_edge_costs)
+
+    # Penalty intensity: scaled by tour edge cost and proportional deviation from maximum utility
+    # Focus aggressively on top-tier utility edges
+    utility_threshold = np.percentile(utilities, 70)
+    target_mask = utilities >= utility_threshold
+
+    # Base penalty proportional to average tour step size
+    lambda_param = 0.3 * mean_cost
+
+    penalties = np.zeros(n, dtype=np.float64)
+    penalties[target_mask] = lambda_param * (utilities[target_mask] / (max_utility + 1e-12))
+
+    # Frequency attenuation to prevent infinite growth on persistent bottleneck edges
+    damping = 1.0 / np.sqrt(1.0 + edge_frequencies)
+    penalties *= damping
+
+    # Symmetrically apply penalties to targeted edges
+    np.add.at(updated_edge_distance, (u_idx, v_idx), penalties)
+    np.add.at(updated_edge_distance, (v_idx, u_idx), penalties)
+
+    return updated_edge_distance
+# ===== Eval Output =====
+[*] Running ...
+[*] mode=val, data=/home/ducanh/projects/EAs_project/MoH/problems/tsp_gls/data/val/val_instance_data_sol_200.pkl, seed=0, n_instances=8
+[*] instance_indices=[6, 9, 0, 2, 4, 3, 5, 1]
+[*] instance 6: obj=10.8123, gap=3.5081
+[*] instance 9: obj=10.9442, gap=2.6367
+[*] instance 0: obj=11.4240, gap=4.9448
+[*] instance 2: obj=11.2182, gap=2.4702
+[*] instance 4: obj=11.1329, gap=2.6343
+[*] instance 3: obj=10.8628, gap=2.4615
+[*] instance 5: obj=11.2181, gap=3.0742
+[*] instance 1: obj=11.4726, gap=4.0672
+[*] ave_gap on size 200: 3.2246161967210805
+3.2246161967210805

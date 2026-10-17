@@ -1,0 +1,17 @@
+{
+  "id": 617,
+  "timestamp": "2026-10-16T19:20:53.112002+00:00",
+  "model": "ag/gemini-3.8-flash-low",
+  "temperature": 0.5,
+  "messages": [
+    {
+      "role": "system",
+      "content": "You are an expert in metaheuristics and combinatorial optimization. Your goal is to design highly competitive, novel, and robust optimization algorithms."
+    },
+    {
+      "role": "user",
+      "content": "Analyze the current best algorithm for the task 'tsp_gls-20':\nIdea: Key idea: Vectorize the Guided Local Search penalty calculation and symmetric matrix update using NumPy advanced indexing, penalizing the maximal utility edges proportionally to the tour's average edge length without Python loop overhead.\nCode:\n```python\nimport numpy as np\ndef update_edge_distance(edge_distance, local_opt_tour, edge_n_used):\n    updated_edge_distance = np.copy(edge_distance)\n    u_idx = local_opt_tour\n    v_idx = np.roll(local_opt_tour, -1)\n    tour_lengths = edge_distance[u_idx, v_idx]\n    tour_counts = edge_n_used[u_idx, v_idx]\n    utilities = tour_lengths / (1.0 + tour_counts)\n    max_utility = np.max(utilities)\n    avg_edge = np.mean(tour_lengths)\n    penalty = 0.3 * avg_edge\n    threshold = 0.99 * max_utility\n    selected_mask = utilities >= threshold\n    sel_u = u_idx[selected_mask]\n    sel_v = v_idx[selected_mask]\n    updated_edge_distance[sel_u, sel_v] += penalty\n    updated_edge_distance[sel_v, sel_u] += penalty\n    return updated_edge_distance\n```\nUtility Score (lower is better): 1.2218318606871392e-06\n\nPerform a rigorous decomposition:\n1. Identify the 'Invariable Core': The essential algorithmic backbone and invariants that must be preserved.\n2. Identify the 'Primary Bottlenecks': Structural weaknesses, convergence stagnation, or computational inefficiencies.\nReturn your analysis strictly in JSON format as follows:\n```json\n{\n  \"invariable_core\": \"<critical logic to preserve>\",\n  \"bottlenecks\": \"<specific algorithmic deficiencies>\"\n}\n```"
+    }
+  ],
+  "response": "```json\n{\n  \"invariable_core\": \"Vectorized computation of edge utilities `utilities = tour_lengths / (1.0 + tour_counts)` along the current local optimum tour `local_opt_tour` using advanced indexing (`u_idx`, `v_idx = np.roll(...)`), and applying symmetric additive penalties to edges with maximal/near-maximal utility directly on a copy of the edge distance matrix.\",\n  \"bottlenecks\": \"1. `edge_n_used` is not updated within the function, leading to potential tracking discrepancies or reliance on external side effects. 2. Utility is computed using the modified/penalized `edge_distance` (`tour_lengths = edge_distance[u_idx, v_idx]`) rather than original geometric edge lengths, which distorts classic GLS utility calculations as penalties accumulate. 3. The penalty scale parameter (0.3) is static across iterations and problem scales, lacking adaptive perturbation or decay mechanisms to escape deep basins of attraction.\"\n}\n```"
+}

@@ -1,0 +1,71 @@
+# ===== Heuristic Code =====
+#{Disrupt local optima by penalizing tour edges using a mutual-proximity clustering heuristic where edges with low shared nearest-neighbor overlap and high relative length act as cross-cluster bridges that receive amplified Guided Local Search penalties.}
+
+import numpy as np
+
+def update_edge_distance(edge_distance, local_opt_tour, edge_n_used):
+    updated_edge_distance = np.copy(edge_distance)
+    n = len(local_opt_tour)
+
+    u_idx = np.asarray(local_opt_tour)
+    v_idx = np.roll(u_idx, -1)
+
+    k = min(8, max(2, n - 1))
+    # Identify k-nearest neighbors for all nodes efficiently (excluding self)
+    knn_indices = np.argpartition(edge_distance, kth=k, axis=1)[:, 1:k + 1]
+
+    # Vectorized computation of shared k-NN affinity between u and v
+    u_knn = knn_indices[u_idx]  # Shape: (n, k)
+    v_knn = knn_indices[v_idx]  # Shape: (n, k)
+
+    # Compute intersection size along axis 1 using broadcasted comparison
+    shared_counts = np.sum(u_knn[:, :, None] == v_knn[:, None, :], axis=(1, 2))
+    jaccard_affinity = shared_counts / (2.0 * k - shared_counts + 1e-6)
+
+    # Bridge score: high when shared neighborhood is low (cross-cluster bridge edge)
+    bridge_factor = 1.0 + 2.0 * (1.0 - jaccard_affinity)
+
+    # Relative edge length computation against tour baseline
+    tour_edge_lengths = edge_distance[u_idx, v_idx]
+    avg_tour_length = np.mean(tour_edge_lengths) + 1e-6
+    relative_length = tour_edge_lengths / avg_tour_length
+
+    # Sigmoidal rank penalty emphasizing above-average lengths
+    rank_penalty = 1.0 / (1.0 + np.exp(-4.0 * (relative_length - 1.0)))
+
+    # Edge usage attenuation factor to prevent over-penalizing repeated edges
+    usage_factor = 1.0 / (1.0 + 0.3 * edge_n_used[u_idx, v_idx])
+
+    # Local structural penalty combining relative length, usage, and bridge identification
+    local_penalty = relative_length * usage_factor * bridge_factor
+
+    # Global vs local weight adaptation based on global tour edge usage
+    freq_mean = np.mean(edge_n_used[u_idx, v_idx])
+    w_global = 0.6 / (1.0 + 0.1 * freq_mean)
+    w_local = 1.0 - w_global
+
+    combined_penalty = w_global * rank_penalty + w_local * local_penalty
+
+    # Amplify penalties for the longest quartile of edges on the tour
+    threshold = np.percentile(tour_edge_lengths, 75)
+    combined_penalty[tour_edge_lengths >= threshold] *= 1.5
+
+    # Apply symmetric updates to the distance matrix
+    np.add.at(updated_edge_distance, (u_idx, v_idx), combined_penalty)
+    np.add.at(updated_edge_distance, (v_idx, u_idx), combined_penalty)
+
+    return updated_edge_distance
+# ===== Eval Output =====
+[*] Running ...
+[*] mode=val, data=/home/ducanh/projects/EAs_project/MoH/problems/tsp_gls/data/val/val_instance_data_sol_200.pkl, seed=0, n_instances=8
+[*] instance_indices=[6, 9, 0, 2, 4, 3, 5, 1]
+[*] instance 6: obj=10.4464, gap=0.0050
+[*] instance 9: obj=10.6885, gap=0.2389
+[*] instance 0: obj=10.8937, gap=0.0732
+[*] instance 2: obj=10.9804, gap=0.2981
+[*] instance 4: obj=10.9453, gap=0.9047
+[*] instance 3: obj=10.6209, gap=0.1797
+[*] instance 5: obj=10.9032, gap=0.1801
+[*] instance 1: obj=11.0614, gap=0.3378
+[*] ave_gap on size 200: 0.2771643760725112
+0.2771643760725112

@@ -1,0 +1,65 @@
+# ===== Heuristic Code =====
+#{A dynamic ruin-and-recreate perturbation that protects necessary inter-cluster bridge edges via mutual reachability while applying adaptive, soft-clamped sigmoid penalties modulated by edge usage saturation and relative length.}
+
+import numpy as np
+
+def update_edge_distance(edge_distance, local_opt_tour, edge_n_used):
+    updated_edge_distance = np.copy(edge_distance)
+    n = len(local_opt_tour)
+    if n < 4:
+        return updated_edge_distance
+
+    # Extract consecutive tour edges
+    u_idx = local_opt_tour
+    v_idx = np.roll(local_opt_tour, -1)
+    tour_lengths = edge_distance[u_idx, v_idx]
+
+    # Adaptive baseline statistics
+    mean_len = np.mean(tour_lengths)
+    std_len = np.std(tour_lengths) + 1e-8
+    rel_len = tour_lengths / (mean_len + 1e-8)
+
+    # Normalized k-nearest neighbor density calculation
+    k = min(6, n - 1)
+    sorted_dists = np.sort(edge_distance, axis=1)
+    k_nn_avg = np.mean(sorted_dists[:, 1:k+1], axis=1) + 1e-8
+
+    # Bridge edge identification: high ratio relative to both endpoints' local neighborhood
+    # Bridge edges connect distinct clusters and must not be over-penalized into distortion drift
+    max_endpoint_knn = np.maximum(k_nn_avg[u_idx], k_nn_avg[v_idx])
+    bridge_metric = tour_lengths / max_endpoint_knn
+    bridge_attenuation = 1.0 / (1.0 + 0.5 * np.maximum(0.0, bridge_metric - 1.5))
+
+    # Soft continuous penalty activation replacing rigid percentile cutoff
+    z_scores = (tour_lengths - mean_len) / std_len
+    surge_activation = 1.0 / (1.0 + np.exp(-2.5 * z_scores))
+
+    # Frequency moderation with saturation dampening
+    usage = edge_n_used[u_idx, v_idx]
+    usage_factor = 1.0 / (1.0 + 0.35 * usage)
+
+    # Base additive penalty scaled proportionally to original edge distance
+    base_penalty = mean_len * 0.15 * rel_len
+
+    # Combined adaptive perturbation with bridge protection
+    penalty = base_penalty * (0.6 + 0.8 * surge_activation) * usage_factor * bridge_attenuation
+
+    # Symmetric application to the distance matrix
+    np.add.at(updated_edge_distance, (u_idx, v_idx), penalty)
+    np.add.at(updated_edge_distance, (v_idx, u_idx), penalty)
+
+    return updated_edge_distance
+# ===== Eval Output =====
+[*] Running ...
+[*] mode=val, data=/home/ducanh/projects/EAs_project/MoH/problems/tsp_gls/data/val/val_instance_data_sol_200.pkl, seed=0, n_instances=8
+[*] instance_indices=[6, 9, 0, 2, 4, 3, 5, 1]
+[*] instance 6: obj=10.6573, gap=2.0244
+[*] instance 9: obj=10.9442, gap=2.6367
+[*] instance 0: obj=11.4240, gap=4.9448
+[*] instance 2: obj=11.2182, gap=2.4702
+[*] instance 4: obj=11.0586, gap=1.9498
+[*] instance 3: obj=10.7784, gap=1.6649
+[*] instance 5: obj=11.2178, gap=3.0709
+[*] instance 1: obj=11.3698, gap=3.1346
+[*] ave_gap on size 200: 2.7370347436055487
+2.7370347436055487

@@ -1,0 +1,77 @@
+# ===== Heuristic Code =====
+#{This algorithm applies a Guided Local Search penalty with history-aware adaptive reinforcement scaling proportional to tour stagnation and edge usage dispersion, combined with symmetric discounting on incident unvisited edges.}#
+
+import numpy as np
+
+def update_edge_distance(edge_distance, local_opt_tour, edge_n_used):
+    updated_edge_distance = np.copy(edge_distance)
+    n = len(local_opt_tour)
+    if n < 3:
+        return updated_edge_distance
+
+    u_idx = np.array(local_opt_tour, dtype=np.intp)
+    v_idx = np.roll(u_idx, -1)
+
+    costs = edge_distance[u_idx, v_idx].astype(np.float64)
+    used = edge_n_used[u_idx, v_idx].astype(np.float64)
+
+    mean_cost = np.mean(costs)
+    std_cost = np.std(costs) + 1e-8
+    z_scores = (costs - mean_cost) / std_cost
+    weights = 1.0 / (1.0 + np.exp(-z_scores))
+    utilities = (costs * (1.0 + weights)) / (1.0 + used)
+
+    # History-aware reinforcement meta-controller:
+    # Measure tour-level stagnation via edge visit concentration and minimum visit count
+    mean_used = np.mean(used)
+    min_used = np.min(used)
+    std_used = np.std(used)
+
+    # Stagnation amplification: repeatedly encountering identical edges escalates penalty scale
+    stagnation_factor = 1.0 + np.log1p(min_used) + (mean_used / (std_used + 1.0))
+    base_step = std_cost * (0.15 + 0.10 * np.tanh(stagnation_factor))
+
+    # Adaptive reinforcement: higher step sizes for edges visited disproportionately often
+    threshold = np.median(utilities)
+    max_util = np.max(utilities) + 1e-8
+    penalize_mask = utilities >= threshold
+
+    p_u = u_idx[penalize_mask]
+    p_v = v_idx[penalize_mask]
+    p_costs = costs[penalize_mask]
+    p_used = used[penalize_mask]
+    p_utils = utilities[penalize_mask]
+
+    # History-aware reinforcement penalty scaling replacing static cost/sqrt(used)
+    reinforcement = np.log1p(p_used + 1.0) / (1.0 + np.exp(-((p_used - mean_used) / (std_used + 1e-8))))
+    adaptive_penalties = base_step * (1.0 + reinforcement) * (p_costs / (mean_cost + 1e-8)) * (1.0 + p_utils / max_util)
+
+    updated_edge_distance[p_u, p_v] += adaptive_penalties
+    updated_edge_distance[p_v, p_u] += adaptive_penalties
+
+    # Symmetric edge discounting on incident unexplored edges to steer search to new basins
+    penalized_nodes = np.unique(np.concatenate((p_u, p_v)))
+    decay_ratio = 0.02 * (1.0 + 0.5 * np.tanh(stagnation_factor))
+    for u in penalized_nodes:
+        unused_mask = (edge_n_used[u] == 0)
+        unused_mask[u] = False
+        if np.any(unused_mask):
+            current_vals = updated_edge_distance[u, unused_mask]
+            updated_edge_distance[u, unused_mask] -= current_vals * decay_ratio
+            updated_edge_distance[unused_mask, u] = updated_edge_distance[u, unused_mask]
+
+    return updated_edge_distance
+# ===== Eval Output =====
+[*] Running ...
+[*] mode=val, data=/home/ducanh/projects/EAs_project/MoH/problems/tsp_gls/data/val/val_instance_data_sol_50.pkl, seed=0, n_instances=8
+[*] instance_indices=[6, 9, 0, 2, 4, 3, 5, 1]
+[*] instance 6: obj=5.7136, gap=0.5983
+[*] instance 9: obj=5.9639, gap=0.0000
+[*] instance 0: obj=5.7783, gap=0.0000
+[*] instance 2: obj=5.8071, gap=0.0000
+[*] instance 4: obj=5.3965, gap=0.0000
+[*] instance 3: obj=5.7569, gap=0.0000
+[*] instance 5: obj=5.6187, gap=0.0000
+[*] instance 1: obj=5.1651, gap=0.0000
+[*] ave_gap on size 50: 0.07478878681544121
+0.07478878681544121

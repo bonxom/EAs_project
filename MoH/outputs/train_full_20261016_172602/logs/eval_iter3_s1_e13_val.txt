@@ -1,0 +1,92 @@
+# ===== Heuristic Code =====
+#{Guided Local Search that penalizes high-utility tour edges and selectively discounts the top-k nearest non-tour candidate edges incident to perturbed nodes proportionally to their proximity and exploration sparsity.}#
+
+import numpy as np
+
+def update_edge_distance(edge_distance, local_opt_tour, edge_n_used):
+    updated_edge_distance = np.copy(edge_distance)
+    n = len(local_opt_tour)
+    if n <= 3:
+        return updated_edge_distance
+
+    u_idx = np.array(local_opt_tour, dtype=np.intp)
+    v_idx = np.roll(u_idx, -1)
+
+    costs = edge_distance[u_idx, v_idx].astype(np.float64)
+    used = edge_n_used[u_idx, v_idx].astype(np.float64)
+
+    mean_cost = np.mean(costs)
+    std_cost = np.std(costs) + 1e-8
+    z_scores = (costs - mean_cost) / std_cost
+    weights = 1.0 / (1.0 + np.exp(-z_scores))
+    utilities = (costs * (1.0 + weights)) / (1.0 + used)
+
+    threshold = np.median(utilities)
+    max_util = np.max(utilities) + 1e-8
+    penalize_mask = utilities >= threshold
+
+    p_u = u_idx[penalize_mask]
+    p_v = v_idx[penalize_mask]
+    p_costs = costs[penalize_mask]
+    p_used = used[penalize_mask]
+    p_utils = utilities[penalize_mask]
+
+    penalties = (p_costs / (1.0 + np.sqrt(p_used + 1.0))) * (1.0 + p_utils / max_util)
+
+    updated_edge_distance[p_u, p_v] += penalties
+    updated_edge_distance[p_v, p_u] += penalties
+
+    # Identify penalized nodes
+    penalized_nodes = np.unique(np.concatenate((p_u, p_v)))
+
+    # Tour edge indicator lookup for rapid non-tour filtering
+    is_tour_edge = np.zeros((n, n), dtype=bool)
+    is_tour_edge[u_idx, v_idx] = True
+    is_tour_edge[v_idx, u_idx] = True
+
+    k = min(5, n - 3)
+    if k > 0:
+        for u in penalized_nodes:
+            # Candidates are nodes excluding self and immediate tour neighbors
+            cand_mask = ~is_tour_edge[u]
+            cand_mask[u] = False
+            candidates = np.where(cand_mask)[0]
+
+            if len(candidates) == 0:
+                continue
+
+            orig_dists = edge_distance[u, candidates]
+            cand_k = min(k, len(candidates))
+
+            # Select top-k nearest spatial neighbors
+            nearest_idx = np.argpartition(orig_dists, cand_k - 1)[:cand_k]
+            selected_cands = candidates[nearest_idx]
+            selected_orig_dists = orig_dists[nearest_idx]
+
+            min_d = np.min(selected_orig_dists)
+            freqs = edge_n_used[u, selected_cands].astype(np.float64)
+
+            # Proximity-directed discount: closer edges receive higher reward, modulated by zero/low frequency
+            proximity_weight = min_d / (selected_orig_dists + 1e-8)
+            freq_factor = 1.0 / (1.0 + freqs)
+            discount_rates = 0.05 * proximity_weight * freq_factor
+
+            discounts = updated_edge_distance[u, selected_cands] * discount_rates
+            updated_edge_distance[u, selected_cands] -= discounts
+            updated_edge_distance[selected_cands, u] -= discounts
+
+    return updated_edge_distance
+# ===== Eval Output =====
+[*] Running ...
+[*] mode=val, data=/home/ducanh/projects/EAs_project/MoH/problems/tsp_gls/data/val/val_instance_data_sol_50.pkl, seed=0, n_instances=8
+[*] instance_indices=[6, 9, 0, 2, 4, 3, 5, 1]
+[*] instance 6: obj=5.7136, gap=0.5983
+[*] instance 9: obj=5.9639, gap=0.0000
+[*] instance 0: obj=5.7783, gap=0.0000
+[*] instance 2: obj=5.8071, gap=0.0000
+[*] instance 4: obj=5.3965, gap=0.0000
+[*] instance 3: obj=5.8123, gap=0.9633
+[*] instance 5: obj=5.6187, gap=0.0000
+[*] instance 1: obj=5.1651, gap=0.0000
+[*] ave_gap on size 50: 0.1952036921433975
+0.1952036921433975

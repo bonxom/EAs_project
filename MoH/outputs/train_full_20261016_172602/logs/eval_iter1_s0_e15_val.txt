@@ -1,0 +1,66 @@
+# ===== Heuristic Code =====
+# {Deepen guided escape from local optima by scaling Guided Local Search penalties using a dual-frequency memory model and vertex incident edge recency guards to prevent cyclic perturbation loops.}
+
+import numpy as np
+
+def update_edge_distance(edge_distance, local_opt_tour, edge_n_used):
+    updated_edge_distance = np.copy(edge_distance)
+
+    u_idx = local_opt_tour
+    v_idx = np.roll(local_opt_tour, -1)
+
+    tour_lengths = edge_distance[u_idx, v_idx]
+    tour_counts = edge_n_used[u_idx, v_idx]
+
+    # Vectorized core utility: length / (1 + count)
+    utilities = tour_lengths / (1.0 + tour_counts)
+    max_utility = np.max(utilities)
+
+    if max_utility <= 0:
+        return updated_edge_distance
+
+    # Select candidate edges with near-maximal utility
+    threshold = 0.95 * max_utility
+    candidate_mask = utilities >= threshold
+
+    cand_u = u_idx[candidate_mask]
+    cand_v = v_idx[candidate_mask]
+    cand_lengths = tour_lengths[candidate_mask]
+    cand_counts = tour_counts[candidate_mask]
+
+    # Compute vertex-level incident frequency to detect cycle traps
+    vertex_freq = np.bincount(u_idx, weights=tour_counts, minlength=edge_distance.shape[0]) + \
+                  np.bincount(v_idx, weights=tour_counts, minlength=edge_distance.shape[0])
+
+    incident_stress = (vertex_freq[cand_u] + vertex_freq[cand_v]) / (2.0 + cand_counts)
+    norm_stress = incident_stress / (1.0 + np.mean(incident_stress))
+
+    # Dynamic penalty scaling with boundary-clamping guards
+    avg_edge = np.mean(tour_lengths)
+    base_penalty = 0.35 * avg_edge
+
+    # Frequency-differentiated intensification: higher penalty for frequently trapped edges
+    frequency_multiplier = 1.0 + np.tanh(cand_counts / (1.0 + np.mean(cand_counts)))
+    clamped_weights = np.clip(norm_stress * frequency_multiplier, 0.5, 2.5)
+    penalties = base_penalty * clamped_weights
+
+    # Apply symmetric updates to penalized edges
+    for u, v, pen in zip(cand_u, cand_v, penalties):
+        updated_edge_distance[u, v] += pen
+        updated_edge_distance[v, u] += pen
+
+    return updated_edge_distance
+# ===== Eval Output =====
+[*] Running ...
+[*] mode=val, data=/home/ducanh/projects/EAs_project/MoH/problems/tsp_gls/data/val/val_instance_data_sol_20.pkl, seed=0, n_instances=8
+[*] instance_indices=[6, 9, 0, 2, 4, 3, 5, 1]
+[*] instance 6: obj=3.7045, gap=0.0000
+[*] instance 9: obj=4.1442, gap=0.0000
+[*] instance 0: obj=3.6827, gap=0.0000
+[*] instance 2: obj=3.8184, gap=0.0000
+[*] instance 4: obj=3.8385, gap=0.0000
+[*] instance 3: obj=3.6971, gap=0.0000
+[*] instance 5: obj=3.4281, gap=0.0000
+[*] instance 1: obj=3.6958, gap=0.0000
+[*] ave_gap on size 20: 1.2218318606871392e-06
+1.2218318606871392e-06

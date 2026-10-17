@@ -1,0 +1,17 @@
+{
+  "id": 1,
+  "timestamp": "2026-10-16T17:26:22.863913+00:00",
+  "model": "ag/gemini-3.8-flash-low",
+  "temperature": 1,
+  "messages": [
+    {
+      "role": "system",
+      "content": "You are an expert in the domain of designing meta optimization strategy and combinatorial optimization problems. Your task is to design heuristics that can effectively solve optimization problems."
+    },
+    {
+      "role": "user",
+      "content": "Given the following heuristic for subtask: import numpy as np\ndef update_edge_distance(edge_distance, local_opt_tour, edge_n_used):\n    updated_edge_distance = np.copy(edge_distance)\n    n = edge_distance.shape[0]\n    decay_factor = 0.95\n    tour_edges = [(local_opt_tour[i], local_opt_tour[(i + 1) % n]) for i in range(n)]\n    tour_lengths = [edge_distance[u, v] for u, v in tour_edges]\n    avg_tour_edge = np.mean(tour_lengths) if len(tour_lengths) > 0 else 1.0\n    utilities = [edge_distance[u, v] / (1.0 + edge_n_used[u, v]) for u, v in tour_edges]\n    max_utility = max(utilities) if utilities else 0.0\n    mask = edge_n_used > 0\n    penalty_scale = 0.25 * avg_tour_edge\n    updated_edge_distance[mask] = edge_distance[mask] * decay_factor + (1.0 - decay_factor) * edge_distance[mask]\n    for (u, v), util in zip(tour_edges, utilities):\n        if util >= 0.85 * max_utility:\n            add_penalty = penalty_scale / (1.0 + edge_n_used[u, v])\n            updated_edge_distance[u, v] += add_penalty\n            updated_edge_distance[v, u] += add_penalty\n    return updated_edge_distance with its idea: This heuristic penalizes edges in the current local optimum using a utility-based penalty scaled by edge length and usage count, while simultaneously applying an adaptive decay factor to prior edge penalties to maintain metric fidelity and escape local optima. and utility score: 0.5927419337956985, Summarize the key idea from this heuristic, then provide several totally different ideas from the given one to design improved algorithms with lower utility score. Provide a single string as the answer, less than 50 words. Your response should be formatted as a json structure: ```json\n{{\"insights\":[\"content\",\"content\",\"content\", ... ,\"content\"]}}\n```."
+    }
+  ],
+  "response": "```json\n{\"insights\":[\"The heuristic applies GLS-style utility penalties with memory decay to high-cost tour edges to escape local optima.\", \"Penalize high-degree central nodes or bottleneck cut-edges across historical tours instead of individual edges.\", \"Reward unused edges in the k-nearest-neighbor subgraph by decreasing distances to encourage unexplored structural connections.\", \"Introduce asymmetric, directional penalties based on tour orientation to perturb path structure without distorting symmetric metric spaces.\"]}\n```"
+}

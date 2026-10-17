@@ -1,0 +1,71 @@
+# ===== Heuristic Code =====
+#{Penalize above-median Z-score utility tour edges symmetrically and selectively discount only the top-k nearest unvisited topological neighbors of affected nodes scaled inversely by their base metric distance.}
+
+import numpy as np
+
+def update_edge_distance(edge_distance, local_opt_tour, edge_n_used):
+    updated_edge_distance = np.copy(edge_distance)
+    n = len(local_opt_tour)
+    u_idx = np.array(local_opt_tour, dtype=np.intp)
+    v_idx = np.roll(u_idx, -1)
+
+    costs = edge_distance[u_idx, v_idx].astype(np.float64)
+    used = edge_n_used[u_idx, v_idx].astype(np.float64)
+
+    mean_cost = np.mean(costs)
+    std_cost = np.std(costs) + 1e-8
+    z_scores = (costs - mean_cost) / std_cost
+    weights = 1.0 / (1.0 + np.exp(-z_scores))
+    utilities = (costs * (1.0 + weights)) / (1.0 + used)
+
+    threshold = np.median(utilities)
+    max_util = np.max(utilities) + 1e-8
+    penalize_mask = utilities >= threshold
+
+    p_u = u_idx[penalize_mask]
+    p_v = v_idx[penalize_mask]
+    p_costs = costs[penalize_mask]
+    p_used = used[penalize_mask]
+    p_utils = utilities[penalize_mask]
+
+    penalties = (p_costs / (1.0 + np.sqrt(p_used + 1.0))) * (1.0 + p_utils / max_util)
+    updated_edge_distance[p_u, p_v] += penalties
+    updated_edge_distance[p_v, p_u] += penalties
+
+    penalized_nodes = np.unique(np.concatenate((p_u, p_v)))
+    k = max(2, min(5, n // 10))
+    base_discount = 0.05
+
+    for u in penalized_nodes:
+        unvisited_mask = (edge_n_used[u] == 0)
+        unvisited_mask[u] = False
+        unvisited_indices = np.where(unvisited_mask)[0]
+
+        if len(unvisited_indices) > 0:
+            orig_dists = edge_distance[u, unvisited_indices]
+            top_k_count = min(k, len(unvisited_indices))
+            nearest_local_idx = np.argpartition(orig_dists, top_k_count - 1)[:top_k_count]
+            target_neighbors = unvisited_indices[nearest_local_idx]
+
+            target_dists = orig_dists[nearest_local_idx]
+            min_d = np.min(target_dists)
+            discounts = base_discount * (min_d / (target_dists + 1e-8))
+
+            updated_edge_distance[u, target_neighbors] -= updated_edge_distance[u, target_neighbors] * discounts
+            updated_edge_distance[target_neighbors, u] = updated_edge_distance[u, target_neighbors]
+
+    return updated_edge_distance
+# ===== Eval Output =====
+[*] Running ...
+[*] mode=val, data=/home/ducanh/projects/EAs_project/MoH/problems/tsp_gls/data/val/val_instance_data_sol_50.pkl, seed=0, n_instances=8
+[*] instance_indices=[6, 9, 0, 2, 4, 3, 5, 1]
+[*] instance 6: obj=5.7136, gap=0.5983
+[*] instance 9: obj=5.9639, gap=0.0000
+[*] instance 0: obj=5.7783, gap=0.0000
+[*] instance 2: obj=5.8071, gap=0.0000
+[*] instance 4: obj=5.3965, gap=0.0000
+[*] instance 3: obj=5.7569, gap=0.0000
+[*] instance 5: obj=5.6492, gap=0.5441
+[*] instance 1: obj=5.1651, gap=0.0000
+[*] ave_gap on size 50: 0.14279541467067947
+0.14279541467067947

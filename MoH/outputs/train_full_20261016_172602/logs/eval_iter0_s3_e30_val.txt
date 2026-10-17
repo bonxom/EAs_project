@@ -1,0 +1,98 @@
+# ===== Heuristic Code =====
+#{Multi-scale directional smoothness distortion calculates incident turning angles via the law of cosines across both immediate and two-hop node neighborhoods, amplifying penalties on acutely folded, long edges in dense clusters while scaling with tour dispersion to forcefully unravel jagged path entanglements.}
+
+import numpy as np
+
+def update_edge_distance(edge_distance, local_opt_tour, edge_n_used):
+    updated_edge_distance = np.copy(edge_distance)
+    n = len(local_opt_tour)
+    if n < 5:
+        return updated_edge_distance
+
+    # Shift indices along the cyclic tour
+    p2_idx = np.roll(local_opt_tour, 2)
+    p_idx = np.roll(local_opt_tour, 1)
+    u_idx = local_opt_tour
+    v_idx = np.roll(local_opt_tour, -1)
+    w_idx = np.roll(local_opt_tour, -2)
+    w2_idx = np.roll(local_opt_tour, -3)
+
+    # Primary consecutive edge distances
+    d_uv = edge_distance[u_idx, v_idx]
+    d_pu = edge_distance[p_idx, u_idx]
+    d_pv = edge_distance[p_idx, v_idx]
+    d_vw = edge_distance[v_idx, w_idx]
+    d_uw = edge_distance[u_idx, w_idx]
+
+    # Two-hop distances for multi-scale curvature evaluation
+    d_p2u = edge_distance[p2_idx, u_idx]
+    d_vw2 = edge_distance[v_idx, w2_idx]
+
+    # Cosine of immediate interior turning angles at u (p-u-v) and v (u-v-w)
+    cos_u = (d_pu**2 + d_uv**2 - d_pv**2) / (2.0 * np.maximum(d_pu * d_uv, 1e-8))
+    cos_v = (d_uv**2 + d_vw**2 - d_uw**2) / (2.0 * np.maximum(d_uv * d_vw, 1e-8))
+    cos_u = np.clip(cos_u, -1.0, 1.0)
+    cos_v = np.clip(cos_v, -1.0, 1.0)
+
+    # Cosine of wider chord angles (p2-p-v) and (u-w-w2) around edge (u, v)
+    cos_u2 = (d_p2u**2 + d_uv**2 - edge_distance[p2_idx, v_idx]**2) / (2.0 * np.maximum(d_p2u * d_uv, 1e-8))
+    cos_v2 = (d_uv**2 + d_vw2**2 - edge_distance[u_idx, w2_idx]**2) / (2.0 * np.maximum(d_uv * d_vw2, 1e-8))
+    cos_u2 = np.clip(cos_u2, -1.0, 1.0)
+    cos_v2 = np.clip(cos_v2, -1.0, 1.0)
+
+    # Acute inner turns (positive cosine) reflect jagged, backtracking motion
+    sharpness_1hop = np.maximum(0.0, cos_u) + np.maximum(0.0, cos_v)
+    sharpness_2hop = np.maximum(0.0, cos_u2) + np.maximum(0.0, cos_v2)
+    angular_penalty = 1.0 + 1.8 * sharpness_1hop + 0.6 * sharpness_2hop
+
+    # Relative edge length penalty using robust statistics
+    median_tour_len = np.median(d_uv)
+    mean_tour_len = np.mean(d_uv)
+    scale_len = 0.5 * (median_tour_len + mean_tour_len) + 1e-8
+    relative_length = d_uv / scale_len
+    length_penalty = 1.0 / (1.0 + np.exp(-3.5 * (relative_length - 1.1)))
+
+    # Local neighborhood density: penalize jagged steps even more in crowded areas
+    k_nn = min(5, n - 1)
+    # Partition for efficiency instead of full sort
+    nn_part = np.partition(edge_distance, k_nn, axis=1)[:, 1:k_nn + 1]
+    local_scale = np.mean(nn_part, axis=1) + 1e-8
+    avg_local_scale = 0.5 * (local_scale[u_idx] + local_scale[v_idx])
+    density_stress = np.clip(d_uv / avg_local_scale, 0.5, 3.0)
+
+    # Guided frequency damping: lower damping for rare edges, higher for heavily cycled edges
+    usage = edge_n_used[u_idx, v_idx]
+    usage_factor = 1.0 / (1.0 + 0.35 * usage)
+
+    # Base penalty combination
+    penalty = (
+        d_uv * 0.15 *
+        angular_penalty *
+        (0.7 * length_penalty + 0.3) *
+        density_stress *
+        usage_factor
+    )
+
+    # Top quartile edge amplification to break stubborn long-edge bottlenecks
+    q75 = np.percentile(d_uv, 75)
+    penalty = np.where(d_uv >= q75, penalty * 1.35, penalty)
+
+    # Symmetric matrix update
+    np.add.at(updated_edge_distance, (u_idx, v_idx), penalty)
+    np.add.at(updated_edge_distance, (v_idx, u_idx), penalty)
+
+    return updated_edge_distance
+# ===== Eval Output =====
+[*] Running ...
+[*] mode=val, data=/home/ducanh/projects/EAs_project/MoH/problems/tsp_gls/data/val/val_instance_data_sol_200.pkl, seed=0, n_instances=8
+[*] instance_indices=[6, 9, 0, 2, 4, 3, 5, 1]
+[*] instance 6: obj=10.6574, gap=2.0250
+[*] instance 9: obj=10.9521, gap=2.7111
+[*] instance 0: obj=11.4240, gap=4.9448
+[*] instance 2: obj=11.1580, gap=1.9201
+[*] instance 4: obj=10.9993, gap=1.4024
+[*] instance 3: obj=10.7784, gap=1.6649
+[*] instance 5: obj=11.1675, gap=2.6087
+[*] instance 1: obj=11.3493, gap=2.9486
+[*] ave_gap on size 200: 2.528199230222852
+2.528199230222852

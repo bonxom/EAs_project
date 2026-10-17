@@ -1,0 +1,66 @@
+import numpy as np
+
+def update_edge_distance(edge_distance, local_opt_tour, edge_n_used):
+    updated_edge_distance = np.copy(edge_distance)
+    n = len(local_opt_tour)
+    u_idx = np.asarray(local_opt_tour)
+    v_idx = np.roll(u_idx, -1)
+    w_idx = np.roll(u_idx, 1)
+
+    # Decayed frequency memory
+    edge_n_used *= 0.95
+
+    tour_dists = edge_distance[u_idx, v_idx]
+    pred_dists = edge_distance[w_idx, u_idx]
+    tour_used = edge_n_used[u_idx, v_idx]
+
+    # Utility-guided edge selection via argpartition
+    utilities = tour_dists / (1.0 + tour_used)
+    k_penalize = max(1, int(np.ceil(0.10 * n)))
+    top_indices = np.argpartition(utilities, -k_penalize)[-k_penalize:]
+
+    for idx in top_indices:
+        u, v = u_idx[idx], v_idx[idx]
+        edge_n_used[u, v] += 1.0
+        edge_n_used[v, u] += 1.0
+
+    mean_tour_dist = np.mean(tour_dists) + 1e-12
+    updated_tour_used = edge_n_used[u_idx, v_idx]
+    overlap_ratio = np.mean(updated_tour_used > 1.0)
+    stagnation_factor = 1.0 + 1.5 * overlap_ratio
+
+    # Structural tension and irreplaceability along the tour
+    skip_dists = edge_distance[w_idx, v_idx]
+    chord_base = skip_dists + 1e-12
+    incident_sum = pred_dists + tour_dists
+    zigzag_tension = incident_sum / chord_base
+    norm_tension = zigzag_tension / (np.mean(zigzag_tension) + 1e-12)
+
+    replacement_ratio = skip_dists / (tour_dists + 1e-12)
+    norm_irreplaceability = replacement_ratio / (np.mean(replacement_ratio) + 1e-12)
+
+    # Vectorized topological incident usage entropy across all edges per endpoint
+    tot_node_used = np.sum(edge_n_used, axis=1) + 1e-12
+    norm_edge_used = edge_n_used / tot_node_used[:, None]
+    log_norm = np.log2(norm_edge_used + 1e-12)
+    node_entropy = -np.sum(norm_edge_used * log_norm, axis=1)
+    max_possible_entropy = np.log2(n) + 1e-12
+    norm_node_entropy = node_entropy / max_possible_entropy
+
+    base_penalty_scale = 0.25 * mean_tour_dist * stagnation_factor
+
+    for idx in top_indices:
+        u, v = u_idx[idx], v_idx[idx]
+        strain_mod = 0.5 * (norm_tension[idx] + norm_tension[(idx + 1) % n])
+        irreplaceability_mod = 0.5 * (norm_irreplaceability[idx] + norm_irreplaceability[(idx + 1) % n])
+        entropy_mod = 0.5 * (norm_node_entropy[u] + norm_node_entropy[v])
+        rel_len = tour_dists[idx] / mean_tour_dist
+
+        modulation = 1.0 + 0.35 * rel_len + 0.25 * strain_mod + 0.20 * entropy_mod - 0.25 * irreplaceability_mod
+        modulation = max(0.4, modulation)
+
+        penalty = base_penalty_scale * modulation * edge_n_used[u, v]
+        updated_edge_distance[u, v] += penalty
+        updated_edge_distance[v, u] += penalty
+
+    return updated_edge_distance

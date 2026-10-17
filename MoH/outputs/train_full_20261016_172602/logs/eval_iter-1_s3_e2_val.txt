@@ -1,0 +1,70 @@
+# ===== Heuristic Code =====
+#{Key idea: Penalize tour edges inversely proportional to their bottleneck bridge scores to protect sparse critical bridges and aggressively force topological diversification within dense local clusters.}#
+
+import numpy as np
+
+def update_edge_distance(edge_distance, local_opt_tour, edge_n_used):
+    updated_edge_distance = np.copy(edge_distance)
+    n = len(local_opt_tour)
+    if n < 3:
+        return updated_edge_distance
+
+    u = local_opt_tour
+    v = np.roll(local_opt_tour, -1)
+
+    tour_lens = edge_distance[u, v]
+    usage = edge_n_used[u, v]
+
+    # Estimate local density around each node using k-nearest neighbor distances
+    k = min(8, n - 1)
+    k_nn_dists = np.partition(edge_distance, k, axis=1)[:, 1:k]
+    node_scale = np.mean(k_nn_dists, axis=1) + 1e-6
+    cluster_scale = 0.5 * (node_scale[u] + node_scale[v])
+
+    # Bridging ratio: long edges relative to local cluster density are structural bridges
+    bridging_ratio = tour_lens / cluster_scale
+
+    # Inverse bottleneck score: protect long inter-cluster bridges, penalize sub-optimal edges inside dense clusters
+    bridge_protection = 1.0 / (1.0 + np.exp(bridging_ratio - 1.5))
+
+    # 2-hop local tour context (rel_local): edge length relative to immediate predecessor and successor edges
+    p = np.roll(local_opt_tour, 1)
+    w = np.roll(local_opt_tour, -2)
+    local_context = 0.5 * (edge_distance[p, u] + edge_distance[v, w]) + 1e-6
+    rel_local = tour_lens / local_context
+
+    # Global scale normalization
+    mean_len = np.mean(tour_lens) + 1e-6
+    rel_global = tour_lens / mean_len
+
+    # Standard utility scaled inversely by historical edge usage (GLS style)
+    usage_attenuation = 1.0 / (1.0 + 0.4 * usage)
+
+    # Combined penalty prioritization score
+    priority_score = (0.5 * rel_local + 0.5 * rel_global) * (0.3 + 0.7 * bridge_protection)
+
+    # Dynamic thresholding: focus penalties on top candidates for diversification
+    threshold = np.percentile(priority_score, 65.0)
+    penalties = priority_score * usage_attenuation * (mean_len * 0.15)
+
+    boost_mask = priority_score >= threshold
+    penalties[boost_mask] *= 1.35
+
+    np.add.at(updated_edge_distance, (u, v), penalties)
+    np.add.at(updated_edge_distance, (v, u), penalties)
+
+    return updated_edge_distance
+# ===== Eval Output =====
+[*] Running ...
+[*] mode=val, data=/home/ducanh/projects/EAs_project/MoH/problems/tsp_gls/data/val/val_instance_data_sol_200.pkl, seed=0, n_instances=8
+[*] instance_indices=[6, 9, 0, 2, 4, 3, 5, 1]
+[*] instance 6: obj=10.8195, gap=3.5775
+[*] instance 9: obj=10.9597, gap=2.7825
+[*] instance 0: obj=11.4240, gap=4.9448
+[*] instance 2: obj=11.2182, gap=2.4702
+[*] instance 4: obj=11.1115, gap=2.4375
+[*] instance 3: obj=10.8628, gap=2.4615
+[*] instance 5: obj=11.2230, gap=3.1189
+[*] instance 1: obj=11.4922, gap=4.2453
+[*] ave_gap on size 200: 3.2547443011856387
+3.2547443011856387

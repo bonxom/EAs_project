@@ -1,0 +1,81 @@
+{
+  "code_sha256": "aa45e039cbeb425b9a98876b680aa67a6c82a1b37e20c57b507401bb3928fd4b",
+  "idea": "Guided Local Search edge distance updating with asymmetric rank-aware regret estimation using dynamic harmonic means of non-tour alternatives and stagnation-adaptive cluster penalties.",
+  "selection_metadata": {
+    "early_stop_reason": null,
+    "evaluation_count": 48,
+    "initialization": {
+      "accepted": 5,
+      "attempts": 5,
+      "partial": false,
+      "requested": 5
+    },
+    "iteration_errors": [],
+    "iterations_completed": 10,
+    "reference_code_hashes": [
+      "00bbc95ef7762f94c7419c28b6b1ed29d42715aa711c08cfbbe9b8db65b4c9fb",
+      "7308f07d4ebfb4ea8900a0ca224cb8b6eb5bd685887bc09c813fb4b57b721eec"
+    ],
+    "reference_source_sizes": [
+      100,
+      200
+    ],
+    "snapshots": [
+      "/home/ducanh/projects/EAs_project/MoH/outputs/deploy_runD_20261016_202507/populations/tsp500/iter_000.json",
+      "/home/ducanh/projects/EAs_project/MoH/outputs/deploy_runD_20261016_202507/populations/tsp500/iter_001.json",
+      "/home/ducanh/projects/EAs_project/MoH/outputs/deploy_runD_20261016_202507/populations/tsp500/iter_002.json",
+      "/home/ducanh/projects/EAs_project/MoH/outputs/deploy_runD_20261016_202507/populations/tsp500/iter_003.json",
+      "/home/ducanh/projects/EAs_project/MoH/outputs/deploy_runD_20261016_202507/populations/tsp500/iter_004.json",
+      "/home/ducanh/projects/EAs_project/MoH/outputs/deploy_runD_20261016_202507/populations/tsp500/iter_005.json",
+      "/home/ducanh/projects/EAs_project/MoH/outputs/deploy_runD_20261016_202507/populations/tsp500/iter_006.json",
+      "/home/ducanh/projects/EAs_project/MoH/outputs/deploy_runD_20261016_202507/populations/tsp500/iter_007.json",
+      "/home/ducanh/projects/EAs_project/MoH/outputs/deploy_runD_20261016_202507/populations/tsp500/iter_008.json",
+      "/home/ducanh/projects/EAs_project/MoH/outputs/deploy_runD_20261016_202507/populations/tsp500/iter_009.json"
+    ],
+    "validation": {
+      "code_sha256": "aa45e039cbeb425b9a98876b680aa67a6c82a1b37e20c57b507401bb3928fd4b",
+      "dataset_sha256": "7a9722230b1adf8bfde9a4fe27944f3adfd0bd4a96a2317a5b6720349a53d25b",
+      "elapsed_seconds": 22.02448951399856,
+      "error": null,
+      "failures": 0,
+      "indices": [
+        6,
+        9,
+        0,
+        2,
+        4,
+        3,
+        5,
+        1
+      ],
+      "mean_gap_pct": 1.1941211791116317,
+      "mode": "val",
+      "size": 500,
+      "status": "ok",
+      "stdout_path": "/home/ducanh/projects/EAs_project/MoH/outputs/deploy_runD_20261016_202507/evaluations/tsp500-val-5yfzrs6n/stdout.txt"
+    }
+  },
+  "size": 500,
+  "validation": {
+    "code_sha256": "aa45e039cbeb425b9a98876b680aa67a6c82a1b37e20c57b507401bb3928fd4b",
+    "dataset_sha256": "7a9722230b1adf8bfde9a4fe27944f3adfd0bd4a96a2317a5b6720349a53d25b",
+    "elapsed_seconds": 22.02448951399856,
+    "error": null,
+    "failures": 0,
+    "indices": [
+      6,
+      9,
+      0,
+      2,
+      4,
+      3,
+      5,
+      1
+    ],
+    "mean_gap_pct": 1.1941211791116317,
+    "mode": "val",
+    "size": 500,
+    "status": "ok",
+    "stdout_path": "/home/ducanh/projects/EAs_project/MoH/outputs/deploy_runD_20261016_202507/evaluations/tsp500-val-5yfzrs6n/stdout.txt"
+  }
+}

@@ -1,0 +1,106 @@
+# ===== Heuristic Code =====
+#{This algorithm implements a Pareto-ranked multi-criteria utility function evaluating raw cost, local k-nearest neighbor relative stretch, and historical edge frequency with an asymmetric stagnation-adaptive cooling schedule that smoothly shifts penalties from broad exploration to localized disruption of critical bottlenecks.}
+
+import numpy as np
+
+def update_edge_distance(edge_distance, local_opt_tour, edge_n_used):
+    # Step 1: Initialize copy of distance matrix to prevent direct modification
+    updated_edge_distance = np.copy(edge_distance)
+    n = len(local_opt_tour)
+    if n < 4:
+        return updated_edge_distance
+
+    # Step 2: Extract current tour edges and associated metrics
+    u_idx = np.array(local_opt_tour, dtype=np.intp)
+    v_idx = np.roll(u_idx, -1)
+    costs = edge_distance[u_idx, v_idx].astype(np.float64)
+    used = edge_n_used[u_idx, v_idx].astype(np.float64)
+
+    # Step 3: Compute Criterion 1 - Normalized raw cost
+    c_min = np.min(costs)
+    c_max = np.max(costs)
+    norm_cost = (costs - c_min) / (c_max - c_min + 1e-12)
+
+    # Step 4: Compute Criterion 2 - Relative cost over k-NN baseline
+    k = max(2, min(10, n - 1))
+    knn_costs = np.partition(edge_distance, k, axis=1)[:, 1:k + 1]
+    knn_mean = np.mean(knn_costs, axis=1)
+    baseline = 0.5 * (knn_mean[u_idx] + knn_mean[v_idx])
+    rel_stretch = costs / (baseline + 1e-12)
+    s_min = np.min(rel_stretch)
+    s_max = np.max(rel_stretch)
+    norm_stretch = (rel_stretch - s_min) / (s_max - s_min + 1e-12)
+
+    # Step 5: Compute Criterion 3 - Recency/frequency ratio
+    u_min = np.min(used)
+    u_max = np.max(used)
+    norm_used = (used - u_min) / (u_max - u_min + 1e-12)
+
+    # Step 6: Non-dominated Pareto ranking across the three criteria
+    criteria = np.column_stack([norm_cost, norm_stretch, norm_used])
+    dominance_counts = np.zeros(n, dtype=np.float64)
+    for i in range(n):
+        diffs = criteria[i] - criteria
+        dominates = np.all(diffs >= 0.0, axis=1) & np.any(diffs > 0.0, axis=1)
+        dominance_counts[i] = np.sum(dominates)
+
+    # Step 7: Multi-criteria composite utility calculation
+    max_dom = np.max(dominance_counts) + 1e-12
+    pareto_score = dominance_counts / max_dom
+    utility = 0.45 * norm_cost + 0.35 * norm_stretch + 0.20 * pareto_score
+
+    # Step 8: Asymmetric stagnation-aware cooling parameter estimation
+    tour_avg_used = np.mean(used)
+    stagnation_factor = np.tanh(tour_avg_used / 6.0)
+
+    # Shift percentile threshold from broad exploration (top 25%) to sharp disruption (top 5%)
+    top_pct = 25.0 - (20.0 * stagnation_factor)
+    threshold = np.percentile(utility, 100.0 - top_pct)
+
+    penalize_mask = utility >= threshold
+    if not np.any(penalize_mask):
+        penalize_mask = utility >= np.median(utility)
+
+    # Step 9: Asymmetric penalty calculation
+    p_u = u_idx[penalize_mask]
+    p_v = v_idx[penalize_mask]
+    p_costs = costs[penalize_mask]
+    p_used = used[penalize_mask]
+    p_util = utility[penalize_mask]
+
+    # Penalty intensity sharpens as stagnation increases
+    alpha = 0.20 + (0.50 * stagnation_factor)
+    penalty_scaling = 1.0 + (p_util / (np.max(utility) + 1e-12))
+    penalties = alpha * (p_costs / np.sqrt(p_used + 1.0)) * penalty_scaling
+
+    # Apply symmetric penalties to selected edges
+    updated_edge_distance[p_u, p_v] += penalties
+    updated_edge_distance[p_v, p_u] += penalties
+
+    # Step 10: Targeted incentive decay for promising unvisited incident edges
+    penalized_nodes = np.unique(np.concatenate((p_u, p_v)))
+    decay_ratio = 0.015 * (1.0 - 0.5 * stagnation_factor)
+    for u in penalized_nodes:
+        unvisited = (edge_n_used[u] == 0)
+        unvisited[u] = False
+        if np.any(unvisited):
+            current_vals = updated_edge_distance[u, unvisited]
+            reduction = current_vals * decay_ratio
+            updated_edge_distance[u, unvisited] -= reduction
+            updated_edge_distance[unvisited, u] -= reduction
+
+    return updated_edge_distance
+# ===== Eval Output =====
+[*] Running ...
+[*] mode=val, data=/home/ducanh/projects/EAs_project/MoH/problems/tsp_gls/data/val/val_instance_data_sol_50.pkl, seed=0, n_instances=8
+[*] instance_indices=[6, 9, 0, 2, 4, 3, 5, 1]
+[*] instance 6: obj=5.7136, gap=0.5983
+[*] instance 9: obj=6.0217, gap=0.9695
+[*] instance 0: obj=5.8546, gap=1.3193
+[*] instance 2: obj=5.8071, gap=0.0000
+[*] instance 4: obj=5.5821, gap=3.4387
+[*] instance 3: obj=5.8778, gap=2.0999
+[*] instance 5: obj=5.6187, gap=0.0000
+[*] instance 1: obj=5.3071, gap=2.7501
+[*] ave_gap on size 50: 1.396984915234617
+1.396984915234617

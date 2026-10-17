@@ -1,0 +1,97 @@
+# ===== Heuristic Code =====
+#{We replace uniform static edge memory decay with entropy-governed anisotropic decay that dynamically modulates edge persistence based on local structural churn and entrenchment, followed by geometric triplet inefficiency penalties and shortcut discounting.}#
+
+import numpy as np
+
+def update_edge_distance(edge_distance, local_opt_tour, edge_n_used):
+    updated_edge_distance = np.copy(edge_distance)
+    num_nodes = len(local_opt_tour)
+    tour = np.asarray(local_opt_tour)
+
+    u_idx = tour
+    v_idx = np.roll(tour, -1)
+    w_idx = np.roll(tour, -2)
+
+    # Anisotropic memory decay: differentiate entrenched tour edges from peripheral/churning edges
+    # Compute active tour edge indicator
+    active_mask = np.zeros_like(edge_n_used, dtype=bool)
+    active_mask[u_idx, v_idx] = True
+    active_mask[v_idx, u_idx] = True
+
+    # Measure structural entrenchment via active usage distribution
+    tour_usages = edge_n_used[u_idx, v_idx]
+    mean_tour_usage = np.mean(tour_usages)
+
+    # High churn / non-active edges decay faster (0.91), while entrenched active tour edges persist (0.975)
+    # Peripheral edges with usage but outside current tour evaporate rapidly to prevent false memory traps
+    decay_matrix = np.full_like(edge_n_used, 0.91)
+
+    # Entrenchment factor smoothly interpolates decay between 0.94 and 0.985 for active edges
+    entrenchment = np.clip(tour_usages / (mean_tour_usage + 1e-6), 0.5, 2.0)
+    tour_decay = 0.94 + 0.025 * (entrenchment - 0.5) / 1.5
+
+    decay_matrix[u_idx, v_idx] = tour_decay
+    decay_matrix[v_idx, u_idx] = tour_decay
+
+    edge_n_used *= decay_matrix
+
+    # Core Geometric Triplet Evaluation
+    d_uv = edge_distance[u_idx, v_idx]
+    d_vw = edge_distance[v_idx, w_idx]
+    d_uw = edge_distance[u_idx, w_idx]
+
+    detour_ratio = (d_uv + d_vw) / (d_uw + 1e-8)
+    denom = 2.0 * d_uv * d_vw + 1e-8
+    cos_turn = (d_uv**2 + d_vw**2 - d_uw**2) / denom
+    cos_turn = np.clip(cos_turn, -1.0, 1.0)
+    acute_deficit = 1.0 - cos_turn
+    geom_inefficiency = detour_ratio * (1.0 + 0.5 * acute_deficit)
+
+    base_dist = d_uv
+    base_freq = edge_n_used[u_idx, v_idx]
+    local_geom_factor = 0.5 * (geom_inefficiency + np.roll(geom_inefficiency, 1))
+
+    # Compound edge utility scaling
+    utilities = (base_dist / (1.0 + base_freq)) * (1.0 + 0.35 * local_geom_factor)
+
+    k = max(1, int(np.ceil(0.14 * num_nodes)))
+    top_k_indices = np.argsort(utilities)[-k:]
+    global_mean_dist = np.mean(edge_distance)
+    adaptive_lambda = 0.30 * global_mean_dist
+
+    # Penalize inefficient tour edges
+    for idx in top_k_indices:
+        u, v = u_idx[idx], v_idx[idx]
+        edge_n_used[u, v] += 1.0
+        edge_n_used[v, u] += 1.0
+        freq_penalty = 1.0 + np.log1p(edge_n_used[u, v])
+        geom_weight = 1.0 + 0.5 * local_geom_factor[idx]
+        penalty = adaptive_lambda * freq_penalty * geom_weight
+        updated_edge_distance[u, v] += penalty
+        updated_edge_distance[v, u] += penalty
+
+    # Asymmetric shortcut incentive on high detour regions
+    high_detour_indices = np.argsort(detour_ratio)[-k:]
+    for idx in high_detour_indices:
+        u, w = u_idx[idx], w_idx[idx]
+        freq = edge_n_used[u, w]
+        if freq < 1.0:
+            discount = 0.10 * global_mean_dist * (1.0 / (1.0 + freq))
+            updated_edge_distance[u, w] = max(1e-6, updated_edge_distance[u, w] - discount)
+            updated_edge_distance[w, u] = updated_edge_distance[u, w]
+
+    return updated_edge_distance
+# ===== Eval Output =====
+[*] Running ...
+[*] mode=val, data=/home/ducanh/projects/EAs_project/MoH/problems/tsp_gls/data/val/val_instance_data_sol_100.pkl, seed=0, n_instances=8
+[*] instance_indices=[6, 9, 0, 2, 4, 3, 5, 1]
+[*] instance 6: obj=7.7599, gap=0.0039
+[*] instance 9: obj=8.0726, gap=0.3635
+[*] instance 0: obj=8.0001, gap=0.0000
+[*] instance 2: obj=8.0746, gap=0.0094
+[*] instance 4: obj=7.8131, gap=0.0000
+[*] instance 3: obj=7.3713, gap=0.0000
+[*] instance 5: obj=7.6365, gap=0.0000
+[*] instance 1: obj=7.5570, gap=0.0000
+[*] ave_gap on size 100: 0.047100143001396755
+0.047100143001396755

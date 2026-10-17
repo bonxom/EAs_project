@@ -1,0 +1,88 @@
+# ===== Heuristic Code =====
+#{This algorithm replaces metric-distorting shortcut discounts with an entropy-rigidity and detour-inefficiency modulated GLS penalty that selectively breaks persistent topological hubs while penalizing inefficient tour segments.}
+
+import numpy as np
+
+def update_edge_distance(edge_distance, local_opt_tour, edge_n_used):
+    updated_edge_distance = np.copy(edge_distance)
+    num_nodes = len(local_opt_tour)
+    tour = np.asarray(local_opt_tour)
+
+    u_idx = tour
+    v_idx = np.roll(tour, -1)
+    w_idx = np.roll(tour, -2)
+
+    # Trace memory decay
+    edge_n_used *= 0.96
+
+    # Geometric turn and detour evaluation
+    d_uv = edge_distance[u_idx, v_idx]
+    d_vw = edge_distance[v_idx, w_idx]
+    d_uw = edge_distance[u_idx, w_idx]
+
+    detour_ratio = (d_uv + d_vw) / (d_uw + 1e-8)
+    denom = 2.0 * d_uv * d_vw + 1e-8
+    cos_turn = np.clip((d_uv**2 + d_vw**2 - d_uw**2) / denom, -1.0, 1.0)
+    acute_deficit = 1.0 - cos_turn
+    geom_inefficiency = detour_ratio * (1.0 + 0.5 * acute_deficit)
+    local_geom_factor = 0.5 * (geom_inefficiency + np.roll(geom_inefficiency, 1))
+
+    # Candidate edge utilities
+    base_dist = d_uv
+    base_freq = edge_n_used[u_idx, v_idx]
+    utilities = (base_dist / (1.0 + base_freq)) * (1.0 + 0.35 * local_geom_factor)
+
+    k = max(1, int(np.ceil(0.14 * num_nodes)))
+    top_k_indices = np.argsort(utilities)[-k:]
+
+    # Update edge usage counters
+    for idx in top_k_indices:
+        u, v = u_idx[idx], v_idx[idx]
+        edge_n_used[u, v] += 1.0
+        edge_n_used[v, u] += 1.0
+
+    # Calculate node selection entropy to assess topological rigidity
+    row_sum = np.sum(edge_n_used, axis=1, keepdims=True) + 1e-12
+    p = edge_n_used / row_sum
+    # Safe entropy calculation: ignore zero probability entries
+    log_p = np.zeros_like(p)
+    mask = p > 1e-12
+    log_p[mask] = np.log(p[mask])
+    node_entropy = -np.sum(p * log_p, axis=1)
+    max_entropy = np.log(num_nodes) + 1e-12
+    entropy_rigidity = np.clip(1.0 - (node_entropy / max_entropy), 0.0, 1.0)
+
+    # Calculate stagnation factor from tour overlap
+    tour_usage = edge_n_used[u_idx, v_idx]
+    overlap_ratio = np.mean(tour_usage > 1.0)
+    stagnation_factor = 1.0 + np.tanh(overlap_ratio * 2.0)
+
+    global_mean_dist = np.mean(edge_distance)
+    adaptive_lambda = 0.25 * global_mean_dist * stagnation_factor
+
+    # Apply penalty modulated by geometry, frequency, and entropy rigidity
+    for idx in top_k_indices:
+        u, v = u_idx[idx], v_idx[idx]
+        freq_penalty = 1.0 + np.log1p(edge_n_used[u, v])
+        geom_weight = 1.0 + 0.4 * local_geom_factor[idx]
+        rigidity_mod = 1.0 + 0.6 * (entropy_rigidity[u] + entropy_rigidity[v])
+
+        penalty = adaptive_lambda * freq_penalty * geom_weight * rigidity_mod
+        updated_edge_distance[u, v] += penalty
+        updated_edge_distance[v, u] += penalty
+
+    return updated_edge_distance
+# ===== Eval Output =====
+[*] Running ...
+[*] mode=val, data=/home/ducanh/projects/EAs_project/MoH/problems/tsp_gls/data/val/val_instance_data_sol_100.pkl, seed=0, n_instances=8
+[*] instance_indices=[6, 9, 0, 2, 4, 3, 5, 1]
+[*] instance 6: obj=7.7599, gap=0.0039
+[*] instance 9: obj=8.0433, gap=0.0000
+[*] instance 0: obj=8.0001, gap=0.0000
+[*] instance 2: obj=8.0900, gap=0.1994
+[*] instance 4: obj=7.8131, gap=0.0000
+[*] instance 3: obj=7.3713, gap=0.0000
+[*] instance 5: obj=7.6365, gap=0.0000
+[*] instance 1: obj=7.5570, gap=0.0000
+[*] ave_gap on size 100: 0.025413318253522665
+0.025413318253522665

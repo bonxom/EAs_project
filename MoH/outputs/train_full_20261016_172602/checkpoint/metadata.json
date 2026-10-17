@@ -1,0 +1,147 @@
+{
+  "config": {
+    "heu": {
+      "_target_": "utils.llm_client.openai.OpenAIClient",
+      "base_url": "http://172.25.16.1:20128/v1",
+      "batch_size": 5,
+      "model": "ag/gemini-3.8-flash-low",
+      "temperature": 1.0
+    },
+    "max_eval_calls": 1000,
+    "meta": {
+      "_target_": "utils.llm_client.openai.OpenAIClient",
+      "base_url": "http://172.25.16.1:20128/v1",
+      "batch_size": 5,
+      "model": "ag/gemini-3.8-flash-low",
+      "temperature": 1.0
+    },
+    "n_iterations": 10,
+    "optimizer_timeout": 7200,
+    "pop_size": 10,
+    "problem": {
+      "description": "Solving Traveling Salesman Problem (TSP) via guided local search. TSP requires finding the shortest path that visits all given nodes and returns to the starting node.",
+      "func_name": "heuristics",
+      "obj_type": "min",
+      "problem_name": "tsp_gls",
+      "problem_size": [
+        20,
+        50,
+        100,
+        200
+      ],
+      "threshold": {
+        "100": 4,
+        "200": 5
+      }
+    },
+    "seed": 0,
+    "timeout": 90
+  },
+  "elite_artifacts": [
+    {
+      "path": "elites/tsp20.json",
+      "sha256": "7a10762140dbadf03324d9ab12f2785e83fe630813ab0f191aa6843d567eae5f",
+      "source_size": 20
+    },
+    {
+      "path": "elites/tsp50.json",
+      "sha256": "8dbd850d16b3be336ffe31c05f973352af109de542111a99f060d039a594b77e",
+      "source_size": 50
+    },
+    {
+      "path": "elites/tsp100.json",
+      "sha256": "e98b0e86c2359fe3136862b806a7e0986da704cea88a2131c12bcd4cd38d7e82",
+      "source_size": 100
+    },
+    {
+      "path": "elites/tsp200.json",
+      "sha256": "1973431c9bde1e2a94a6270241a2595f3c8c0afed6538dc7f362940bb0ba54d0",
+      "source_size": 200
+    }
+  ],
+  "optimizer": {
+    "path": "meta_optimizer.py",
+    "sha256": "f07aea9df0dbc18bf6ee84415652b1eb03c3db39d20a3e0526f27b31e12effb6"
+  },
+  "problem_name": "tsp_gls",
+  "schema_version": 1,
+  "seed": 0,
+  "source_run": "/home/ducanh/projects/EAs_project/MoH/outputs/train_full_20261016_172602",
+  "training_meta_utility": 0.035612740937071036,
+  "training_sizes": [
+    20,
+    50,
+    100,
+    200
+  ],
+  "validation_provenance": {
+    "100": {
+      "dataset_path": "/home/ducanh/projects/EAs_project/MoH/problems/tsp_gls/data/val/val_instance_data_sol_100.pkl",
+      "dataset_sha256": "a193640f1627f5287502176446f3764e009dec914f832cd8c35679813b833b53",
+      "indices": [
+        6,
+        9,
+        0,
+        2,
+        4,
+        3,
+        5,
+        1
+      ],
+      "n_instances": 8,
+      "seed": 0,
+      "status": "known"
+    },
+    "20": {
+      "dataset_path": "/home/ducanh/projects/EAs_project/MoH/problems/tsp_gls/data/val/val_instance_data_sol_20.pkl",
+      "dataset_sha256": "7e43a2d9e5efdcc12e2ae3dc8c427b23486e5572a97fde16b61a923eb0a0cb08",
+      "indices": [
+        6,
+        9,
+        0,
+        2,
+        4,
+        3,
+        5,
+        1
+      ],
+      "n_instances": 8,
+      "seed": 0,
+      "status": "known"
+    },
+    "200": {
+      "dataset_path": "/home/ducanh/projects/EAs_project/MoH/problems/tsp_gls/data/val/val_instance_data_sol_200.pkl",
+      "dataset_sha256": "2c1aa10c11390da173a2a1f6d6ce56102295422a3fb93ac69dbf214b89aa95e6",
+      "indices": [
+        6,
+        9,
+        0,
+        2,
+        4,
+        3,
+        5,
+        1
+      ],
+      "n_instances": 8,
+      "seed": 0,
+      "status": "known"
+    },
+    "50": {
+      "dataset_path": "/home/ducanh/projects/EAs_project/MoH/problems/tsp_gls/data/val/val_instance_data_sol_50.pkl",
+      "dataset_sha256": "a97b2121aa2dda10f55e8f6061240aac22a79f0b988d6fe52b6f04d32b99381a",
+      "indices": [
+        6,
+        9,
+        0,
+        2,
+        4,
+        3,
+        5,
+        1
+      ],
+      "n_instances": 8,
+      "seed": 0,
+      "status": "known"
+    }
+  }
+}

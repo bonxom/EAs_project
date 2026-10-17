@@ -1,0 +1,77 @@
+# ===== Heuristic Code =====
+#{A dual-metric filtered guided local search edge update metaheuristic that evaluates tour edge utility relative to localized k-NN sparsification thresholds, penalizing the highest-utility bottlenecks with frequency and cluster-density scaling to force structural diversification.}
+
+import numpy as np
+
+def update_edge_distance(edge_distance, local_opt_tour, edge_n_used):
+    # Create an independent copy of edge_distance to ensure matrix immutability
+    updated_edge_distance = np.copy(edge_distance)
+    n = len(local_opt_tour)
+    if n < 4:
+        return updated_edge_distance
+
+    # Extract consecutive edge endpoints from local_opt_tour
+    u_idx = np.asarray(local_opt_tour, dtype=np.intp)
+    v_idx = np.roll(u_idx, -1)
+
+    # Compute unpenalized tour edge lengths
+    tour_lengths = edge_distance[u_idx, v_idx]
+    mean_tour_len = np.mean(tour_lengths) + 1e-12
+
+    # Calculate local k-NN graph characteristics for sparsified candidate filtering
+    k_cand = min(20, max(2, n - 1))
+    # Partition to find k-th nearest neighbor distance without full sorting
+    k_smallest = np.partition(edge_distance, kth=k_cand, axis=1)[:, :k_cand + 1]
+    # Filter out self-loops (distance 0)
+    k_nn_dists = np.where(k_smallest > 1e-12, k_smallest, np.nan)
+    local_scale = np.nanmean(k_nn_dists, axis=1)
+    local_scale = np.where(np.isnan(local_scale) | (local_scale < 1e-12), mean_tour_len, local_scale)
+
+    # Dual-metric candidate filtering: ratio of edge length relative to local density
+    avg_node_scale = 0.5 * (local_scale[u_idx] + local_scale[v_idx])
+    rel_sparsity = tour_lengths / (avg_node_scale + 1e-12)
+
+    # Classical GLS edge utility: penalize long edges that haven't been over-penalized yet
+    # Utility = length / (1 + count)
+    usage = edge_n_used[u_idx, v_idx]
+    utilities = tour_lengths / (1.0 + usage)
+
+    # Modulate utility with local sparsity (edges that exceed local k-NN radius have higher utility to break)
+    adjusted_utility = utilities * (1.0 + np.tanh(rel_sparsity))
+
+    # Identify candidate edges exceeding utility threshold for guided penalty burst
+    max_util = np.max(adjusted_utility)
+    if max_util <= 1e-12:
+        return updated_edge_distance
+
+    # Select critical bottleneck edges (top quartile of adjusted utility)
+    util_threshold = np.percentile(adjusted_utility, 75.0)
+    penalize_mask = adjusted_utility >= util_threshold
+
+    # Calculate structural penalty magnitude: proportional to tour mean and frequency decay
+    base_step = 0.35 * mean_tour_len
+    penalty_values = base_step * (adjusted_utility / (max_util + 1e-12)) * (1.0 / (1.0 + 0.15 * usage))
+
+    # Apply penalties symmetrically only to selected high-utility candidate edges
+    selected_u = u_idx[penalize_mask]
+    selected_v = v_idx[penalize_mask]
+    selected_penalties = penalty_values[penalize_mask]
+
+    np.add.at(updated_edge_distance, (selected_u, selected_v), selected_penalties)
+    np.add.at(updated_edge_distance, (selected_v, selected_u), selected_penalties)
+
+    return updated_edge_distance
+# ===== Eval Output =====
+[*] Running ...
+[*] mode=val, data=/home/ducanh/projects/EAs_project/MoH/problems/tsp_gls/data/val/val_instance_data_sol_200.pkl, seed=0, n_instances=8
+[*] instance_indices=[6, 9, 0, 2, 4, 3, 5, 1]
+[*] instance 6: obj=10.6574, gap=2.0250
+[*] instance 9: obj=10.9597, gap=2.7825
+[*] instance 0: obj=11.4240, gap=4.9448
+[*] instance 2: obj=11.2182, gap=2.4702
+[*] instance 4: obj=11.1329, gap=2.6343
+[*] instance 3: obj=10.8628, gap=2.4615
+[*] instance 5: obj=11.2230, gap=3.1189
+[*] instance 1: obj=11.3493, gap=2.9486
+[*] ave_gap on size 200: 2.9232022148395793
+2.9232022148395793

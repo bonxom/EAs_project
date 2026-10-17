@@ -1,0 +1,61 @@
+# ===== Heuristic Code =====
+#{Guided Local Search memory paradigm computing explicit utility values U(e) = Cost(e) / (1 + Count(e)) on tour edges, selectively applying scaled penalties to the highest-utility features while globally decaying distance perturbations to prevent metric divergence and cycling.}#
+
+import numpy as np
+
+def update_edge_distance(edge_distance, local_opt_tour, edge_n_used):
+    updated_edge_distance = np.copy(edge_distance)
+    n = len(local_opt_tour)
+    if n <= 1:
+        return updated_edge_distance
+
+    u = local_opt_tour
+    v = np.roll(local_opt_tour, -1)
+
+    # Base cost and visitation counts of edges in the current local optimum
+    edge_costs = edge_distance[u, v]
+    edge_counts = edge_n_used[u, v]
+
+    # Guided Local Search utility calculation: U(e) = Cost(e) / (1 + Count(e))
+    utilities = edge_costs / (1.0 + edge_counts)
+
+    # Determine dynamic penalty scale based on tour cost characteristics
+    mean_cost = np.mean(edge_costs)
+    lambda_param = 0.3 * (mean_cost + 1e-6)
+
+    # Identify maximum-utility edges to penalize (top percentile / near-maximal utilities)
+    max_utility = np.max(utilities)
+    threshold = np.maximum(0.85 * max_utility, np.percentile(utilities, 75.0))
+    target_mask = utilities >= threshold
+
+    # Compute history-dependent penalties for selected edges
+    penalties = np.zeros(n, dtype=edge_distance.dtype)
+    penalties[target_mask] = lambda_param * (utilities[target_mask] / (max_utility + 1e-6))
+
+    # Apply global distance decay (evaporation) to prevent metric runaway and cycle trapping
+    # Uniform global decay toward original scale
+    decay_factor = 0.98
+    updated_edge_distance = updated_edge_distance * decay_factor
+
+    # Symmetrically inject the GLS penalties into the distance matrix
+    np.add.at(updated_edge_distance, (u, v), penalties)
+    np.add.at(updated_edge_distance, (v, u), penalties)
+
+    # Ensure self-distances remain zero
+    np.fill_diagonal(updated_edge_distance, 0.0)
+
+    return updated_edge_distance
+# ===== Eval Output =====
+[*] Running ...
+[*] mode=val, data=/home/ducanh/projects/EAs_project/MoH/problems/tsp_gls/data/val/val_instance_data_sol_200.pkl, seed=0, n_instances=8
+[*] instance_indices=[6, 9, 0, 2, 4, 3, 5, 1]
+[*] instance 6: obj=10.6573, gap=2.0244
+[*] instance 9: obj=10.9115, gap=2.3305
+[*] instance 0: obj=11.3640, gap=4.3939
+[*] instance 2: obj=11.2182, gap=2.4702
+[*] instance 4: obj=10.9787, gap=1.2128
+[*] instance 3: obj=10.7784, gap=1.6649
+[*] instance 5: obj=11.1718, gap=2.6487
+[*] instance 1: obj=11.3493, gap=2.9486
+[*] ave_gap on size 200: 2.461755807597571
+2.461755807597571

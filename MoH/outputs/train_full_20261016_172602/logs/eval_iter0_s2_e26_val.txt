@@ -1,0 +1,98 @@
+# ===== Heuristic Code =====
+#{Penalize inefficient tour edges by evaluating local triplet detour ratios and geometric angle deficits alongside guided local search utilities to selectively target crossed or convoluted segments while escaping local optima.}#
+
+import numpy as np
+
+def update_edge_distance(edge_distance, local_opt_tour, edge_n_used):
+    updated_edge_distance = np.copy(edge_distance)
+    num_nodes = len(local_opt_tour)
+    if num_nodes < 3:
+        return updated_edge_distance
+
+    u_idx = np.asarray(local_opt_tour)
+    v_idx = np.roll(u_idx, -1)
+    w_idx = np.roll(u_idx, -2)
+    prev_u_idx = np.roll(u_idx, 1)
+
+    # Decay historical edge usage to maintain recency
+    edge_n_used *= 0.95
+
+    # Base GLS edge utility: penalize long edges that have not been penalized heavily
+    dist_uv = edge_distance[u_idx, v_idx]
+    used_uv = edge_n_used[u_idx, v_idx]
+    base_utilities = dist_uv / (1.0 + used_uv)
+
+    # Geometric detour ratio: evaluates triangle inequality deficit / folding
+    # High (dist(u,v) + dist(v,w)) / dist(u,w) indicates detour or acute turning
+    dist_vw = edge_distance[v_idx, w_idx]
+    dist_uw = edge_distance[u_idx, w_idx]
+    forward_detour = (dist_uv + dist_vw) / (dist_uw + 1e-12)
+
+    dist_prev_u = edge_distance[prev_u_idx, u_idx]
+    dist_prev_v = edge_distance[prev_u_idx, v_idx]
+    backward_detour = (dist_prev_u + dist_uv) / (dist_prev_v + 1e-12)
+
+    # Detour factor for edge (u, v) based on its incident angles/triplets
+    edge_detour_ratio = 0.5 * (forward_detour + backward_detour)
+    norm_detour = edge_detour_ratio / (np.max(edge_detour_ratio) + 1e-12)
+
+    # Combine GLS utility with geometric deficit to target path crossings and sharp bends
+    combined_utilities = base_utilities * (1.0 + 1.2 * norm_detour)
+
+    # Select top candidates based on the geometric-guided utility
+    k = max(1, int(np.ceil(0.15 * num_nodes)))
+    top_k_indices = np.argsort(combined_utilities)[-k:]
+
+    # Update edge usage for chosen edges
+    for idx in top_k_indices:
+        u, v = u_idx[idx], v_idx[idx]
+        edge_n_used[u, v] += 1.0
+        edge_n_used[v, u] += 1.0
+
+    # Stagnation factor and spatial context
+    tour_usage = edge_n_used[u_idx, v_idx]
+    avg_tour_usage = np.mean(tour_usage)
+    max_used = np.max(edge_n_used) + 1e-12
+    overlap_ratio = np.mean(tour_usage > 1.0)
+    stagnation_factor = 1.0 + 1.5 * overlap_ratio + (avg_tour_usage / max_used)
+
+    node_mean_dist = np.mean(edge_distance, axis=1)
+    global_mean_dist = np.mean(node_mean_dist)
+    adaptive_lambda = (0.15 + 0.25 * np.tanh(stagnation_factor)) * global_mean_dist
+
+    # Structural centrality and entropy rigidity
+    total_node_usage = np.sum(edge_n_used, axis=1, keepdims=True) + 1e-12
+    usage_probs = edge_n_used / total_node_usage
+    node_entropy = -np.sum(usage_probs * np.log(usage_probs + 1e-12), axis=1)
+    max_entropy = np.log(num_nodes) + 1e-12
+    entropy_rigidity = 1.0 - (node_entropy / max_entropy)
+
+    node_centrality = np.sum(edge_n_used, axis=1)
+    norm_centrality = node_centrality / (np.max(node_centrality) + 1e-12)
+
+    # Apply modulated penalties selectively
+    for idx in top_k_indices:
+        u, v = u_idx[idx], v_idx[idx]
+        c_mod = 0.20 * (norm_centrality[u] + norm_centrality[v])
+        r_mod = 0.20 * (entropy_rigidity[u] + entropy_rigidity[v])
+        g_mod = 0.40 * norm_detour[idx]
+        modulation = 1.0 + c_mod + r_mod + g_mod
+        penalty = adaptive_lambda * edge_n_used[u, v] * modulation
+        updated_edge_distance[u, v] += penalty
+        updated_edge_distance[v, u] += penalty
+
+    return updated_edge_distance
+# ===== Eval Output =====
+[*] Running ...
+[*] mode=val, data=/home/ducanh/projects/EAs_project/MoH/problems/tsp_gls/data/val/val_instance_data_sol_100.pkl, seed=0, n_instances=8
+[*] instance_indices=[6, 9, 0, 2, 4, 3, 5, 1]
+[*] instance 6: obj=7.7599, gap=0.0039
+[*] instance 9: obj=8.0501, gap=0.0846
+[*] instance 0: obj=8.0001, gap=0.0000
+[*] instance 2: obj=8.0907, gap=0.2088
+[*] instance 4: obj=7.8131, gap=0.0000
+[*] instance 3: obj=7.3713, gap=0.0000
+[*] instance 5: obj=7.6365, gap=0.0000
+[*] instance 1: obj=7.5570, gap=0.0000
+[*] ave_gap on size 100: 0.037163398088260746
+0.037163398088260746

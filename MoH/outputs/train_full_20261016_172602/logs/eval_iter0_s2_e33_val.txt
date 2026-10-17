@@ -1,0 +1,127 @@
+# ===== Heuristic Code =====
+#{A multi-scale guided perturbation strategy that penalizes tangled edges using 2-hop to 4-hop cumulative detour ratios and polygon slacks while discounting promising multi-hop leapfrog shortcuts with frequency-decay regularisation.}#
+
+import numpy as np
+
+def update_edge_distance(edge_distance, local_opt_tour, edge_n_used):
+    updated_edge_distance = np.copy(edge_distance)
+    num_nodes = len(local_opt_tour)
+    tour = np.asarray(local_opt_tour)
+
+    # 0. Decay edge memory
+    edge_n_used *= 0.96
+    global_mean_dist = float(np.mean(edge_distance))
+
+    # Node sequences for 1-hop, 2-hop, 3-hop, and 4-hop horizons
+    n0 = tour
+    n1 = np.roll(tour, -1)
+    n2 = np.roll(tour, -2)
+    n3 = np.roll(tour, -3)
+    n4 = np.roll(tour, -4)
+
+    # 1-hop edge lengths
+    d01 = edge_distance[n0, n1]
+    d12 = edge_distance[n1, n2]
+    d23 = edge_distance[n2, n3]
+    d34 = edge_distance[n3, n4]
+
+    # Leapfrog direct chord lengths
+    d02 = edge_distance[n0, n2]
+    d03 = edge_distance[n0, n3]
+    d04 = edge_distance[n0, n4]
+
+    # Multi-hop detour ratios (cumulative path cost vs direct leapfrog chord)
+    detour_2hop = (d01 + d12) / (d02 + 1e-8)
+    detour_3hop = (d01 + d12 + d23) / (d03 + 1e-8)
+    detour_4hop = (d01 + d12 + d23 + d34) / (d04 + 1e-8)
+
+    # Multi-scale geometric inefficiency metric
+    # Inefficient sub-paths exhibit high detour ratios across multi-hop windows
+    geom_inefficiency = (
+        0.50 * detour_2hop + 
+        0.30 * detour_3hop + 
+        0.20 * detour_4hop
+    )
+
+    # Angular acute deficit on consecutive triplets
+    denom = 2.0 * d01 * d12 + 1e-8
+    cos_turn = (d01**2 + d12**2 - d02**2) / denom
+    cos_turn = np.clip(cos_turn, -1.0, 1.0)
+    acute_deficit = 1.0 - cos_turn
+
+    combined_geom = geom_inefficiency * (1.0 + 0.35 * acute_deficit)
+
+    # Edge-centric utility: smooth the geometric tangle across adjacent edges
+    local_geom_factor = (
+        0.4 * combined_geom + 
+        0.3 * np.roll(combined_geom, 1) + 
+        0.3 * np.roll(combined_geom, 2)
+    )
+
+    base_dist = d01
+    base_freq = edge_n_used[n0, n1]
+    utilities = (base_dist / (1.0 + base_freq)) * (1.0 + 0.35 * local_geom_factor)
+
+    # Select top edges to penalize
+    k = max(1, int(np.ceil(0.14 * num_nodes)))
+    top_k_indices = np.argsort(utilities)[-k:]
+    adaptive_lambda = 0.30 * global_mean_dist
+
+    for idx in top_k_indices:
+        u, v = n0[idx], n1[idx]
+        edge_n_used[u, v] += 1.0
+        edge_n_used[v, u] += 1.0
+        freq_penalty = 1.0 + np.log1p(edge_n_used[u, v])
+        geom_weight = 1.0 + 0.5 * local_geom_factor[idx]
+        penalty = adaptive_lambda * freq_penalty * geom_weight
+        updated_edge_distance[u, v] += penalty
+        updated_edge_distance[v, u] += penalty
+
+    # Multi-node leapfrog shortcuts: reward high detour bypasses across 2-hop, 3-hop, and 4-hop chords
+    k_short = max(1, k // 2)
+
+    # 2-hop shortcuts
+    top_detour_2 = np.argsort(detour_2hop)[-k_short:]
+    for idx in top_detour_2:
+        u, w = n0[idx], n2[idx]
+        freq = edge_n_used[u, w]
+        if freq < 1.0:
+            discount = 0.08 * global_mean_dist / (1.0 + freq)
+            updated_edge_distance[u, w] = max(1e-6, updated_edge_distance[u, w] - discount)
+            updated_edge_distance[w, u] = updated_edge_distance[u, w]
+
+    # 3-hop shortcuts (bypassing 2 intermediate nodes)
+    top_detour_3 = np.argsort(detour_3hop)[-k_short:]
+    for idx in top_detour_3:
+        u, w = n0[idx], n3[idx]
+        freq = edge_n_used[u, w]
+        if freq < 1.0:
+            discount = 0.10 * global_mean_dist / (1.0 + freq)
+            updated_edge_distance[u, w] = max(1e-6, updated_edge_distance[u, w] - discount)
+            updated_edge_distance[w, u] = updated_edge_distance[u, w]
+
+    # 4-hop shortcuts (bypassing 3 intermediate nodes)
+    top_detour_4 = np.argsort(detour_4hop)[-k_short:]
+    for idx in top_detour_4:
+        u, w = n0[idx], n4[idx]
+        freq = edge_n_used[u, w]
+        if freq < 1.0:
+            discount = 0.12 * global_mean_dist / (1.0 + freq)
+            updated_edge_distance[u, w] = max(1e-6, updated_edge_distance[u, w] - discount)
+            updated_edge_distance[w, u] = updated_edge_distance[u, w]
+
+    return updated_edge_distance
+# ===== Eval Output =====
+[*] Running ...
+[*] mode=val, data=/home/ducanh/projects/EAs_project/MoH/problems/tsp_gls/data/val/val_instance_data_sol_100.pkl, seed=0, n_instances=8
+[*] instance_indices=[6, 9, 0, 2, 4, 3, 5, 1]
+[*] instance 6: obj=7.7596, gap=0.0000
+[*] instance 9: obj=8.0699, gap=0.3302
+[*] instance 0: obj=8.0001, gap=0.0000
+[*] instance 2: obj=8.1475, gap=0.9114
+[*] instance 4: obj=7.8131, gap=0.0000
+[*] instance 3: obj=7.3713, gap=0.0000
+[*] instance 5: obj=7.6365, gap=0.0000
+[*] instance 1: obj=7.5570, gap=0.0000
+[*] ave_gap on size 100: 0.155204790200697
+0.155204790200697

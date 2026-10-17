@@ -1,0 +1,100 @@
+# ===== Heuristic Code =====
+#{Penalize inefficient and frequently visited tour edges using augmented GLS while applying a proactive Ruin-and-Recreate bridge operator that discounts promising k-nearest neighbor chords connecting boundary nodes across high-detour subpaths to establish an artificial recombination gradient.}#
+
+import numpy as np
+
+def update_edge_distance(edge_distance, local_opt_tour, edge_n_used):
+    updated_edge_distance = np.copy(edge_distance)
+    num_nodes = len(local_opt_tour)
+    tour = np.asarray(local_opt_tour)
+
+    # Tour indexing vectors
+    u_idx = tour
+    v_idx = np.roll(tour, -1)
+    w_idx = np.roll(tour, -2)
+
+    # Evaporate edge visit frequencies
+    edge_n_used *= 0.96
+
+    # Distances between consecutive nodes and skip-1 chords
+    d_uv = edge_distance[u_idx, v_idx]
+    d_vw = edge_distance[v_idx, w_idx]
+    d_uw = edge_distance[u_idx, w_idx]
+
+    # Compute 2-step geometric detour ratio and acute angle inefficiency
+    detour_ratio = (d_uv + d_vw) / (d_uw + 1e-8)
+    denom = 2.0 * d_uv * d_vw + 1e-8
+    cos_turn = np.clip((d_uv**2 + d_vw**2 - d_uw**2) / denom, -1.0, 1.0)
+    acute_deficit = 1.0 - cos_turn
+    geom_inefficiency = detour_ratio * (1.0 + 0.5 * acute_deficit)
+
+    # Calculate edge utility based on length, usage frequency, and local geometry
+    base_dist = d_uv
+    base_freq = edge_n_used[u_idx, v_idx]
+    local_geom_factor = 0.5 * (geom_inefficiency + np.roll(geom_inefficiency, 1))
+    utilities = (base_dist / (1.0 + base_freq)) * (1.0 + 0.35 * local_geom_factor)
+
+    # Penalize top-k inefficient tour edges
+    k_edges = max(1, int(np.ceil(0.14 * num_nodes)))
+    top_k_indices = np.argsort(utilities)[-k_edges:]
+    global_mean_dist = np.mean(edge_distance)
+    adaptive_lambda = 0.30 * global_mean_dist
+
+    for idx in top_k_indices:
+        u, v = u_idx[idx], v_idx[idx]
+        edge_n_used[u, v] += 1.0
+        edge_n_used[v, u] += 1.0
+        freq_penalty = 1.0 + np.log1p(edge_n_used[u, v])
+        geom_weight = 1.0 + 0.5 * local_geom_factor[idx]
+        penalty = adaptive_lambda * freq_penalty * geom_weight
+        updated_edge_distance[u, v] += penalty
+        updated_edge_distance[v, u] += penalty
+
+    # Proactive Ruin-and-Recreate neighborhood operator:
+    # Identify high-detour centers and define contiguous ruined segments
+    num_ruin_seeds = max(1, int(np.ceil(0.05 * num_nodes)))
+    ruin_centers = np.argsort(detour_ratio)[-num_ruin_seeds:]
+    ruin_half_width = max(1, min(4, num_nodes // 8))
+
+    # Candidate boundary nodes marking the entry/exit points of ruined subpaths
+    boundary_nodes = set()
+    for center_idx in ruin_centers:
+        left_bound = (center_idx - ruin_half_width) % num_nodes
+        right_bound = (center_idx + ruin_half_width) % num_nodes
+        boundary_nodes.add(tour[left_bound])
+        boundary_nodes.add(tour[right_bound])
+        # Also include skip chord anchors
+        boundary_nodes.add(u_idx[center_idx])
+        boundary_nodes.add(w_idx[center_idx])
+
+    # Connect boundaries to their k-nearest neighbors to form attractive recombination bridges
+    knn_k = min(6, num_nodes - 1)
+    for b_node in boundary_nodes:
+        row_dists = edge_distance[b_node]
+        # Get nearest neighbors excluding self
+        nearest_neighbors = np.argsort(row_dists)[1:knn_k + 1]
+        for target in nearest_neighbors:
+            freq = edge_n_used[b_node, target]
+            if freq < 1.0:
+                # Gradient discount inversely proportional to distance and frequency
+                rel_closeness = 1.0 - (row_dists[target] / (row_dists[nearest_neighbors[-1]] + 1e-8))
+                discount = 0.12 * global_mean_dist * (1.0 / (1.0 + freq)) * (1.0 + 0.5 * rel_closeness)
+                new_cost = max(1e-6, updated_edge_distance[b_node, target] - discount)
+                updated_edge_distance[b_node, target] = new_cost
+                updated_edge_distance[target, b_node] = new_cost
+
+    return updated_edge_distance
+# ===== Eval Output =====
+[*] Running ...
+[*] mode=val, data=/home/ducanh/projects/EAs_project/MoH/problems/tsp_gls/data/val/val_instance_data_sol_100.pkl, seed=0, n_instances=8
+[*] instance_indices=[6, 9, 0, 2, 4, 3, 5, 1]
+[*] instance 6: obj=7.7627, gap=0.0399
+[*] instance 9: obj=8.0762, gap=0.4090
+[*] instance 0: obj=8.0001, gap=0.0000
+[*] instance 2: obj=8.0907, gap=0.2088
+[*] instance 4: obj=7.8131, gap=0.0000
+[*] instance 3: obj=7.3713, gap=0.0000
+[*] instance 5: obj=7.6365, gap=0.0000
+[*] instance 1: obj=7.5570, gap=0.0000
+[*] ave_gap on size 100: 0.08221876662523053
+0.08221876662523053

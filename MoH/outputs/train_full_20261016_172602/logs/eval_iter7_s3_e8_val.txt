@@ -1,0 +1,79 @@
+# ===== Heuristic Code =====
+#{Anti-stagnation memory-decay diversification mechanism that monitors edge usage variance across the tour, applying an evaporation-rescaling factor when stagnation is detected alongside targeted non-linear penalties on the top 10% bottleneck edges.}#
+
+import numpy as np
+
+def update_edge_distance(edge_distance, local_opt_tour, edge_n_used):
+    updated_edge_distance = np.copy(edge_distance)
+    n = len(local_opt_tour)
+    if n < 2:
+        return updated_edge_distance
+
+    sorted_dists = np.sort(edge_distance, axis=1)
+    k_nn_avg = np.mean(sorted_dists[:, 1:min(6, n)], axis=1)
+    node_density = 1.0 / (k_nn_avg + 1e-6)
+    node_density = node_density / np.mean(node_density)
+
+    u_idx = local_opt_tour
+    v_idx = np.roll(local_opt_tour, -1)
+
+    tour_edge_lengths = edge_distance[u_idx, v_idx]
+    avg_tour_length = np.mean(tour_edge_lengths)
+    relative_length = tour_edge_lengths / (avg_tour_length + 1e-6)
+    rank_penalty = 1.0 / (1.0 + np.exp(-4.0 * (relative_length - 1.0)))
+
+    counts = edge_n_used[u_idx, v_idx].astype(np.float64)
+    var_counts = np.var(counts)
+    mean_counts = np.mean(counts)
+
+    # Stagnation detection via normalized variance / spread of usage
+    # If edge usages are uniform or saturation sets in, trigger deterministic decay and diversification burst
+    stagnation_ratio = var_counts / (mean_counts + 1.0)
+    stagnation_detected = stagnation_ratio < 0.35
+
+    # Memory decay factor (evaporation) under stagnation
+    gamma = 0.85 if stagnation_detected else 1.0
+    effective_counts = counts * gamma
+
+    # Replaced usage factor: sublinear saturation to avoid lock-in
+    usage_factor = 1.0 / (1.0 + 0.25 * np.sqrt(effective_counts))
+    density_factor = 0.5 * (node_density[u_idx] + node_density[v_idx])
+    local_penalty = relative_length * usage_factor * density_factor
+
+    # Dynamic global-local balance adapting to stagnation level
+    w_global = 0.4 + 0.35 * (1.0 / (1.0 + 0.08 * mean_counts))
+    if stagnation_detected:
+        w_global = max(0.2, w_global - 0.2)
+    w_local = 1.0 - w_global
+
+    combined_penalty = w_global * rank_penalty + w_local * local_penalty
+
+    # Base high penalty for edges above 75th percentile
+    p75 = np.percentile(tour_edge_lengths, 75)
+    combined_penalty[tour_edge_lengths >= p75] *= 1.4
+
+    # Targeted deterministic diversification burst on the longest 10% bottleneck edges
+    p90 = np.percentile(tour_edge_lengths, 90)
+    bottleneck_mask = tour_edge_lengths >= p90
+    burst_multiplier = 2.2 if stagnation_detected else 1.5
+    combined_penalty[bottleneck_mask] *= burst_multiplier
+
+    # Symmetric penalty accumulation
+    np.add.at(updated_edge_distance, (u_idx, v_idx), combined_penalty)
+    np.add.at(updated_edge_distance, (v_idx, u_idx), combined_penalty)
+
+    return updated_edge_distance
+# ===== Eval Output =====
+[*] Running ...
+[*] mode=val, data=/home/ducanh/projects/EAs_project/MoH/problems/tsp_gls/data/val/val_instance_data_sol_200.pkl, seed=0, n_instances=8
+[*] instance_indices=[6, 9, 0, 2, 4, 3, 5, 1]
+[*] instance 6: obj=10.4680, gap=0.2118
+[*] instance 9: obj=10.7639, gap=0.9462
+[*] instance 0: obj=10.9108, gap=0.2304
+[*] instance 2: obj=11.0181, gap=0.6426
+[*] instance 4: obj=10.8918, gap=0.4119
+[*] instance 3: obj=10.6368, gap=0.3289
+[*] instance 5: obj=10.9423, gap=0.5396
+[*] instance 1: obj=11.0857, gap=0.5577
+[*] ave_gap on size 200: 0.48365173410028217
+0.48365173410028217

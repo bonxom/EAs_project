@@ -1,0 +1,100 @@
+# ===== Heuristic Code =====
+#{This strategy implements a memory-decaying Guided Local Search driven by topological frustration between empirical tour frequencies and a deterministic Minimum Spanning Tree backbone, triggering periodic coordinated unfreezing of bottleneck transitions.}#
+
+import numpy as np
+
+def update_edge_distance(edge_distance, local_opt_tour, edge_n_used):
+    updated_edge_distance = np.copy(edge_distance)
+    num_nodes = len(local_opt_tour)
+    if num_nodes <= 1:
+        return updated_edge_distance
+
+    # 1. Memory decay on historical edge frequency to prevent irreversible stagnation
+    decay_rate = 0.95
+    edge_n_used *= decay_rate
+
+    # Extract current tour directed and undirected edge indices
+    u_idx = np.asarray(local_opt_tour, dtype=np.intp)
+    v_idx = np.roll(u_idx, -1)
+
+    tour_dist = edge_distance[u_idx, v_idx]
+    tour_counts = edge_n_used[u_idx, v_idx]
+
+    # Standard GLS utility metric: distance / (1 + count)
+    utilities = tour_dist / (1.0 + tour_counts)
+    max_util = np.max(utilities)
+    threshold = max_util * 0.99999
+    penalized_mask = utilities >= threshold
+
+    # Update penalization usage counter for maximally critical edges in current tour
+    for i in range(num_nodes):
+        if penalized_mask[i]:
+            u, v = u_idx[i], v_idx[i]
+            edge_n_used[u, v] += 1.0
+            edge_n_used[v, u] += 1.0
+
+    # 2. Deterministic Minimum Spanning Tree (MST) computation via Prim's algorithm
+    # Backbone edges have fundamental topological priority; penalizing them heavily causes frustration
+    mst_adj = np.zeros((num_nodes, num_nodes), dtype=np.float64)
+    selected = np.zeros(num_nodes, dtype=bool)
+    min_cost = np.full(num_nodes, np.inf, dtype=np.float64)
+    parent = np.full(num_nodes, -1, dtype=np.intp)
+
+    min_cost[0] = 0.0
+    for _ in range(num_nodes):
+        # Deterministically select unvisited node with minimum connection cost
+        masked_cost = np.where(selected, np.inf, min_cost)
+        curr = int(np.argmin(masked_cost))
+        selected[curr] = True
+
+        p = parent[curr]
+        if p != -1:
+            mst_adj[p, curr] = 1.0
+            mst_adj[curr, p] = 1.0
+
+        # Update neighbors
+        row_costs = edge_distance[curr]
+        update_mask = (~selected) & (row_costs < min_cost)
+        min_cost[update_mask] = row_costs[update_mask]
+        parent[update_mask] = curr
+
+    # 3. Topological Frustration Field:
+    # Tour edges that are not in the MST indicate suboptimal detours and should be penalized,
+    # whereas MST edges frequently trapped in suboptimal cycles indicate rigid bottlenecks.
+    mean_dist = np.mean(edge_distance)
+    avg_tour_dist = np.mean(tour_dist)
+    lambda_penalty = 0.30 * avg_tour_dist / (np.max(edge_n_used) + 1.0)
+
+    # Frustration weight: boost penalty on non-MST tour edges, moderate penalty on MST edges
+    frustration_multiplier = 1.0 + (1.0 - mst_adj) * 0.50
+
+    # Base guided penalty matrix
+    base_penalty = lambda_penalty * edge_n_used * frustration_multiplier
+
+    # 4. Deterministic multi-edge coordinated unfreezing / perturbation:
+    # Periodically or conditionally unfreeze heavily congested nodes to open structural escape routes
+    total_node_pressure = np.sum(edge_n_used, axis=1)
+    max_pressure = np.max(total_node_pressure)
+    if max_pressure > 0.0:
+        pressure_norm = total_node_pressure / max_pressure
+        # Nodes with high congestion that are tightly coupled get a deterministic counter-relaxation
+        unfreeze_field = pressure_norm[:, None] * pressure_norm[None, :]
+        unfreeze_mask = unfreeze_field > 0.64
+        base_penalty[unfreeze_mask] *= 0.50
+
+    updated_edge_distance += base_penalty
+    return updated_edge_distance
+# ===== Eval Output =====
+[*] Running ...
+[*] mode=val, data=/home/ducanh/projects/EAs_project/MoH/problems/tsp_gls/data/val/val_instance_data_sol_100.pkl, seed=0, n_instances=8
+[*] instance_indices=[6, 9, 0, 2, 4, 3, 5, 1]
+[*] instance 6: obj=8.1578, gap=5.1314
+[*] instance 9: obj=8.2575, gap=2.6631
+[*] instance 0: obj=8.4512, gap=5.6393
+[*] instance 2: obj=8.3656, gap=3.6132
+[*] instance 4: obj=8.5472, gap=9.3960
+[*] instance 3: obj=7.6648, gap=3.9815
+[*] instance 5: obj=7.8676, gap=3.0258
+[*] instance 1: obj=7.8928, gap=4.4428
+[*] ave_gap on size 100: 4.7366420836242265
+4.7366420836242265

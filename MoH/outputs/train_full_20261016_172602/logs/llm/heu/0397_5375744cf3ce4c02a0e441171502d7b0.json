@@ -1,0 +1,17 @@
+{
+  "id": 397,
+  "timestamp": "2026-10-16T18:41:56.322719+00:00",
+  "model": "ag/gemini-3.8-flash-low",
+  "temperature": 0.6,
+  "messages": [
+    {
+      "role": "system",
+      "content": "You are an expert in metaheuristics and combinatorial optimization. Your goal is to design highly competitive, novel, and robust optimization algorithms."
+    },
+    {
+      "role": "user",
+      "content": "Analyze the elite algorithmic architecture for the task 'tsp_gls-20':\nIdea: Key idea: Vectorize the Guided Local Search penalty calculation and symmetric matrix update using NumPy advanced indexing, penalizing the maximal utility edges proportionally to the tour's average edge length without Python loop overhead.\nCode:\n```python\nimport numpy as np\ndef update_edge_distance(edge_distance, local_opt_tour, edge_n_used):\n    updated_edge_distance = np.copy(edge_distance)\n    u_idx = local_opt_tour\n    v_idx = np.roll(local_opt_tour, -1)\n    tour_lengths = edge_distance[u_idx, v_idx]\n    tour_counts = edge_n_used[u_idx, v_idx]\n    utilities = tour_lengths / (1.0 + tour_counts)\n    max_utility = np.max(utilities)\n    avg_edge = np.mean(tour_lengths)\n    penalty = 0.3 * avg_edge\n    threshold = 0.99 * max_utility\n    selected_mask = utilities >= threshold\n    sel_u = u_idx[selected_mask]\n    sel_v = v_idx[selected_mask]\n    updated_edge_distance[sel_u, sel_v] += penalty\n    updated_edge_distance[sel_v, sel_u] += penalty\n    return updated_edge_distance\n```\nCurrent Utility: 1.2218318606871392e-06 (lower is better)\n\nDiagnose algorithmic bottlenecks to prepare a collaborative Ruin-and-Recreate portfolio.\nReturn your analysis strictly in JSON format:\n```json\n{\n  \"invariable_core\": \"<invariant algorithmic core that guarantees correctness and performance>\",\n  \"critical_weakness\": \"<primary performance bottleneck or premature convergence risk>\",\n  \"promising_mechanisms\": [\"<mechanism 1>\", \"<mechanism 2>\"]\n}\n```"
+    }
+  ],
+  "response": "```json\n{\n  \"invariable_core\": \"Vectorized calculation of Guided Local Search (GLS) edge utilities based on edge length and usage count (cost / (1 + count)), followed by symmetric in-place or copied matrix penalty updates to disincentivize recurring local optima.\",\n  \"critical_weakness\": \"Reading tour edge lengths directly from the mutated edge_distance matrix rather than the original invariant distance matrix distorts utility values over iterations, while static penalization (fixed 0.3 * avg_edge on utilities >= 0.99 * max) ignores instance topology and risks over-penalizing short edges that have accumulated minor penalties.\",\n  \"promising_mechanisms\": [\n    \"Decouple penalty accumulation from feature costs by computing utilities using base unmodified distances while maintaining an explicit additive penalty matrix\",\n    \"Dynamic adaptive scaling factor lambda (e.g., proportional to tour_length / N or tracking stagnation count) to balance intensification and diversification across search phases\"\n  ]\n}\n```"
+}

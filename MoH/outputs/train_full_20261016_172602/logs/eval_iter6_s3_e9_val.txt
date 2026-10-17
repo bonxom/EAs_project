@@ -1,0 +1,66 @@
+# ===== Heuristic Code =====
+#{A scale-invariant Guided Local Search penalty strategy that computes edge utility via length modulated by usage and local node density, selectively penalizing edges exceeding a dynamic utility threshold by an instance-scaled step.}
+
+import numpy as np
+
+def update_edge_distance(edge_distance, local_opt_tour, edge_n_used):
+    updated_edge_distance = np.copy(edge_distance)
+    n = len(local_opt_tour)
+    if n <= 1:
+        return updated_edge_distance
+
+    # Measure local topological density via k-nearest neighbor distances
+    k = min(6, n - 1)
+    sorted_dists = np.sort(edge_distance, axis=1)
+    k_nn_avg = np.mean(sorted_dists[:, 1:k + 1], axis=1)
+    node_density = 1.0 / (k_nn_avg + 1e-8)
+    node_density = node_density / (np.mean(node_density) + 1e-8)
+
+    # Extract consecutive edges in the local optimal tour
+    u_idx = local_opt_tour
+    v_idx = np.roll(local_opt_tour, -1)
+    tour_edge_lengths = edge_distance[u_idx, v_idx]
+    edge_usages = edge_n_used[u_idx, v_idx]
+
+    # Incorporate edge length, frequency attenuation, and local neighborhood density
+    edge_density_factor = 0.5 * (node_density[u_idx] + node_density[v_idx])
+    utilities = (tour_edge_lengths * edge_density_factor) / (1.0 + edge_usages)
+
+    # Scale penalty proportionally to instance scale (average tour edge length / n)
+    avg_tour_length = np.mean(tour_edge_lengths)
+    lambda_scale = avg_tour_length / n
+
+    # Classical GLS selection: target maximum-utility edges exceeding mean + alpha * std
+    util_mean = np.mean(utilities)
+    util_std = np.std(utilities)
+    threshold = util_mean + 0.5 * util_std
+    mask = utilities >= threshold
+
+    # Guarantee at least the single maximum utility edge is penalized if thresholding is too strict
+    if not np.any(mask):
+        mask[np.argmax(utilities)] = True
+
+    # Compute additive symmetric penalty for high-utility edges
+    penalty_values = lambda_scale * (utilities[mask] / (util_mean + 1e-8))
+
+    selected_u = u_idx[mask]
+    selected_v = v_idx[mask]
+
+    np.add.at(updated_edge_distance, (selected_u, selected_v), penalty_values)
+    np.add.at(updated_edge_distance, (selected_v, selected_u), penalty_values)
+
+    return updated_edge_distance
+# ===== Eval Output =====
+[*] Running ...
+[*] mode=val, data=/home/ducanh/projects/EAs_project/MoH/problems/tsp_gls/data/val/val_instance_data_sol_200.pkl, seed=0, n_instances=8
+[*] instance_indices=[6, 9, 0, 2, 4, 3, 5, 1]
+[*] instance 6: obj=10.8470, gap=3.8409
+[*] instance 9: obj=11.0360, gap=3.4977
+[*] instance 0: obj=11.4340, gap=5.0367
+[*] instance 2: obj=11.2272, gap=2.5526
+[*] instance 4: obj=11.3402, gap=4.5454
+[*] instance 3: obj=10.8757, gap=2.5827
+[*] instance 5: obj=11.3787, gap=4.5497
+[*] instance 1: obj=11.5687, gap=4.9388
+[*] ave_gap on size 200: 3.943073637837413
+3.943073637837413

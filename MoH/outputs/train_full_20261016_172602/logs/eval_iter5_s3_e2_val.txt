@@ -1,0 +1,63 @@
+# ===== Heuristic Code =====
+# {Replaces naive additive node density with an inter-cluster bridging metric based on the geometric mean of local k-NN scales to penalize long bridging edges while preserving frequency-discounted global rank weighting.}
+
+import numpy as np
+
+def update_edge_distance(edge_distance, local_opt_tour, edge_n_used):
+    updated_edge_distance = np.copy(edge_distance)
+    n = len(local_opt_tour)
+
+    # 1. Compute local scale per node using k-NN distances
+    k = min(6, n - 1) if n > 1 else 1
+    sorted_dists = np.sort(edge_distance, axis=1)
+    k_nn_scale = np.mean(sorted_dists[:, 1:k + 1], axis=1) + 1e-6
+
+    # 2. Extract tour edges and raw metrics
+    u_idx = local_opt_tour
+    v_idx = np.roll(local_opt_tour, -1)
+    tour_edge_lengths = edge_distance[u_idx, v_idx]
+
+    # 3. Normalized relative tour length and global rank penalty (sigmoid activation)
+    avg_tour_length = np.mean(tour_edge_lengths) + 1e-6
+    relative_length = tour_edge_lengths / avg_tour_length
+    rank_penalty = 1.0 / (1.0 + np.exp(-4.0 * (relative_length - 1.0)))
+
+    # 4. Bottleneck bridging ratio: edge length normalized by geometric mean of endpoint cluster scales
+    endpoint_geom_scale = np.sqrt(k_nn_scale[u_idx] * k_nn_scale[v_idx])
+    bridging_ratio = tour_edge_lengths / endpoint_geom_scale
+
+    # 5. Usage-based inverse frequency discounting
+    usage_factor = 1.0 / (1.0 + 0.3 * edge_n_used[u_idx, v_idx])
+
+    # 6. Local bridging penalty incorporating cluster scale and usage discounting
+    local_penalty = bridging_ratio * usage_factor
+
+    # 7. Adaptive balance between global tour length and local bridging penalty
+    freq_mean = np.mean(edge_n_used[u_idx, v_idx])
+    w_global = 0.6 / (1.0 + 0.1 * freq_mean)
+    w_local = 1.0 - w_global
+    combined_penalty = w_global * rank_penalty + w_local * local_penalty
+
+    # 8. Accentuate penalty for upper quartile bottleneck edges
+    threshold = np.percentile(tour_edge_lengths, 75)
+    combined_penalty[tour_edge_lengths >= threshold] *= 1.5
+
+    # 9. Symmetric in-place edge penalty accumulation
+    np.add.at(updated_edge_distance, (u_idx, v_idx), combined_penalty)
+    np.add.at(updated_edge_distance, (v_idx, u_idx), combined_penalty)
+
+    return updated_edge_distance
+# ===== Eval Output =====
+[*] Running ...
+[*] mode=val, data=/home/ducanh/projects/EAs_project/MoH/problems/tsp_gls/data/val/val_instance_data_sol_200.pkl, seed=0, n_instances=8
+[*] instance_indices=[6, 9, 0, 2, 4, 3, 5, 1]
+[*] instance 6: obj=10.4464, gap=0.0050
+[*] instance 9: obj=10.6758, gap=0.1197
+[*] instance 0: obj=10.8935, gap=0.0714
+[*] instance 2: obj=10.9995, gap=0.4726
+[*] instance 4: obj=10.8715, gap=0.2241
+[*] instance 3: obj=10.6213, gap=0.1830
+[*] instance 5: obj=10.9284, gap=0.4123
+[*] instance 1: obj=11.0899, gap=0.5963
+[*] ave_gap on size 200: 0.26055653230466214
+0.26055653230466214

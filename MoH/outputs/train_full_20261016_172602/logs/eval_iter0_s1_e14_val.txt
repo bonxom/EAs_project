@@ -1,0 +1,81 @@
+# ===== Heuristic Code =====
+#{Penalize high-utility tour edges using smooth sigmoid gating based on cost and usage, while applying targeted exploration incentives exclusively to the top-k nearest unused neighbors of penalized nodes to preserve metric structure and guide local search toward high-quality shortcuts.}
+
+import numpy as np
+
+def update_edge_distance(edge_distance, local_opt_tour, edge_n_used):
+    updated_edge_distance = np.copy(edge_distance)
+    n = len(local_opt_tour)
+
+    tour_edges = [(local_opt_tour[i], local_opt_tour[(i + 1) % n]) for i in range(n)]
+    costs = np.array([edge_distance[u, v] for u, v in tour_edges], dtype=np.float64)
+    median_cost = np.median(costs)
+    mean_cost = np.mean(costs)
+    std_cost = np.std(costs) + 1e-8
+
+    utilities = np.zeros(n, dtype=np.float64)
+    for i in range(n):
+        u, v = tour_edges[i]
+        used = edge_n_used[u, v]
+        c = costs[i]
+        excess_ratio = max(0.0, (c - median_cost) / (median_cost + 1e-8))
+        utilities[i] = (c / (1.0 + used)) * (1.0 + excess_ratio)
+
+    q75_util = np.percentile(utilities, 75)
+    penalized_nodes = set()
+
+    for idx in range(n):
+        u, v = tour_edges[idx]
+        used = edge_n_used[u, v]
+        c = costs[idx]
+        z_gate = (utilities[idx] - q75_util) / (std_cost + 1e-8)
+        gate_weight = 1.0 / (1.0 + np.exp(-4.0 * z_gate))
+
+        if gate_weight > 0.01:
+            base_penalty = (c / (1.0 + np.sqrt(used + 1.0))) * (1.0 + c / (mean_cost + 1e-8))
+            penalty = base_penalty * gate_weight
+            updated_edge_distance[u, v] += penalty
+            updated_edge_distance[v, u] += penalty
+            penalized_nodes.add(u)
+            penalized_nodes.add(v)
+
+    mean_tour_cost = mean_cost + 1e-8
+    k_neighbors = min(5, max(2, n // 10))
+
+    for u in penalized_nodes:
+        unused_mask = (edge_n_used[u] == 0)
+        unused_mask[u] = False
+        candidates = np.where(unused_mask)[0]
+
+        if len(candidates) > 0:
+            if len(candidates) > k_neighbors:
+                cand_costs = edge_distance[u, candidates]
+                top_k_indices = np.argpartition(cand_costs, k_neighbors)[:k_neighbors]
+                chosen_neighbors = candidates[top_k_indices]
+            else:
+                chosen_neighbors = candidates
+
+            local_density = np.mean(edge_distance[u, chosen_neighbors]) / mean_tour_cost
+            adaptive_decay = 0.02 / (1.0 + max(0.1, local_density))
+
+            for v in chosen_neighbors:
+                val = updated_edge_distance[u, v]
+                reduction = val * adaptive_decay
+                updated_edge_distance[u, v] -= reduction
+                updated_edge_distance[v, u] -= reduction
+
+    return updated_edge_distance
+# ===== Eval Output =====
+[*] Running ...
+[*] mode=val, data=/home/ducanh/projects/EAs_project/MoH/problems/tsp_gls/data/val/val_instance_data_sol_50.pkl, seed=0, n_instances=8
+[*] instance_indices=[6, 9, 0, 2, 4, 3, 5, 1]
+[*] instance 6: obj=5.7136, gap=0.5983
+[*] instance 9: obj=5.9639, gap=0.0000
+[*] instance 0: obj=5.7783, gap=0.0000
+[*] instance 2: obj=5.8071, gap=0.0000
+[*] instance 4: obj=5.3965, gap=0.0000
+[*] instance 3: obj=5.8123, gap=0.9633
+[*] instance 5: obj=5.6187, gap=0.0000
+[*] instance 1: obj=5.1651, gap=0.0000
+[*] ave_gap on size 50: 0.19520369214340028
+0.19520369214340028

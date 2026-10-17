@@ -1,0 +1,65 @@
+# ===== Heuristic Code =====
+#{A dual-potential Guided Local Search metaheuristic that computes non-linear edge utilities via a normalized cost-frequency potential field, applying calibrated multiplicative penalties to top-utility tour edges while ensuring symmetry and metric positivity.}
+
+import numpy as np
+
+def update_edge_distance(edge_distance, local_opt_tour, edge_n_used):
+    updated_edge_distance = np.copy(edge_distance)
+    n = len(local_opt_tour)
+    if n < 4:
+        return updated_edge_distance
+
+    u_idx = np.asarray(local_opt_tour, dtype=np.intp)
+    v_idx = np.roll(u_idx, -1)
+
+    costs = edge_distance[u_idx, v_idx].astype(np.float64)
+    used = edge_n_used[u_idx, v_idx].astype(np.float64)
+
+    mean_c = np.mean(costs)
+    if mean_c <= 1e-12:
+        return updated_edge_distance
+
+    # GLS-style utility: edge cost scaled by penalty resistance (frequency count)
+    utilities = costs / (1.0 + used)
+    max_utility = np.max(utilities)
+
+    if max_utility <= 1e-12:
+        return updated_edge_distance
+
+    # Select edges in the upper quartile of utility for targeted diversification
+    threshold = np.percentile(utilities, 75.0)
+    target_mask = utilities >= threshold
+
+    # Adaptive penalty scaling parameter lambda based on current tour cost scale
+    lambda_param = 0.3 * (mean_c / (n + 1.0))
+
+    p_u = u_idx[target_mask]
+    p_v = v_idx[target_mask]
+    p_costs = costs[target_mask]
+    p_used = used[target_mask]
+
+    # Multiplicative potential shift scaled by frequency attenuation
+    penalty_increments = lambda_param * p_costs / np.sqrt(1.0 + p_used)
+
+    updated_edge_distance[p_u, p_v] += penalty_increments
+    updated_edge_distance[p_v, p_u] += penalty_increments
+
+    # Enforce non-negativity and symmetric integrity
+    np.maximum(updated_edge_distance, 0.0, out=updated_edge_distance)
+    np.fill_diagonal(updated_edge_distance, 0.0)
+
+    return updated_edge_distance
+# ===== Eval Output =====
+[*] Running ...
+[*] mode=val, data=/home/ducanh/projects/EAs_project/MoH/problems/tsp_gls/data/val/val_instance_data_sol_50.pkl, seed=0, n_instances=8
+[*] instance_indices=[6, 9, 0, 2, 4, 3, 5, 1]
+[*] instance 6: obj=5.7171, gap=0.6609
+[*] instance 9: obj=6.0516, gap=1.4712
+[*] instance 0: obj=5.8842, gap=1.8331
+[*] instance 2: obj=5.8765, gap=1.1960
+[*] instance 4: obj=5.5821, gap=3.4387
+[*] instance 3: obj=5.9118, gap=2.6919
+[*] instance 5: obj=5.6882, gap=1.2385
+[*] instance 1: obj=5.4516, gap=5.5464
+[*] ave_gap on size 50: 2.259579184695232
+2.259579184695232

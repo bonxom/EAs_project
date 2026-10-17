@@ -1,0 +1,72 @@
+# ===== Heuristic Code =====
+#{This algorithm implements a dual global-local edge penalty scheme with pheromone-inspired penalty evaporation to prevent saturation, selectively amplifying penalties on the longest quartile of edges while decaying historical penalties.}
+
+import numpy as np
+
+def update_edge_distance(edge_distance, local_opt_tour, edge_n_used):
+    updated_edge_distance = np.copy(edge_distance)
+    n = len(local_opt_tour)
+
+    # 1. Pheromone-inspired evaporation of accumulated penalties
+    # In Guided Local Search, edge_n_used tracks frequency. If edge_distance contains accumulated penalties,
+    # decaying the difference between edge_distance and its baseline or scaling towards baseline prevents saturation.
+    # Since only edge_distance is passed, we apply a global retention factor on historical penalties by contracting
+    # deviations or applying a soft global evaporation factor:
+    evaporation_rate = 0.05
+    # Apply global evaporation across the entire matrix where usage occurred to avoid unbounded saturation
+    mask = edge_n_used > 0
+    if np.any(mask):
+        # Scale down matrix perturbations proportionally on penalized edges
+        # We preserve the metric structure while attenuating accumulated cost inflation
+        updated_edge_distance[mask] = updated_edge_distance[mask] * (1.0 - evaporation_rate * (edge_n_used[mask] / (edge_n_used[mask] + 5.0)))
+
+    # 2. Extract tour edges and endpoint characteristics
+    u_idx = local_opt_tour
+    v_idx = np.roll(local_opt_tour, -1)
+    tour_edge_lengths = edge_distance[u_idx, v_idx]
+
+    # 3. Normalized k-NN local density scaling for edge endpoints
+    sorted_dists = np.sort(edge_distance, axis=1)
+    k_nn_avg = np.mean(sorted_dists[:, 1:min(6, n)], axis=1)
+    node_density = 1.0 / (k_nn_avg + 1e-6)
+    node_density = node_density / np.mean(node_density)
+    density_factor = 0.5 * (node_density[u_idx] + node_density[v_idx])
+
+    # 4. Logistic rank penalty based on relative edge length
+    avg_tour_length = np.mean(tour_edge_lengths)
+    relative_length = tour_edge_lengths / (avg_tour_length + 1e-6)
+    rank_penalty = 1.0 / (1.0 + np.exp(-4.0 * (relative_length - 1.0)))
+
+    # 5. Usage factor & frequency decay
+    usage_factor = 1.0 / (1.0 + 0.3 * edge_n_used[u_idx, v_idx])
+    local_penalty = relative_length * usage_factor * density_factor
+
+    freq_mean = np.mean(edge_n_used[u_idx, v_idx])
+    w_global = 0.6 / (1.0 + 0.1 * freq_mean)
+    w_local = 1.0 - w_global
+    combined_penalty = w_global * rank_penalty + w_local * local_penalty
+
+    # 6. Top-quartile selective amplification
+    threshold = np.percentile(tour_edge_lengths, 75)
+    high_penalty_mask = tour_edge_lengths >= threshold
+    combined_penalty[high_penalty_mask] *= 1.5
+
+    # 7. Apply symmetric penalties to current tour edges
+    np.add.at(updated_edge_distance, (u_idx, v_idx), combined_penalty)
+    np.add.at(updated_edge_distance, (v_idx, u_idx), combined_penalty)
+
+    return updated_edge_distance
+# ===== Eval Output =====
+[*] Running ...
+[*] mode=val, data=/home/ducanh/projects/EAs_project/MoH/problems/tsp_gls/data/val/val_instance_data_sol_200.pkl, seed=0, n_instances=8
+[*] instance_indices=[6, 9, 0, 2, 4, 3, 5, 1]
+[*] instance 6: obj=10.4482, gap=0.0228
+[*] instance 9: obj=10.6803, gap=0.1624
+[*] instance 0: obj=10.8935, gap=0.0714
+[*] instance 2: obj=10.9759, gap=0.2571
+[*] instance 4: obj=10.8663, gap=0.1764
+[*] instance 3: obj=10.6262, gap=0.2297
+[*] instance 5: obj=10.9169, gap=0.3068
+[*] instance 1: obj=11.0708, gap=0.4222
+[*] ave_gap on size 200: 0.2061068389730386
+0.2061068389730386

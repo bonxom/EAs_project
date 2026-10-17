@@ -1,0 +1,74 @@
+# ===== Heuristic Code =====
+import numpy as np
+
+def update_edge_distance(edge_distance, local_opt_tour, edge_n_used):
+    updated_edge_distance = np.copy(edge_distance)
+    n = len(local_opt_tour)
+
+    # Reconstruct tour indices: forward, previous, and next
+    tour = np.asarray(local_opt_tour, dtype=int)
+    u_idx = tour
+    v_idx = np.roll(tour, -1)
+    prev_u = np.roll(tour, 1)
+    next_v = np.roll(tour, -2)
+
+    # 1. Topological Discordance via k-Nearest Neighbors
+    k = min(12, n - 1)
+    # Get top-k nearest neighbor threshold distances for each node
+    knn_part = np.partition(edge_distance, k, axis=1)[:, :k + 1]
+    knn_max = np.max(knn_part, axis=1) + 1e-6
+
+    e_lens = edge_distance[u_idx, v_idx]
+    # Slack measures how far edge length exceeds the local neighborhood scale of its endpoints
+    slack = np.maximum(0.0, e_lens - 0.5 * (knn_max[u_idx] + knn_max[v_idx]))
+
+    # 2. Local Metric Embedding Curvature / Triangle Distortion
+    # Measures the stress between consecutive edges in the chain (u_prev -> u -> v -> v_next)
+    base_tri_u = edge_distance[prev_u, v_idx] / (edge_distance[prev_u, u_idx] + e_lens + 1e-6)
+    base_tri_v = edge_distance[u_idx, next_v] / (e_lens + edge_distance[v_idx, next_v] + 1e-6)
+    chain_stress = 2.0 - (base_tri_u + base_tri_v)
+    chain_stress = np.maximum(0.0, chain_stress)
+
+    # 3. Base GLS utility combining geometric distortion, length, and frequency
+    usage = edge_n_used[u_idx, v_idx]
+    edge_stress = (e_lens + 1.5 * slack) * (1.0 + 0.8 * chain_stress)
+    gls_utility = edge_stress / (1.0 + usage)
+
+    # 4. Non-local Contextual Chain Diffusion
+    # Propagate stress to adjacent edges to penalize entire poorly embedded chains
+    kernel = np.array([0.2, 0.6, 0.2])
+    # Circular 1D convolution of utilities along the tour
+    conv_utility = (
+        kernel[0] * np.roll(gls_utility, 1) +
+        kernel[1] * gls_utility +
+        kernel[2] * np.roll(gls_utility, -1)
+    )
+
+    # 5. Adaptive penalization scaling
+    scale = np.mean(e_lens) * 0.15
+    q70 = np.percentile(conv_utility, 70)
+    std_u = np.std(conv_utility) + 1e-6
+
+    # Sigmoidal priority boost for high-stress chains
+    z = (conv_utility - q70) / std_u
+    penalties = scale * (1.0 / (1.0 + np.exp(-3.0 * z)))
+
+    # Apply symmetric updates to distance matrix
+    np.add.at(updated_edge_distance, (u_idx, v_idx), penalties)
+    np.add.at(updated_edge_distance, (v_idx, u_idx), penalties)
+
+    return updated_edge_distance
+# ===== Eval Output =====
+[*] Running ...
+[*] mode=val, data=/home/ducanh/projects/EAs_project/MoH/problems/tsp_gls/data/val/val_instance_data_sol_200.pkl, seed=0, n_instances=8
+[*] instance_indices=[6, 9, 0, 2, 4, 3, 5, 1]
+[*] instance 6: obj=10.8122, gap=3.5076
+[*] instance 9: obj=10.9442, gap=2.6367
+[*] instance 0: obj=11.4320, gap=5.0183
+[*] instance 2: obj=11.2182, gap=2.4702
+[*] instance 4: obj=11.1329, gap=2.6343
+[*] instance 3: obj=10.8628, gap=2.4615
+[*] instance 5: obj=11.2181, gap=3.0742
+[*] instance 1: obj=11.4673, gap=4.0192
+[*] ave_gap on size 200: 3.227739928894141
+3.227739928894141
