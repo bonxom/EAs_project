@@ -31,7 +31,11 @@ def main(cfg):
     logger.info(f"Using meta LLM: {cfg.meta.model}")
 
     from moh import MoH
-    optimizer = MoH(cfg, ROOT_DIR, heu_llm=heu_llm, meta_llm=meta_llm)
+    if cfg.get("dual_hifo") is not None:
+        from dual_hifo import DualHiFoMoH
+        optimizer = DualHiFoMoH(cfg, ROOT_DIR, heu_llm=heu_llm, meta_llm=meta_llm)
+    else:
+        optimizer = MoH(cfg, ROOT_DIR, heu_llm=heu_llm, meta_llm=meta_llm)
     optimizer.run_meta_optimizer()
 
 
