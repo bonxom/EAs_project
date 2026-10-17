@@ -502,6 +502,19 @@ class MoH:
 
         return improvement_successful, new_algorithm_str, improve_algorithm_func
 
+    def _provider_budget_exhausted(self) -> str | None:
+        for name in ("heu_llm", "meta_llm"):
+            client = getattr(self, name, None)
+            if client is None:
+                continue
+            budget = getattr(client, "budget", None)
+            if budget is None:
+                base = getattr(client, "base", None)
+                budget = getattr(base, "budget", None) if base is not None else None
+            if budget is not None and budget.exhausted_reason:
+                return budget.exhausted_reason
+        return None
+
     def run_meta_optimizer(self):
         self.get_seed()
 
@@ -511,6 +524,7 @@ class MoH:
         improver = first_improver
         previous_algorithm = improver
 
+        stop_reason = None
         for cur_iter in range(self.iteration):
             self._cur_iter = cur_iter
             logger.info(f"Start iteration {cur_iter}")
@@ -541,10 +555,17 @@ class MoH:
             logger.info(f"Finish iteration {cur_iter}")
 
             if self.max_eval_calls and self._total_eval_calls >= self.max_eval_calls:
-                logger.info(f"Reached max utility calls ({self.max_eval_calls}), stopping.")
+                stop_reason = f"max_eval_calls={self.max_eval_calls}"
+                logger.info("Reached max utility calls (%s), stopping.", self.max_eval_calls)
                 break
 
-        logger.info("Finish all iterations")
+            provider_stop = self._provider_budget_exhausted()
+            if provider_stop:
+                stop_reason = f"provider_budget:{provider_stop}"
+                logger.warning("Provider budget exhausted (%s), stopping without restart.", provider_stop)
+                break
+
+        logger.info("Finish all iterations (stop_reason=%s)", stop_reason)
         export_checkpoint(
             Path(self.run_logger.output_dir) / "checkpoint",
             self.improver_str,
@@ -555,5 +576,7 @@ class MoH:
                 "source_run": self.run_logger.output_dir,
                 "training_meta_utility": self.meta_utility_val,
                 "config": redacted_config(self.cfg),
+                "stop_reason": stop_reason,
+                "eval_calls": self._total_eval_calls,
             },
         )

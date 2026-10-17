@@ -29,6 +29,7 @@ class OpenAIClient(BaseClient):
         cache_dir: Optional[str] = None,
         budget: Optional[ProviderBudget] = None,
         max_retries: int = 10,
+        request_timeout: float = 120.0,
     ) -> None:
         super().__init__(
             model, temperature, batch_size, cache_dir=cache_dir,
@@ -39,7 +40,9 @@ class OpenAIClient(BaseClient):
             logger.fatal("Package `openai` is required. Install with: pip install openai")
             raise ImportError("openai")
 
-        self.client = OpenAI(api_key=api_key, base_url=base_url)
+        self.client = OpenAI(
+            api_key=api_key, base_url=base_url, timeout=request_timeout, max_retries=0,
+        )
 
     def _chat_completion_api(self, messages: list[dict], temperature: float, n: int = 1):
         response = self.client.chat.completions.create(
