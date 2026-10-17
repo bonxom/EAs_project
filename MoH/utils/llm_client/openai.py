@@ -1,6 +1,6 @@
 import logging
 from typing import Optional
-from .base import BaseClient
+from .base import BaseClient, ProviderBudget
 
 try:
     from openai import OpenAI
@@ -27,8 +27,13 @@ class OpenAIClient(BaseClient):
         base_url: Optional[str] = None,
         api_key: Optional[str] = None,
         cache_dir: Optional[str] = None,
+        budget: Optional[ProviderBudget] = None,
+        max_retries: int = 10,
     ) -> None:
-        super().__init__(model, temperature, batch_size, cache_dir=cache_dir)
+        super().__init__(
+            model, temperature, batch_size, cache_dir=cache_dir,
+            budget=budget, max_retries=max_retries,
+        )
 
         if OpenAI is None:
             logger.fatal("Package `openai` is required. Install with: pip install openai")

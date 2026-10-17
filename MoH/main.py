@@ -24,8 +24,22 @@ def main(cfg):
     # Always retain raw responses; separate roles and avoid shared-cache overwrites.
     heu_cache = Path(cfg.heu.get("cache_dir") or "logs/llm") / "heu"
     meta_cache = Path(cfg.meta.get("cache_dir") or "logs/llm") / "meta"
-    heu_llm = hydra.utils.instantiate(cfg.heu, cache_dir=str(heu_cache))
-    meta_llm = hydra.utils.instantiate(cfg.meta, cache_dir=str(meta_cache))
+
+    from utils.llm_client.base import ProviderBudget
+    pb = cfg.get("provider_budget") or {}
+    budget = ProviderBudget(
+        max_requests=pb.get("max_requests"),
+        max_attempts=pb.get("max_attempts"),
+    )
+    max_retries = int(pb.get("max_retries_per_call", 10))
+    logger.info("Provider budget: %s, max_retries_per_call=%d", budget.snapshot(), max_retries)
+
+    heu_llm = hydra.utils.instantiate(
+        cfg.heu, cache_dir=str(heu_cache), budget=budget, max_retries=max_retries,
+    )
+    meta_llm = hydra.utils.instantiate(
+        cfg.meta, cache_dir=str(meta_cache), budget=budget, max_retries=max_retries,
+    )
     logger.info("LLM response caches: heuristic=%s, meta=%s", heu_cache, meta_cache)
     logger.info(f"Using heuristic LLM: {cfg.heu.model}")
     logger.info(f"Using meta LLM: {cfg.meta.model}")
@@ -37,6 +51,7 @@ def main(cfg):
     else:
         optimizer = MoH(cfg, ROOT_DIR, heu_llm=heu_llm, meta_llm=meta_llm)
     optimizer.run_meta_optimizer()
+    logger.info("Final provider budget: %s", budget.snapshot())
 
 
 if __name__ == "__main__":
