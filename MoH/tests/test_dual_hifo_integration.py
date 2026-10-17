@@ -40,8 +40,14 @@ class FakeMoH:
     def get_seed(self):
         return "seed-result"
 
+    def evaluate_heuristic(self, algorithm_str, problem_type, mode="val"):
+        return 3.0 if problem_type.endswith("20") else 5.0
+
     def _make_subtask_utility(self, subtask):
-        return lambda code, idea=None, problem_type=None: 3.0 if subtask.endswith("20") else 5.0
+        def utility(algorithm_str, idea=None, problem_type=None):
+            problem_type = problem_type or subtask
+            return self.evaluate_heuristic(algorithm_str, problem_type, mode="val")
+        return utility
 
     def get_improver(self, improve_str, subtask_str, subtask):
         self.heu_llm.prompt("writer", "generate heuristic")

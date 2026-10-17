@@ -29,6 +29,17 @@ The local 11-test controller/hook suite passed in a Python 3.13 environment. Ful
 - `dual_hifo_independent`: both levels, no inner-to-outer history injection.
 - `dual_hifo_cross_level`: both levels, with past inner summaries in outer prompts.
 
+## Stage 1 local audit (2026-10-17)
+
+Applied on the `dualhifo` branch after the patch was verified with offline tests:
+
+- **F1** `generate_seed_algorithm` is bounded by `seed_max_attempts` (default 15) and at most 5 directions per round; raises `RuntimeError` if zero valid seeds are found.
+- **F2** `evaluate_heuristic` short-circuits with sentinel `1e6` when `max_eval_calls` is exhausted (no subprocess spawn).
+- **F3** `isolate_base_solutions` (config flag; `true` in `dualhifo.yaml`) redirects `solution_*.json` read/write to a run-local `base_solutions/` directory with provenance logging; shared files are never deleted.
+- **F4** `_run_code` writes a run-local heuristic file under `logs/` and passes `--heuristic-path` to `eval.py` (no shared `gpt.py` overwrite); uses `sys.executable`; reaps the child after `kill()`.
+- **E3** Inner observation moved from `_make_subtask_utility` to a `evaluate_heuristic` override so seed-phase evaluations are counted.
+- **E5** `tests/test_moh_budget_isolation.py` adds a `MoH` vs `DualHiFoMoH(mode=full_moh)` parity regression (identical meta utility, improver string, populations, LLM call logs, CSV rows; no `dual_hifo_events.jsonl`).
+
 ## Scientific limitations
 
 - Foresight policy and credit equations are project-defined v1 policies, not copied verbatim from the HiFo paper.

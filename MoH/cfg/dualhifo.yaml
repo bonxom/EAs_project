@@ -16,3 +16,6 @@ dual_hifo:
   usage_weight: 0.1
   recency_weight: 0.2
   credit_ema: 0.3
+
+# Dual-HiFo runs must not clobber shared base solutions across experiments.
+isolate_base_solutions: true

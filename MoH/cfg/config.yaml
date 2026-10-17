@@ -21,4 +21,7 @@ seed: 0                       # deterministic population selection and optimizer
 pop_size: 10                  # ← config["population_size"]
 timeout: 90                   # ← per-heuristic evaluation timeout (seconds)
 optimizer_timeout: 3600       # wall time limit for a generated optimizer (seconds)
-max_eval_calls: 1000           # per-subtask eval budget, total = this × N_subtasks. -1 for unlimited
+max_eval_calls: 1000          # per-subtask eval budget, total = this × N_subtasks. -1 for unlimited
+seed_max_attempts: 15         # max seed-generation rounds before accepting partial population
+isolate_base_solutions: false # false = shared problems/<name>/solution_*.json; true = run-local base_solutions/
+

@@ -3,6 +3,7 @@ import logging
 import math
 import os
 import subprocess
+import sys
 import traceback
 from pathlib import Path
 
@@ -102,12 +103,16 @@ class MoH:
     # =========================================================================
 
     def _run_code(self, algorithm_str: str, problem_type: str, mode: str, stdout_path: str) -> subprocess.Popen:
-        # Step 1: write generated code to gpt.py
-        gpt_path = os.path.join(self.root_dir, "problems", self.problem_name, "gpt.py")
-        with open(gpt_path, 'w', encoding="utf-8") as f:
+        # Run-local heuristic file; never overwrite shared problems/<name>/gpt.py.
+        safe_task = problem_type.replace("-", "_")
+        heuristic_path = os.path.join(
+            self.run_logger.dirs["logs"],
+            f"heuristic_iter{getattr(self, '_cur_iter', -1)}_{safe_task}_{mode}.py",
+        )
+        with open(heuristic_path, 'w', encoding="utf-8") as f:
             f.write(algorithm_str + '\n')
 
-        # Step 2: launch eval.py as subprocess
+        # launch eval.py as subprocess
         eval_path = os.path.join(self.root_dir, "problems", self.problem_name, "eval.py")
         problem_size = int(problem_type.split("-")[-1])
         with open(stdout_path, 'w', encoding="utf-8") as f:
@@ -116,8 +121,9 @@ class MoH:
             f.write("\n# ===== Eval Output =====\n")
             f.flush()
             process = subprocess.Popen(
-                ['python', '-u', eval_path, str(problem_size), self.root_dir, mode,
-                 str(self.cfg.timeout), str(getattr(self.cfg, "seed", 0))],
+                [sys.executable, '-u', eval_path, str(problem_size), self.root_dir, mode,
+                 str(self.cfg.timeout), str(getattr(self.cfg, "seed", 0)),
+                 '--heuristic-path', heuristic_path],
                 stdout=f, stderr=f
             )
         return process
@@ -134,6 +140,9 @@ class MoH:
             logger.info("algorithm_str is too short")
             return 1e6
 
+        if self.max_eval_calls is not None and self._total_eval_calls >= self.max_eval_calls:
+            logger.info(f"Eval budget exhausted ({self.max_eval_calls}); returning sentinel without subprocess")
+            return 1e6
         self._total_eval_calls += 1
         if self.max_eval_calls:
             logger.info(f"Eval call: {self._total_eval_calls}/{self.max_eval_calls}")
@@ -159,6 +168,7 @@ class MoH:
         except subprocess.TimeoutExpired:
             logger.warning(f"Evaluation timed out for {problem_type} mode={mode}")
             process.kill()
+            process.communicate()
             return 1e6
 
         try:
@@ -228,10 +238,25 @@ class MoH:
         size = prob_type.split("-")[1]
         cur_direction = []
         cur_pop_size = 0
+        max_rounds = int(getattr(self.cfg, "seed_max_attempts", 15))
+        directions_per_round = 5
 
+        rounds = 0
         while cur_pop_size < 5:
+            if rounds >= max_rounds:
+                if cur_pop_size == 0:
+                    raise RuntimeError(
+                        f"generate_seed_algorithm produced no valid seeds for {prob_type} "
+                        f"after {max_rounds} rounds"
+                    )
+                logger.warning(
+                    "Seed generation for %s stopped at %d/5 valid seeds after %d rounds",
+                    prob_type, cur_pop_size, max_rounds,
+                )
+                break
+            rounds += 1
             directions = self.generate_directions(problem, size, cur_direction, seed=True)
-            for idx in range(len(directions)):
+            for idx in range(min(len(directions), directions_per_round)):
                 role = "You are an expert in the domain of optimization heuristics and combinatorial optimization problems. Your task is to design heuristics that can effectively solve optimization problems."
                 message = f"""Write a function that will implement a Python algorithm to solve a problem as well as possible.
             The optimization problem is {problem} and the size you should focus on is {size}.
@@ -256,7 +281,7 @@ class MoH:
                 except Exception as e:
                     logger.warning(f"Utility failed: {e}")
                     logger.debug(traceback.format_exc())
-            cur_direction += directions
+            cur_direction += directions[:directions_per_round]
             cur_pop_size = self.subtask_pop.get_subtask_size(prob_type)
 
         return self.subtask_pop.get_random_solution(prob_type)
@@ -268,10 +293,26 @@ class MoH:
             size_key, self.cfg.problem.threshold.get(str(size_key), 6)
         )
 
+    def _solution_path(self, subtask):
+        filename = f"solution_{subtask}.json"
+        if getattr(self.cfg, "isolate_base_solutions", False):
+            base_dir = os.path.join(self.run_logger.output_dir, "base_solutions")
+            os.makedirs(base_dir, exist_ok=True)
+            return os.path.join(base_dir, filename)
+        return os.path.join(self.root_dir, "problems", self.problem_name, filename)
+
     def read_base_algorithm(self, subtask):
-        solution_path = os.path.join(self.root_dir, "problems", self.problem_name, f"solution_{subtask}.json")
+        solution_path = self._solution_path(subtask)
 
         if os.path.exists(solution_path):
+            try:
+                st = os.stat(solution_path)
+                logger.info(
+                    "read_base_algorithm %s from %s (size=%d bytes, mtime=%s)",
+                    subtask, solution_path, st.st_size, st.st_mtime,
+                )
+            except OSError:
+                pass
             self.subtask_pop.load_subtask_from_file(subtask, solution_path)
             base_algorithm = self.subtask_pop.get_random_solution(subtask)
         else:
@@ -368,12 +409,9 @@ class MoH:
             utility_vals.append(new_utility_val)
             idea_list.append(idea_r)
 
-        # Save subtask populations to problem dir
+        # Save subtask populations to solution path (isolated or shared)
         for i in range(n_tests):
-            solution_path = os.path.join(
-                self.root_dir, "problems", self.problem_name,
-                f"solution_{self.subtask_list[i]}.json"
-            )
+            solution_path = self._solution_path(self.subtask_list[i])
             self.subtask_pop.save_subtask_to_file(self.subtask_list[i], solution_path)
 
         if not (len(improved_algorithm_strs) == len(utility_vals) == len(self.size_weights) == len(idea_list) == n_tests):

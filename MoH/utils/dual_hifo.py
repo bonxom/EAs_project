@@ -325,19 +325,15 @@ class DualHiFoMoHMixin:
         except (OSError, ValueError, TypeError) as exc:
             logging.warning("Dual-HiFo telemetry write failed (search continues): %s", exc)
 
-    def _make_subtask_utility(self, subtask):
-        original = super()._make_subtask_utility(subtask)
-        controller = self.inner_hifo.get(subtask)
-        if controller is None:
-            return original
-
-        def tracked_utility(algorithm_str, idea=None, problem_type=None):
-            score = original(algorithm_str, idea, problem_type)
-            snapshot = controller.observe(algorithm_str, score)
-            self._hifo_record("inner", subtask, {"event": "evaluated", "utility": score, "state": snapshot})
-            self.hifo_inner_state_by_task[subtask] = snapshot
-            return score
-        return tracked_utility
+    def evaluate_heuristic(self, algorithm_str, problem_type, mode="val"):
+        controller = self.inner_hifo.get(problem_type)
+        if controller is None or mode != "val":
+            return super().evaluate_heuristic(algorithm_str, problem_type, mode)
+        score = super().evaluate_heuristic(algorithm_str, problem_type, mode)
+        snapshot = controller.observe(algorithm_str, score)
+        self._hifo_record("inner", problem_type, {"event": "evaluated", "utility": score, "state": snapshot})
+        self.hifo_inner_state_by_task[problem_type] = snapshot
+        return score
 
     def get_improver(self, improve_str, subtask_str, subtask):
         controller = self.inner_hifo.get(subtask)
