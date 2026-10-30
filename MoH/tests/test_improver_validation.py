@@ -3,8 +3,11 @@ from unittest.mock import Mock, patch
 
 from moh import MoH
 from omegaconf import OmegaConf
+from utils.behavior import BehaviorDescriptor, EvaluationIdentity, code_digest
+from utils.behavior_population import BehaviorPopulation
 from utils.generated_improver import GeneratedImprover
 from utils.population import Pop
+from utils.utils import clean_code
 
 
 class FakeLLM:
@@ -26,7 +29,9 @@ class ImproverValidationTests(unittest.TestCase):
     def setUp(self):
         self.optimizer = MoH.__new__(MoH)
         self.optimizer.improver_pop = Pop(["meta-optimizer"], 10)
-        self.optimizer.subtask_pop = Pop(["tsp_gls-100"], 10)
+        self.identity = EvaluationIdentity(100, "val", "a" * 64, (0,), 0, (("workers", 1),))
+        self.optimizer.subtask_pop = BehaviorPopulation({"tsp_gls-100": self.identity}, 10)
+        self.optimizer._behavior_registry = {}
         self.optimizer.improver_str = "previous code"
         self.optimizer.meta_utility_val = 5.0
         self.optimizer._total_eval_calls = 0
@@ -130,6 +135,10 @@ def improve_algorithm(population, utility, language_model, function_format, task
 
         def evaluate(*args, **kwargs):
             self.optimizer._total_eval_calls += 1
+            self.optimizer._behavior_registry[(args[1], code_digest(clean_code(args[0])))] = {
+                "behavior": BehaviorDescriptor(self.identity, (0.5,), 0.5),
+                "raw_code_sha256": code_digest(args[0]),
+            }
             return 0.5
 
         self.optimizer.evaluate_heuristic = Mock(side_effect=evaluate)

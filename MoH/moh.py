@@ -1,14 +1,26 @@
 import copy
+import hashlib
+import json
 import logging
 import math
 import os
 import subprocess
+import sys
+import tempfile
 import traceback
 from pathlib import Path
 
 import numpy as np
 from omegaconf import DictConfig
+from problems.tsp_gls.dataset_selection import load_eval_dataset
 from tqdm import tqdm
+from utils.behavior import (
+    EvaluationIdentity,
+    code_digest,
+    descriptor_from_dict,
+    parse_behavior,
+)
+from utils.behavior_population import BehaviorPopulation
 from utils.checkpoint import export_checkpoint, redacted_config
 from utils.generated_improver import GeneratedImprover
 from utils.llm_client.base import BaseClient
@@ -52,7 +64,19 @@ class MoH:
         self.subtask_list = [f"{self.problem_name}-{s}" for s in cfg.problem.problem_size]
         self.size_weights = np.array(cfg.problem.problem_size, dtype=float) # size list
 
-        self.subtask_pop = Pop(self.subtask_list, cfg.pop_size)
+        identities = {}
+        for task, size in zip(self.subtask_list, cfg.problem.problem_size, strict=True):
+            _, indices, path = load_eval_dataset(root_dir, int(size), "val", cfg.get("seed", 0))
+            identities[task] = EvaluationIdentity(
+                int(size), "val", hashlib.sha256(path.read_bytes()).hexdigest(),
+                tuple(indices), cfg.get("seed", 0),
+                tuple({"workers": min(8, len(indices), os.cpu_count() or 1),
+                       "instance_timeout": int(cfg.timeout), "time_limit": 20,
+                       "iteration_limit": 1000, "perturbation_moves": 1}.items()),
+            )
+        self.subtask_pop = BehaviorPopulation(
+            identities, cfg.pop_size, cfg.get("population", {}).get("diversity_fraction", 0.3))
+        self._behavior_registry = {}
         self.improver_pop = Pop(["meta-optimizer"], cfg.pop_size)
 
         # Eval call budget: per-subtask × N, null/-1 = unlimited
@@ -101,11 +125,11 @@ class MoH:
     # exec(algorithm_str, globals()) in utility()
     # =========================================================================
 
-    def _run_code(self, algorithm_str: str, problem_type: str, mode: str, stdout_path: str) -> subprocess.Popen:
+    def _run_code(self, algorithm_str: str, problem_type: str, mode: str, stdout_path: str, *, result_path: str) -> subprocess.Popen:
         # Step 1: write generated code to gpt.py
         gpt_path = os.path.join(self.root_dir, "problems", self.problem_name, "gpt.py")
         with open(gpt_path, 'w', encoding="utf-8") as f:
-            f.write(algorithm_str + '\n')
+            f.write(algorithm_str)
 
         # Step 2: launch eval.py as subprocess
         eval_path = os.path.join(self.root_dir, "problems", self.problem_name, "eval.py")
@@ -116,14 +140,17 @@ class MoH:
             f.write("\n# ===== Eval Output =====\n")
             f.flush()
             process = subprocess.Popen(
-                ['python', '-u', eval_path, str(problem_size), self.root_dir, mode,
-                 str(self.cfg.timeout), str(getattr(self.cfg, "seed", 0))],
+                [sys.executable, '-u', eval_path, str(problem_size), self.root_dir, mode,
+                 str(self.cfg.timeout), str(getattr(self.cfg, "seed", 0)),
+                 "--result-path", str(result_path)],
                 stdout=f, stderr=f
             )
         return process
 
 
     def evaluate_heuristic(self, algorithm_str: str, problem_type: str, mode: str = "val") -> float:
+        if mode != "val" or problem_type not in self.subtask_pop.identities:
+            raise ValueError("Heuristic admission requires a configured validation task")
         if not algorithm_str:
             logger.info(f"algorithm_str is {algorithm_str!r}, returning")
             return 1e6
@@ -148,8 +175,11 @@ class MoH:
             f"eval_iter{self._cur_iter}_s{subtask_idx}_e{self._eval_counters[eval_key]}_{mode}.txt"
         )
 
+        result_dir = Path(tempfile.mkdtemp(prefix="behavior-", dir=self.run_logger.dirs["logs"]))
+        result_path = result_dir / "result.json"
         try:
-            process = self._run_code(algorithm_str, problem_type, mode, stdout_path)
+            process = self._run_code(algorithm_str, problem_type, mode, stdout_path,
+                                     result_path=str(result_path))
         except Exception as e:
             logger.warning(f"_run_code failed: {e}")
             return 1e6
@@ -159,21 +189,37 @@ class MoH:
         except subprocess.TimeoutExpired:
             logger.warning(f"Evaluation timed out for {problem_type} mode={mode}")
             process.kill()
+            process.communicate()
             return 1e6
 
         try:
-            with open(stdout_path, 'r', encoding="utf-8") as f:
-                stdout_str = f.read()
-            # Check for errors in output
-            if "Traceback" in stdout_str or "Error" in stdout_str:
-                logger.warning(f"Eval error: {stdout_str[-500:]}")
-                return 1e6
-            ave_gap = float(stdout_str.strip().split('\n')[-1])
-            logger.info(f"Eval {problem_type} mode={mode}: ave_gap={ave_gap}")
-            return ave_gap
-        except Exception as e:
-            logger.warning(f"Failed to parse eval result: {e}")
+            if process.returncode != 0:
+                raise ValueError("Evaluator exited unsuccessfully")
+            payload = json.loads(result_path.read_text())
+            behavior = parse_behavior(payload, expected=self.subtask_pop.identities[problem_type],
+                                      code_sha256=code_digest(algorithm_str))
+            canonical = clean_code(algorithm_str)
+            key = (problem_type, code_digest(canonical))
+            # Keep first measurement for a canonical candidate within this run.
+            recorded = self._behavior_registry.setdefault(
+                key, {"behavior": behavior, "raw_code_sha256": code_digest(algorithm_str)})
+            behavior = recorded["behavior"]
+            self.subtask_pop.admit(problem_type, "evaluated", canonical, behavior)
+            return behavior.mean_gap_pct
+        except (OSError, ValueError, TypeError, SyntaxError) as error:
+            logger.warning("Invalid candidate evaluation: %s", error)
             return 1e6
+
+    def _ensure_measured_candidate(self, task, code, idea):
+        key = (task, code_digest(clean_code(code)))
+        if key not in self._behavior_registry:
+            self.evaluate_heuristic(code, task)
+        recorded = self._behavior_registry.get(key)
+        if recorded is None:
+            return None
+        behavior = recorded["behavior"]
+        self.subtask_pop.admit(task, idea, code, behavior)
+        return behavior
 
     # =========================================================================
     # Seed generation  
@@ -227,9 +273,10 @@ class MoH:
         problem = prob_type.split("-")[0]
         size = prob_type.split("-")[1]
         cur_direction = []
-        cur_pop_size = 0
+        cur_pop_size = self.subtask_pop.get_subtask_size(prob_type)
+        target_size = min(5, self.cfg.pop_size)
 
-        while cur_pop_size < 5:
+        while cur_pop_size < target_size:
             directions = self.generate_directions(problem, size, cur_direction, seed=True)
             for idx in range(len(directions)):
                 role = "You are an expert in the domain of optimization heuristics and combinatorial optimization problems. Your task is to design heuristics that can effectively solve optimization problems."
@@ -251,8 +298,10 @@ class MoH:
                     algorithm_str = clean_code(algorithm_str)
                     utility_score = self.evaluate_heuristic(algorithm_str, prob_type, mode="val")
                     if utility_score < threshold:
-                        self.subtask_pop.save_solution(prob_type, idea_str, algorithm_str, utility_score)
-                        cur_pop_size += 1
+                        self._ensure_measured_candidate(prob_type, algorithm_str, idea_str)
+                    cur_pop_size = self.subtask_pop.get_subtask_size(prob_type)
+                    if cur_pop_size >= target_size:
+                        break
                 except Exception as e:
                     logger.warning(f"Utility failed: {e}")
                     logger.debug(traceback.format_exc())
@@ -269,24 +318,26 @@ class MoH:
         )
 
     def read_base_algorithm(self, subtask):
-        solution_path = os.path.join(self.root_dir, "problems", self.problem_name, f"solution_{subtask}.json")
-
-        if os.path.exists(solution_path):
-            self.subtask_pop.load_subtask_from_file(subtask, solution_path)
-            base_algorithm = self.subtask_pop.get_random_solution(subtask)
-        else:
-            threshold = self._get_threshold(subtask)
-            base_algorithm = self.generate_seed_algorithm(
-                self.subtask_form, subtask, threshold
-            )
-            self.subtask_pop.save_subtask_to_file(subtask, solution_path)
-
-        if self.subtask_pop.get_subtask_size(subtask) < 3:
-            threshold = self._get_threshold(subtask)
-            self.generate_seed_algorithm(self.subtask_form, subtask, threshold)
-            self.subtask_pop.save_subtask_to_file(subtask, solution_path)
-
-        return base_algorithm
+        solution_path = Path(self.root_dir) / "problems" / self.problem_name / f"solution_{subtask}.json"
+        if self.subtask_pop.get_subtask_size(subtask) == 0 and solution_path.exists():
+            try:
+                self.subtask_pop.load_subtask_from_file(subtask, solution_path)
+                for entry in self.subtask_pop.get_population(subtask):
+                    self._behavior_registry[(subtask, entry["code_sha256"])] = {
+                        "behavior": descriptor_from_dict(entry["behavior"]),
+                        "raw_code_sha256": code_digest(entry["best_sol"]),
+                    }
+            except (ValueError, TypeError) as error:
+                logger.info("Reevaluating legacy/mismatched population: %s", error)
+                entries = json.loads(solution_path.read_text())
+                if isinstance(entries, list):
+                    for entry in entries:
+                        if isinstance(entry, dict) and isinstance(entry.get("best_sol"), str):
+                            self.evaluate_heuristic(entry["best_sol"], subtask)
+        if self.subtask_pop.get_subtask_size(subtask) < min(3, self.cfg.pop_size):
+            self.generate_seed_algorithm(self.subtask_form, subtask, self._get_threshold(subtask))
+        self.subtask_pop.save_subtask_to_file(subtask, solution_path)
+        return self.subtask_pop.get_random_solution(subtask)
 
     # =========================================================================
     # Meta-level evaluation 
@@ -295,6 +346,8 @@ class MoH:
     def _make_subtask_utility(self, subtask):
         def utility(algorithm_str, idea=None, problem_type=None):
             problem_type = problem_type or subtask
+            if problem_type != subtask:
+                raise ValueError("Utility task mismatch")
             return self.evaluate_heuristic(algorithm_str, problem_type, mode="val")
         return utility
 
@@ -304,14 +357,17 @@ class MoH:
             utility = self._make_subtask_utility(subtask)
             improver = GeneratedImprover(improve_str, self._optimizer_timeout(), getattr(self.cfg, "seed", 0))
             evaluations_before = self._total_eval_calls
-            new_idea, improved_algorithm_str, utility_val = improver(
+            new_idea, improved_algorithm_str, _supplied_utility = improver(
                 subtask_pop_copy, utility, self.heu_llm, subtask_str, subtask
             )
             evaluation_count = self._total_eval_calls - evaluations_before
             logger.info("Optimizer on %s: %d new heuristic evaluations", subtask, evaluation_count)
             if evaluation_count == 0:
                 logger.warning("Optimizer on %s returned without evaluating a new heuristic", subtask)
-            return new_idea, improved_algorithm_str, utility_val
+            measured = self._ensure_measured_candidate(subtask, improved_algorithm_str, new_idea)
+            if measured is None:
+                raise ValueError("Returned heuristic has no valid measured behavior")
+            return new_idea, improved_algorithm_str, measured.mean_gap_pct
         except Exception as e:
             logger.warning(f"get_improver failed: {e}")
             logger.debug(traceback.format_exc())
@@ -363,7 +419,6 @@ class MoH:
                 if improved_algorithm_str == "":
                     return 1e6
 
-            self.subtask_pop.save_solution(self.subtask_list[test_idx], idea_r, improved_algorithm_str, new_utility_val)
             improved_algorithm_strs.append(improved_algorithm_str)
             utility_vals.append(new_utility_val)
             idea_list.append(idea_r)
@@ -516,6 +571,7 @@ class MoH:
                 "seed": getattr(self.cfg, "seed", 0),
                 "source_run": self.run_logger.output_dir,
                 "training_meta_utility": self.meta_utility_val,
+                "population_policy": self.subtask_pop.policy_metadata(),
                 "config": redacted_config(self.cfg),
             },
         )
