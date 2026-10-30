@@ -21,6 +21,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+logger = logging.getLogger(__name__)
+
 
 MODES = {
     "full_moh": (False, False, False),
@@ -323,7 +325,7 @@ class DualHiFoMoHMixin:
             with filename.open("a", encoding="utf-8") as f:
                 f.write(json.dumps(payload, ensure_ascii=False, allow_nan=False, sort_keys=True) + "\n")
         except (OSError, ValueError, TypeError) as exc:
-            logging.warning("Dual-HiFo telemetry write failed (search continues): %s", exc)
+            logger.warning("Dual-HiFo telemetry write failed (search continues): %s", exc)
 
     def evaluate_heuristic(self, algorithm_str, problem_type, mode="val"):
         controller = self.inner_hifo.get(problem_type)
@@ -349,14 +351,63 @@ class DualHiFoMoHMixin:
     def _cross_level_context(self) -> str:
         if not self.hifo_config.cross_level_enabled:
             return ""
-        latest = self.hifo_inner_state_by_task
-        if not latest:
+        if not self.inner_hifo:
             return ""
-        return json.dumps(
-            {task: {"best_utility": state["best_utility"], "stagnation_count": state["stagnation_count"], "regime": state["regime"]}
-             for task, state in sorted(latest.items())},
-            sort_keys=True, allow_nan=False,
+
+        # 1. Collect top verified mechanisms across inner subtasks
+        mechanism_tasks: dict[str, list[str]] = {}
+        mechanism_scores: dict[str, float] = {}
+
+        for task, controller in sorted(self.inner_hifo.items()):
+            for insight in controller.insights.values():
+                score = insight.credit(controller.step, self.hifo_config)
+                if insight.effectiveness >= 0:
+                    text = insight.text
+                    if text not in mechanism_tasks:
+                        mechanism_tasks[text] = []
+                        mechanism_scores[text] = score
+                    else:
+                        mechanism_scores[text] = max(mechanism_scores[text], score)
+                    if task not in mechanism_tasks[text]:
+                        mechanism_tasks[text].append(task)
+
+        # 2. Collect subtask search states
+        subtask_summaries: list[str] = []
+        for task, controller in sorted(self.inner_hifo.items()):
+            state = self.hifo_inner_state_by_task.get(task)
+            regime = state["regime"] if state else controller.regime
+            best_u = state["best_utility"] if state else controller.best_utility
+            stag = state["stagnation_count"] if state else controller.stagnation_count
+
+            if best_u is not None and math.isfinite(best_u):
+                u_str = f"{best_u:.6f}"
+            else:
+                u_str = "None"
+            subtask_summaries.append(f"{task}: best_utility={u_str}, regime={regime}, stagnation={stag}")
+
+        lines = ["[Inner Search Evidence & Distilled Mechanisms]"]
+        if mechanism_tasks:
+            lines.append("Validated heuristic mechanisms across subtasks:")
+            sorted_mechs = sorted(
+                mechanism_tasks.keys(),
+                key=lambda m: (len(mechanism_tasks[m]), mechanism_scores.get(m, 0.0)),
+                reverse=True,
+            )
+            for m in sorted_mechs[:4]:
+                proven_tasks = ", ".join(mechanism_tasks[m])
+                lines.append(f"  * Mechanism: \"{m}\" (active in: {proven_tasks})")
+        else:
+            lines.append("Validated heuristic mechanisms: None registered yet (early search phase).")
+
+        lines.append("Subtask optimization states:")
+        for s in subtask_summaries:
+            lines.append(f"  - {s}")
+        lines.append(
+            "Directive: Evolve the HeuristicOptimizer to promote cross-task reuse of these successful mechanisms "
+            "while exploring novel search strategies on stagnant subtasks."
         )
+        lines.append("[/Inner Search Evidence & Distilled Mechanisms]")
+        return "\n".join(lines)
 
     def get_seed(self):
         result = super().get_seed()

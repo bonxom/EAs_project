@@ -27,7 +27,7 @@ The local 11-test controller/hook suite passed in a Python 3.13 environment. Ful
 - `inner_hifo`: only candidate heuristic prompts and observations.
 - `outer_hifo`: only meta-optimizer prompts and observations.
 - `dual_hifo_independent`: both levels, no inner-to-outer history injection.
-- `dual_hifo_cross_level`: both levels, with past inner summaries in outer prompts.
+- `dual_hifo_cross_level`: both levels active with synthesized inner evidence (top validated AST mechanisms across subtasks, multi-task stagnation/progress regimes, and cross-task reuse directives) injected into outer meta-optimizer prompts.
 
 ## Stage 1 local audit (2026-10-17)
 

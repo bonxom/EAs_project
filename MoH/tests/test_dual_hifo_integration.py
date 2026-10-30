@@ -100,3 +100,17 @@ def test_cross_level_outer_prompt_includes_completed_inner_trace(tmp_path):
     h.try_improvement(None, None)
     assert "Completed inner-search evidence" in h.meta_llm.messages[0]
     assert "tsp_gls-20" in h.meta_llm.messages[0]
+    assert "Directive:" in h.meta_llm.messages[0]
+
+
+def test_cross_level_outer_prompt_includes_distilled_mechanisms(tmp_path):
+    h = Harness(tmp_path, "dual_hifo_cross_level")
+    h.get_seed()
+    # Simulate an inner subtask improving with a loop mechanism
+    heuristic_code = "def solve(inst):\n    for i in range(10):\n        pass\n    return 0"
+    h.inner_hifo["tsp_gls-20"].observe(heuristic_code, 2.0)
+    h.try_improvement(None, None)
+    msg = h.meta_llm.messages[0]
+    assert "Validated heuristic mechanisms across subtasks:" in msg
+    assert "Iteratively evaluate a bounded collection of candidates" in msg
+    assert "active in: tsp_gls-20" in msg

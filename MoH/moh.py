@@ -218,19 +218,27 @@ class MoH:
 
         expertise = "You are an expert in the domain of optimization heuristics and combinatorial optimization problems. Your task is to design heuristics that can effectively solve optimization problems."
         new_directions = self.heu_llm.prompt(expertise, message, 0.7)
-        json_file = extract_code(new_directions)
-        try:
-            data = json.loads(json_file)
-        except Exception as e:
-            logger.warning(f"Failed to parse JSON: {e}, retrying...")
-            new_message = f"There is an exception {e} while parsing the json file {json_file}, please check the json file and return a correct one."
-            expert = "You are an expert in finding coding errors and debugging."
-            new_directions = self.heu_llm.prompt(expert, new_message, 0.7)
-            json_file = extract_code(new_directions)
-            data = json.loads(json_file)
+        json_file = extract_code(new_directions) if new_directions else None
+        data = None
+        if json_file:
+            try:
+                data = json.loads(json_file)
+            except (json.JSONDecodeError, UnicodeDecodeError, ValueError, TypeError) as e:
+                logger.warning(f"Failed to parse JSON: {e}, retrying...")
+                new_message = f"There is an exception {e} while parsing the json file {json_file}, please check the json file and return a correct one."
+                expert = "You are an expert in finding coding errors and debugging."
+                new_directions = self.heu_llm.prompt(expert, new_message, 0.7)
+                json_file = extract_code(new_directions) if new_directions else None
+                if json_file:
+                    try:
+                        data = json.loads(json_file)
+                    except (json.JSONDecodeError, UnicodeDecodeError, ValueError, TypeError) as err:
+                        logger.warning(f"Failed to parse retried JSON: {err}")
 
-        for i in range(len(data['direction'])):
-            directions.append(data['direction'][i]["content"])
+        if data and isinstance(data, dict) and "direction" in data and isinstance(data["direction"], list):
+            for item in data["direction"]:
+                if isinstance(item, dict) and "content" in item:
+                    directions.append(item["content"])
         return directions
 
     def generate_seed_algorithm(self, formula_str, prob_type, threshold, t=0.7):
