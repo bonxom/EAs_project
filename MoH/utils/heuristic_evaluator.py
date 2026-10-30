@@ -17,6 +17,8 @@ from pathlib import Path
 
 from problems.tsp_gls.dataset_selection import load_eval_dataset
 
+from utils.behavior import BehaviorDescriptor, EvaluationIdentity, parse_behavior
+
 
 @dataclass(frozen=True)
 class EvalResult:
@@ -31,6 +33,8 @@ class EvalResult:
     elapsed_seconds: float
     stdout_path: str
     error: str | None
+    behavior: BehaviorDescriptor | None = None
+    instance_gaps: tuple[float, ...] = ()
 
 
 def _sha256_bytes(data: bytes) -> str:
@@ -301,6 +305,15 @@ class HeuristicEvaluator:
                 raise ValueError("Evaluator result dataset hash mismatch")
             if not math.isfinite(score) or not math.isfinite(elapsed):
                 raise ValueError("Evaluator result contains nonfinite values")
+            behavior = None
+            gaps = ()
+            if failures == 0:
+                expected = EvaluationIdentity(
+                    size, mode, dataset_digest, indices, self.seed,
+                    tuple({**self.solver_settings, "workers": workers}.items()),
+                )
+                behavior = parse_behavior(payload, expected=expected, code_sha256=code_digest)
+                gaps = behavior.gaps
             if failures < 0 or failures > count:
                 raise ValueError("Evaluator result has invalid failure count")
         except (KeyError, TypeError, ValueError, OSError, json.JSONDecodeError) as error:
@@ -326,4 +339,6 @@ class HeuristicEvaluator:
             elapsed_seconds=elapsed,
             stdout_path=str(stdout_path),
             error=None,
+            behavior=behavior,
+            instance_gaps=gaps,
         )

@@ -52,7 +52,7 @@ payload = {
         "iteration_limit": 1000,
         "perturbation_moves": 1,
     },
-    "instances": [],
+    "instances": [{"gap_pct": 1.25, "status": "ok"} for _ in indices],
 }
 Path(args.result_path).write_text(json.dumps(payload))
 print("1.25")
@@ -235,3 +235,43 @@ def test_malformed_result_is_failed(tmp_path):
     )
     assert result.status == "failed"
     assert result.mean_gap_pct is None
+
+
+def test_evaluator_exposes_behavior(tmp_path):
+    from utils.heuristic_evaluator import HeuristicEvaluator
+
+    result = HeuristicEvaluator(_root(tmp_path), tmp_path / 'out', workers=2).evaluate(
+        HEURISTIC, 500, 'val')
+    assert result.instance_gaps == (1.25,) * 8
+    assert result.behavior.identity.indices == result.indices
+    assert dict(result.behavior.identity.solver_settings)['workers'] == 2
+
+
+@pytest.mark.parametrize('mutation', [
+    'payload["instances"] = []',
+    'payload["mean_gap_pct"] = 4',
+    'payload["seed"] += 1',
+    'payload["solver_settings"]["workers"] = 99',
+    'payload["instances"][0]["gap_pct"] = float("nan")',
+])
+def test_invalid_behavior_result_fails(tmp_path, mutation):
+    from utils.heuristic_evaluator import HeuristicEvaluator
+
+    root = _root(tmp_path)
+    script = FAKE_EVAL.replace('Path(args.result_path).write_text', mutation + '\nPath(args.result_path).write_text')
+    (root / 'problems/tsp_gls/eval.py').write_text(script)
+    result = HeuristicEvaluator(root, tmp_path / 'out').evaluate(HEURISTIC, 500, 'val')
+    assert result.status == 'failed'
+    assert result.behavior is None
+
+
+def test_partial_failure_has_no_behavior(tmp_path):
+    from utils.heuristic_evaluator import HeuristicEvaluator
+
+    root = _root(tmp_path)
+    mutation = 'payload["failures"] = 1\npayload["instances"][0] = {"gap_pct": 1e6, "status": "failed"}\npayload["mean_gap_pct"] = (1e6 + 7 * 1.25) / 8\n'
+    script = FAKE_EVAL.replace('Path(args.result_path).write_text', mutation + 'Path(args.result_path).write_text')
+    (root / 'problems/tsp_gls/eval.py').write_text(script)
+    result = HeuristicEvaluator(root, tmp_path / 'out').evaluate(HEURISTIC, 500, 'val')
+    assert result.failures == 1
+    assert result.behavior is None

@@ -1,5 +1,6 @@
 import hashlib
 
+from utils.behavior import BehaviorDescriptor, EvaluationIdentity
 from utils.heuristic_evaluator import EvalResult
 from utils.population import Pop
 
@@ -39,7 +40,8 @@ class FakeLLM:
 
 
 class FakeEvaluator:
-    def __init__(self, scores=None, failed_codes=()):
+    def __init__(self, scores=None, failed_codes=(), vectors=None):
+        self.vectors = vectors or {}
         self.scores = scores or {}
         self.failed_codes = set(failed_codes)
         self.calls = []
@@ -76,10 +78,17 @@ class FakeEvaluator:
         self.calls.append((code, size, mode))
         failed = code in self.failed_codes
         manifest = self.preflight([size], include_test=True)[size][mode]
+        gaps = tuple(self.vectors.get(code, [self.scores.get(code, 1.0)] * len(manifest["indices"])))
+        score = sum(gaps) / len(gaps)
+        behavior = None if failed else BehaviorDescriptor(
+            EvaluationIdentity(size, mode, manifest["dataset_sha256"], manifest["indices"],
+                               self.seed, tuple(self.solver_settings.items())), gaps, score)
         return EvalResult(
             size=size,
             mode=mode,
-            mean_gap_pct=None if failed else self.scores.get(code, 1.0),
+            mean_gap_pct=None if failed else score,
+            behavior=behavior,
+            instance_gaps=() if failed else gaps,
             status="failed" if failed else "ok",
             failures=0,
             indices=manifest["indices"],
