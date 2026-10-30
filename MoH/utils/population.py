@@ -22,6 +22,9 @@ class Pop:
         for name in name_list:
             self.__population[name] = []
 
+    def _replace_population(self, task_name, entries):
+        self.__population[task_name] = entries
+
     def check_solution(self, task_name, solution):
         return any(entry["best_sol"] == solution for entry in self.__population[task_name])
 
