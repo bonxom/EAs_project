@@ -9,6 +9,7 @@ from pathlib import Path
 import hydra
 import numpy as np
 from inference import InferenceRunner, TargetInitializationError
+from utils.behavior_population import validate_fraction
 from utils.checkpoint import load_checkpoint
 from utils.deployment_report import evaluate_selected_heuristics, write_report
 from utils.generated_improver import GeneratedImprover
@@ -20,6 +21,7 @@ logger = logging.getLogger(__name__)
 
 
 def _validate_config(cfg) -> list[int]:
+    validate_fraction(cfg.get("population", {}).get("diversity_fraction", 0.3))
     if not cfg.get("checkpoint"):
         raise ValueError("deployment checkpoint is required")
     targets = [int(size) for size in cfg.target_sizes]
@@ -98,6 +100,7 @@ def _execute_deployment(cfg, llm, checkpoint, evaluator, targets):
         evaluator,
         output_dir,
         heuristic_format,
+        diversity_fraction=cfg.get("population", {}).get("diversity_fraction", 0.3),
         iterations=cfg.inference_iterations,
         population_size=cfg.population_size,
         seed_count=cfg.seed_count,

@@ -432,6 +432,7 @@ def export_run_checkpoint(
         raise ValueError("Legacy subtask snapshot is empty")
     task_pattern = re.compile(r"^tsp_gls-(\d+)$")
     sizes = []
+    policies = []
     population = Pop(list(snapshot), max(elite_count, 1))
     for task, entries in snapshot.items():
         match = task_pattern.match(task)
@@ -439,17 +440,27 @@ def export_run_checkpoint(
             raise ValueError(f"Unsupported legacy subtask snapshot entry: {task}")
         sizes.append(int(match.group(1)))
         for entry in entries:
+            policies.append(entry.get("population_policy"))
             population.save_solution(
                 task,
                 str(entry.get("idea", "")),
                 entry.get("best_sol"),
                 float(entry.get("utility")),
             )
+    policy = policies[0] if policies else None
+    if any(value != policy for value in policies):
+        raise ValueError("Mixed population policies in snapshot")
+    if policy is not None:
+        from utils.behavior_population import POLICY_VERSION, validate_fraction
+        if not isinstance(policy, dict) or policy.get("version") != POLICY_VERSION:
+            raise ValueError("Unsupported population policy")
+        validate_fraction(policy.get("diversity_fraction"))
     return export_checkpoint(
         Path(output_dir),
         code,
         population,
         {
+            **({"population_policy": policy} if policy is not None else {}),
             "training_sizes": sorted(sizes),
             "seed": seed,
             "config": config,

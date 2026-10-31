@@ -1,4 +1,5 @@
 import hashlib
+import os
 
 from utils.behavior import BehaviorDescriptor, EvaluationIdentity
 from utils.heuristic_evaluator import EvalResult
@@ -82,7 +83,7 @@ class FakeEvaluator:
         score = sum(gaps) / len(gaps)
         behavior = None if failed else BehaviorDescriptor(
             EvaluationIdentity(size, mode, manifest["dataset_sha256"], manifest["indices"],
-                               self.seed, tuple(self.solver_settings.items())), gaps, score)
+                               self.seed, tuple({**self.solver_settings, "workers": min(8, len(gaps), os.cpu_count() or 1)}.items())), gaps, score)
         return EvalResult(
             size=size,
             mode=mode,

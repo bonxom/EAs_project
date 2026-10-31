@@ -162,6 +162,7 @@ def test_last_rejected_iteration_exports_previous_active_code(tmp_path):
     optimizer.improver_str = accepted
     optimizer.meta_utility_val = 1.0
     optimizer.subtask_pop = training_population((20, 50))
+    optimizer.subtask_pop.policy_metadata = Mock(return_value={"version": "fixture"})
     optimizer.improver_pop = Mock()
     optimizer.try_improvement = Mock(return_value=(False, None, Mock()))
     optimizer.run_logger = Mock(output_dir=str(tmp_path / "training"))
@@ -228,3 +229,25 @@ def test_checkpoint_records_optimizer_digest(tmp_path):
     assert metadata["optimizer"]["sha256"] == hashlib.sha256(
         OPTIMIZER.encode()
     ).hexdigest()
+
+
+@pytest.mark.parametrize('mixed', [False, True])
+def test_run_conversion_carries_population_policy(tmp_path, mixed):
+    from utils.checkpoint import export_run_checkpoint, load_checkpoint
+
+    run = tmp_path / 'run'
+    _write_legacy_run(run, [(0, 2, False, 'now')])
+    path = run / 'pop/subtask/iter_1.json'
+    snapshot = json.loads(path.read_text())
+    policy = {'version': 'behavior-maxmin-log1p-v1', 'diversity_fraction': .3}
+    for entries in snapshot.values():
+        entries[0]['population_policy'] = dict(policy)
+    if mixed:
+        snapshot['tsp_gls-50'][0]['population_policy']['diversity_fraction'] = 0
+    path.write_text(json.dumps(snapshot))
+    if mixed:
+        with pytest.raises(ValueError, match='polic'):
+            export_run_checkpoint(run, tmp_path / 'checkpoint')
+    else:
+        checkpoint = load_checkpoint(export_run_checkpoint(run, tmp_path / 'checkpoint'))
+        assert checkpoint.metadata['population_policy'] == policy

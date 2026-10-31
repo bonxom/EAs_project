@@ -384,3 +384,92 @@ def test_cross_target_utility_request_is_rejected(tmp_path):
         program_factory=CrossTargetProgram,
     ).run_target(500)
     assert all(call[1] == 500 for call in evaluator.calls)
+
+
+def test_behavior_diversity_keeps_unreturned_complement(tmp_path):
+    import json
+
+    from inference import InferenceRunner
+
+    fourth = HEURISTIC.replace('return edge_distance', 'return edge_distance + 0')
+    vectors = {HEURISTIC: (0, 2) * 4, BETTER: (0, 2.2) * 4,
+               THIRD: (0, 2.4) * 4, fourth: (3, 0) * 4}
+
+    class FakeProgram:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def __call__(self, population, utility, *args):
+            for code in [BETTER, THIRD, fourth]:
+                utility(code, 'candidate', 'tsp_gls-500')
+            return 'seed', HEURISTIC, -999
+
+    for fraction, retained in [(0, False), (.34, True)]:
+        output = tmp_path / str(fraction)
+        runner = InferenceRunner(_checkpoint(), FakeLLM(), FakeEvaluator(vectors=vectors),
+            output, HEURISTIC, iterations=1, seed_count=1, population_size=3,
+            program_factory=FakeProgram, diversity_fraction=fraction)
+        selected = runner.run_target(500)
+        snapshot = json.loads((output / 'populations/tsp500/iter_000.json').read_text())
+        assert any(e['best_sol'] == fourth.strip() for e in snapshot['population']) == retained
+        assert snapshot['population_policy']['diversity_fraction'] == fraction
+        assert snapshot['diversity']['size'] == 3
+        assert selected.code == HEURISTIC
+        assert selected.validation.mean_gap_pct == 1
+
+
+@pytest.mark.parametrize('fraction', [-1, 1, True, float('nan'), float('inf')])
+def test_invalid_diversity_config_before_llm(tmp_path, fraction):
+    from inference import InferenceRunner
+
+    llm = FakeLLM()
+    with pytest.raises(ValueError):
+        InferenceRunner(_checkpoint(), llm, FakeEvaluator(), tmp_path, HEURISTIC,
+                        diversity_fraction=fraction)
+    assert llm.messages == []
+
+
+def test_partial_failure_and_test_identity_never_selected(tmp_path):
+    from dataclasses import replace
+
+    from inference import InferenceRunner
+
+    class BadEvaluator(FakeEvaluator):
+        def evaluate(self, code, size, mode):
+            result = super().evaluate(code, size, mode)
+            if code == BETTER:
+                return replace(result, failures=1, behavior=None)
+            if code == THIRD:
+                return replace(result, behavior=replace(result.behavior,
+                    identity=replace(result.behavior.identity, mode='test')))
+            return result
+
+    class Program:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def __call__(self, population, utility, *args):
+            assert utility(BETTER, 'failed') == 1e6
+            assert utility(THIRD, 'wrong split') == 1e6
+            return 'seed', HEURISTIC, -999
+
+    selected = InferenceRunner(_checkpoint(), FakeLLM(), BadEvaluator(), tmp_path,
+        HEURISTIC, seed_count=1, iterations=1, program_factory=Program).run_target(500)
+    assert selected.code == HEURISTIC
+    assert selected.metadata['iteration_errors'] == []
+
+
+def test_final_test_does_not_change_selection_or_population(tmp_path):
+    from inference import InferenceRunner
+    from utils.deployment_report import evaluate_selected_heuristics
+
+    evaluator = FakeEvaluator()
+    selected = InferenceRunner(_checkpoint(), FakeLLM(), evaluator, tmp_path, HEURISTIC,
+        seed_count=1, iterations=1).run_target(500)
+    snapshot = tmp_path / 'populations/tsp500/iter_000.json'
+    before = snapshot.read_bytes()
+    evaluator.scores[HEURISTIC] = 900
+    rows = evaluate_selected_heuristics([selected], evaluator, tmp_path, _checkpoint())
+    assert rows[0]['test_gap_pct'] == 900
+    assert selected.validation.mean_gap_pct == 1
+    assert snapshot.read_bytes() == before

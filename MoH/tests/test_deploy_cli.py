@@ -210,3 +210,23 @@ assert rows[0]["status"] == "validation_only"
     assert (output / "heuristics" / "tsp500.py").is_file()
     assert (output / "report.json").is_file()
     assert (checkpoint_dir / "meta_optimizer.py").read_bytes() == before
+
+
+@pytest.mark.parametrize('fraction', [0, .3])
+def test_cli_passes_diversity_fraction(tmp_path, monkeypatch, fraction):
+    from deploy import run_deployment
+
+    checkpoint = load_checkpoint(_checkpoint_dir(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    rows = run_deployment(_cfg(population={'diversity_fraction': fraction}), FakeLLM(),
+                          evaluator=FakeEvaluator(), checkpoint=checkpoint)
+    assert rows[0]['selection_metadata']['population_policy']['diversity_fraction'] == fraction
+
+
+def test_cli_rejects_bad_fraction_before_llm():
+    from deploy import run_deployment
+
+    llm = FakeLLM()
+    with pytest.raises(ValueError, match='diversity_fraction'):
+        run_deployment(_cfg(population={'diversity_fraction': float('nan')}), llm)
+    assert llm.messages == []

@@ -1,6 +1,6 @@
 # Behavior-diverse heuristic populations
 
-Status: Ready for review before implementation planning.
+Status: Approved by the user on 2026-10-30; implementation plan in review.
 
 ## Requested outcome
 

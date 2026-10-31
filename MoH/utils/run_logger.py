@@ -1,11 +1,13 @@
 """RunLogger: centralized I/O manager for a single MoH run.
 """
 
-import os
 import csv
 import json
 import logging
+import os
 from datetime import datetime
+
+from utils.behavior_population import BehaviorPopulation
 
 logger = logging.getLogger(__name__)
 
@@ -84,6 +86,12 @@ class RunLogger:
         """
         path = os.path.join(self.dirs["pop_subtask"], f"{tag}.json")
         pop.save_all_data_to_file(path)
+        if isinstance(pop, BehaviorPopulation):
+            diagnostics_path = os.path.join(self.dirs["pop_subtask"], f"{tag}.diversity.json")
+            with open(diagnostics_path, "w") as output:
+                json.dump({"population_policy": pop.policy_metadata(),
+                           "tasks": {task: pop.diagnostics(task) for task in pop.identities}},
+                          output, indent=2, allow_nan=False)
         logger.info(f"Saved subtask pop → {path}")
 
     # =========================================================================

@@ -24,3 +24,6 @@ hydra:
   job:
     name: moh-deployment
     chdir: true
+
+population:
+  diversity_fraction: 0.3

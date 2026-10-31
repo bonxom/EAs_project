@@ -26,3 +26,6 @@ problems/*/data/
 
 # Generated heuristic populations
 problems/*/solution_*.json
+
+# env
+.env

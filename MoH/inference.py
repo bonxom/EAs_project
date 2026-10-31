@@ -7,9 +7,12 @@ import hashlib
 import json
 import logging
 import math
-from dataclasses import asdict, dataclass, field
+import os
+from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 
+from utils.behavior import EvaluationIdentity
+from utils.behavior_population import BehaviorPopulation, validate_fraction
 from utils.elite_reference import EliteReferenceLLM
 from utils.generated_improver import GeneratedImprover
 from utils.heuristic_evaluator import EvalResult
@@ -47,6 +50,8 @@ def initialize_target_population(
     max_attempts=25,
     seed=0,
     reference_count=2,
+    diversity_fraction=0.3,
+    evaluation_identity=None,
 ) -> Pop:
     if population_size <= 0:
         raise ValueError("population_size must be positive")
@@ -55,7 +60,9 @@ def initialize_target_population(
     if max_attempts <= 0:
         raise ValueError("max_attempts must be positive")
     task = f"tsp_gls-{int(size)}"
-    population = Pop([task], population_size, allow_equal_utility=True)
+    validate_fraction(diversity_fraction)
+    population = (BehaviorPopulation({task: evaluation_identity}, population_size, diversity_fraction)
+                  if evaluation_identity is not None else None)
     reference_llm = EliteReferenceLLM(
         llm,
         elites,
@@ -82,18 +89,21 @@ def initialize_target_population(
                 continue
             code = response if response.strip() == extracted else extracted
             canonical_code = clean_code(code)
-            if population.check_solution(task, canonical_code):
+            if population is not None and population.check_solution(task, canonical_code):
                 continue
             compile(code, f"<target-seed-{size}-{attempt}>", "exec")
             idea = extract_idea(response) or f"target seed {attempt + 1}"
             result = evaluate_candidate(code, idea)
             if (
-                result.status != "ok"
+                result.behavior is None
+                or result.status != "ok"
                 or result.mean_gap_pct is None
                 or not math.isfinite(result.mean_gap_pct)
             ):
                 continue
-            population.save_solution(task, idea, code, result.mean_gap_pct)
+            if population is None:
+                population = BehaviorPopulation({task: result.behavior.identity}, population_size, diversity_fraction)
+            population.admit(task, idea, code, result.behavior)
             if population.get_subtask_size(task) >= seed_count:
                 break
         except _BudgetExhausted as error:
@@ -103,6 +113,8 @@ def initialize_target_population(
             logger.warning("Target %s seed attempt %s failed: %s", size, attempt, error)
             continue
 
+    if population is None:
+        raise TargetInitializationError(f"Target {size} has no valid seed with measured behavior")
     accepted = population.get_subtask_size(task)
     population.initialization = {
         "requested": seed_count,
@@ -140,6 +152,7 @@ class InferenceRunner:
         optimizer_timeout=3600,
         seed=0,
         program_factory=GeneratedImprover,
+        diversity_fraction=0.3,
     ):
         positive = {
             "population_size": population_size,
@@ -157,6 +170,7 @@ class InferenceRunner:
             raise ValueError("reference_count cannot be negative")
         if seed_count > population_size:
             raise ValueError("seed_count cannot exceed population_size")
+        self.diversity_fraction = validate_fraction(diversity_fraction)
         self.checkpoint = checkpoint
         self.llm = llm
         self.evaluator = evaluator
@@ -177,8 +191,13 @@ class InferenceRunner:
         task = f"tsp_gls-{size}"
         manifest = self.evaluator.preflight([size], include_test=False)[size]["val"]
         dataset_digest = manifest["dataset_sha256"]
+        actual_settings = {**self.evaluator.solver_settings,
+                           "workers": min(self.evaluator.solver_settings["workers"],
+                                          len(manifest["indices"]), os.cpu_count() or 1, 8)}
+        identity = EvaluationIdentity(size, "val", dataset_digest, tuple(manifest["indices"]),
+                                      self.evaluator.seed, tuple(actual_settings.items()))
         solver_key = json.dumps(
-            self.evaluator.solver_settings, sort_keys=True, separators=(",", ":")
+            actual_settings, sort_keys=True, separators=(",", ":")
         )
         cache = {}
         evaluated = {}
@@ -196,6 +215,7 @@ class InferenceRunner:
                 code_digest,
                 self.evaluator.seed,
                 dataset_digest,
+                tuple(manifest["indices"]),
                 solver_key,
             )
 
@@ -211,18 +231,24 @@ class InferenceRunner:
                     )
                 evaluation_count += 1
                 result = self.evaluator.evaluate(code, size, "val")
+                if (result.behavior is None or result.behavior.identity != identity
+                        or result.failures != 0 or result.code_sha256 != key[2]
+                        or result.mean_gap_pct != result.behavior.mean_gap_pct
+                        or result.instance_gaps != result.behavior.gaps):
+                    result = replace(result, status="failed", behavior=None, instance_gaps=(),
+                                     mean_gap_pct=None, error="Invalid validation behavior")
                 cache[key] = result
             if (
-                result.status == "ok"
+                result.behavior is not None
+                and result.behavior.identity == identity
+                and result.status == "ok"
                 and result.mean_gap_pct is not None
                 and math.isfinite(result.mean_gap_pct)
             ):
                 digest = key[2]
                 evaluated.setdefault(digest, (idea or "generated", code, result))
                 if population is not None:
-                    population.save_solution(
-                        task, idea or "generated", code, result.mean_gap_pct
-                    )
+                    population.admit(task, idea or "generated", code, result.behavior)
             return result
 
         try:
@@ -237,6 +263,8 @@ class InferenceRunner:
                 max_attempts=self.initialization_attempts,
                 seed=self.seed,
                 reference_count=self.reference_count,
+                diversity_fraction=self.diversity_fraction,
+                evaluation_identity=identity,
             )
         except _BudgetExhausted as error:
             raise TargetInitializationError(str(error)) from error
@@ -260,7 +288,8 @@ class InferenceRunner:
                 )
             result = evaluate_candidate(code, idea)
             if (
-                result.status != "ok"
+                result.behavior is None
+                or result.status != "ok"
                 or result.mean_gap_pct is None
                 or not math.isfinite(result.mean_gap_pct)
             ):
@@ -277,6 +306,8 @@ class InferenceRunner:
                     best["best_sol"].encode()
                 ).hexdigest(),
                 "population": population.get_population(task),
+                "population_policy": population.policy_metadata(),
+                "diversity": population.diagnostics(task),
                 "error": error,
             }
             path = target_dir / f"iter_{iteration:03d}.json"
@@ -339,6 +370,8 @@ class InferenceRunner:
             evaluated.values(), key=lambda item: item[2].mean_gap_pct
         )
         metadata = {
+            "population_policy": population.policy_metadata(),
+            "diversity": population.diagnostics(task),
             "iterations_completed": iterations_completed,
             "evaluation_count": evaluation_count,
             "early_stop_reason": early_stop_reason,

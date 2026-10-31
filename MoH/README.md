@@ -62,6 +62,34 @@ enough instances and log the data file, seed and selected indices. Evaluation
 uses at most 8 workers. Scores from older runs that used test data for validation
 must be recomputed before reusing their populations with the new validation split.
 
+### Behavior-diverse heuristic populations
+
+Inner heuristic populations (`subtask_pop` in training and target populations in deployment) retain both high-quality elites and behaviorally complementary heuristic candidates using `population.diversity_fraction` (default: `0.3`).
+
+#### Survivor Selection Policy
+- **Floor Rounding:** For a population capacity $K$ and diversity fraction $f$, $K - \lfloor K \times f \rfloor$ slots are reserved for quality elites (ranked by mean gap ascending, then cleaned code SHA-256 ascending). The remaining $\lfloor K \times f \rfloor$ slots are filled greedily to maximize the minimum behavior distance to already selected survivors. For example, capacity 10 with fraction 0.3 yields 7 elite slots and 3 diversity slots.
+- **Behavior Distance:** Distance between two candidates is the root-mean-square coordinate difference of $\log(1 + \text{gap})$ across all validation instances. Ties in distance are broken deterministically by quality rank.
+- **Failure Exclusion:** Candidates with any failed instances or nonfinite gap values are completely excluded from admission. Evaluation failure penalties never become novelty rewards.
+- **Order Dependence:** Greedy max-min selection occurs over current survivors plus the newly evaluated candidate. Sequential arrival order can affect intermediate survivors; identical candidate insertion sequences and seeds reproduce exact populations.
+- **Identity Matching & Legacy Reevaluation:** Descriptors are bound to an immutable `EvaluationIdentity` (`size, mode, dataset_sha256, indices, seed, solver_settings`). Loading existing or legacy population snapshots lacking matching descriptors triggers automated reevaluation on current validation instances before admission.
+- **Quality-only Ablation:** Setting `population.diversity_fraction=0` enables a quality-only baseline. This ablation retains the same strict validation, identity matching, and deterministic tie-breaking without diversity slots. Valid measured vectors are still required.
+
+#### Experimental Ablation Commands
+Run these commands from the `MoH/` directory:
+
+```bash
+# Training: Quality-only baseline (fraction = 0) vs. Behavior-diverse (fraction = 0.3)
+uv run python main.py population.diversity_fraction=0 seed=0
+uv run python main.py population.diversity_fraction=0.3 seed=0
+
+# Deployment: Quality-only baseline vs. Behavior-diverse
+uv run python deploy.py checkpoint=/absolute/path/to/checkpoint population.diversity_fraction=0
+uv run python deploy.py checkpoint=/absolute/path/to/checkpoint population.diversity_fraction=0.3
+```
+
+#### Reproducibility & Evaluation Notes
+Meaningful comparison between diversity and baseline runs requires matched initial seed candidates, random seeds, instance identities, LLM provider configuration, and evaluation call budgets. Random seeds alone do not guarantee identical outputs across external LLM API calls. Diagnostics track `best_mean_gap` and `mean_pairwise_distance` in population snapshots (`.diversity.json` artifacts). Held-out test evaluation occurs strictly after selection and does not influence survivor selection. Improved downstream benchmark performance is a research hypothesis to be evaluated through controlled experiments, not an implementation assumption.
+
 ### Triển khai optimizer đã học
 
 Chạy các lệnh sau từ thư mục `MoH`. Khi virtual environment của dự án đã được
