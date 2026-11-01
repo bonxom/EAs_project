@@ -1,0 +1,69 @@
+# ===== Heuristic Code =====
+#{This strategy applies standard Guided Local Search scale-invariant edge penalties based on mean tour edge length modulated by relative cost deviation, and selectively discounts unused incident edges to escape local optima.}
+
+import numpy as np
+
+def update_edge_distance(edge_distance, local_opt_tour, edge_n_used):
+    updated_edge_distance = np.copy(edge_distance)
+    n = len(local_opt_tour)
+    if n == 0:
+        return updated_edge_distance
+
+    u_idx = np.array(local_opt_tour, dtype=np.intp)
+    v_idx = np.roll(u_idx, -1)
+
+    costs = edge_distance[u_idx, v_idx].astype(np.float64)
+    used = edge_n_used[u_idx, v_idx].astype(np.float64)
+
+    # Standard Guided Local Search utility: cost / (1 + count)
+    utilities = costs / (1.0 + used)
+    max_util = np.max(utilities)
+
+    # Identify edges with maximum utility (or within a tight tolerance of the maximum)
+    penalize_mask = utilities >= (0.999 * max_util)
+    if not np.any(penalize_mask):
+        penalize_mask = utilities >= np.median(utilities)
+
+    p_u = u_idx[penalize_mask]
+    p_v = v_idx[penalize_mask]
+    p_costs = costs[penalize_mask]
+    p_used = used[penalize_mask]
+
+    # Scale-invariant GLS penalty formulation:
+    # alpha * (tour_length / n) * (p_costs / mean_cost) / (1 + p_used)
+    tour_length = np.sum(costs)
+    mean_edge_cost = tour_length / n
+    alpha = 0.3
+
+    relative_cost = p_costs / (mean_edge_cost + 1e-12)
+    penalties = alpha * mean_edge_cost * relative_cost / (1.0 + p_used)
+
+    updated_edge_distance[p_u, p_v] += penalties
+    updated_edge_distance[p_v, p_u] += penalties
+
+    # Reward/discount unused incident edges for the penalized vertices
+    penalized_nodes = np.unique(np.concatenate((p_u, p_v)))
+    decay_ratio = 0.02
+    for u in penalized_nodes:
+        unused_mask = (edge_n_used[u] == 0)
+        unused_mask[u] = False
+        if np.any(unused_mask):
+            current_vals = updated_edge_distance[u, unused_mask]
+            updated_edge_distance[u, unused_mask] -= current_vals * decay_ratio
+            updated_edge_distance[unused_mask, u] = updated_edge_distance[u, unused_mask]
+
+    return updated_edge_distance
+# ===== Eval Output =====
+[*] Running ...
+[*] mode=val, data=/home/ducanh/projects/EAs_project/MoH/problems/tsp_gls/data/val/val_instance_data_sol_50.pkl, seed=0, n_instances=8
+[*] instance_indices=[6, 9, 0, 2, 4, 3, 5, 1]
+[*] instance 6: obj=5.7136, gap=0.5983
+[*] instance 9: obj=6.0108, gap=0.7860
+[*] instance 0: obj=5.8546, gap=1.3193
+[*] instance 2: obj=5.8274, gap=0.3500
+[*] instance 4: obj=5.5821, gap=3.4387
+[*] instance 3: obj=5.8975, gap=2.4424
+[*] instance 5: obj=5.6187, gap=0.0000
+[*] instance 1: obj=5.3071, gap=2.7501
+[*] ave_gap on size 50: 1.460610596695916
+1.460610596695916

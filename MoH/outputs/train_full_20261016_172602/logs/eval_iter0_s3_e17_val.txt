@@ -1,0 +1,76 @@
+# ===== Heuristic Code =====
+# {Synthesizes efficient partitioned k-NN density estimation with an adaptive-slope sigmoid rank penalty and progressive outlier boosting scaled by tour edge variance to selectively penalize inefficient structural edges.}
+
+import numpy as np
+
+def update_edge_distance(edge_distance, local_opt_tour, edge_n_used):
+    updated_edge_distance = np.copy(edge_distance)
+    n = len(local_opt_tour)
+    if n < 3:
+        return updated_edge_distance
+
+    # Efficient partitioned k-NN calculation for node density
+    k = min(5, n - 1)
+    k_nn_dists = np.partition(edge_distance, kth=k, axis=1)[:, 1:k+1]
+    k_nn_avg = np.mean(k_nn_dists, axis=1)
+    density = 1.0 / (k_nn_avg + 1e-6)
+    density_norm = density / (np.mean(density) + 1e-6)
+
+    # Tour edge characteristics
+    u_idx = local_opt_tour
+    v_idx = np.roll(local_opt_tour, -1)
+    tour_lengths = edge_distance[u_idx, v_idx]
+    usage = edge_n_used[u_idx, v_idx]
+
+    mean_len = np.mean(tour_lengths) + 1e-6
+    std_len = np.std(tour_lengths)
+    cv = std_len / mean_len  # Coefficient of variation of tour edge lengths
+    rel_lengths = tour_lengths / mean_len
+
+    # Dynamically scale sigmoid slope based on edge length dispersion
+    # Sharper sigmoid when variance is high to target outliers, smoother when uniform
+    slope = np.clip(2.0 + 6.0 * cv, 2.0, 8.0)
+    rank_penalty = 1.0 / (1.0 + np.exp(-slope * (rel_lengths - 1.0)))
+
+    # Usage and density factors
+    usage_factor = 1.0 / (1.0 + 0.35 * usage)
+    density_factor = 0.5 * (density_norm[u_idx] + density_norm[v_idx])
+    local_penalty = rel_lengths * usage_factor * density_factor
+
+    # Balance global and local guided penalties
+    freq_mean = np.mean(usage)
+    w_global = 0.6 / (1.0 + 0.1 * freq_mean)
+    w_local = 1.0 - w_global
+    base_penalty = (w_global * rank_penalty + w_local * local_penalty) * usage_factor
+
+    # Progressive outlier boosting above 75th percentile modulated by density
+    p75 = np.percentile(tour_lengths, 75)
+    max_len = np.max(tour_lengths)
+    spread = max_len - p75 + 1e-6
+    high_mask = tour_lengths >= p75
+
+    bridge_weight = np.clip(density_factor[high_mask], 0.5, 1.5)
+    progressive_boost = 1.0 + 0.5 * ((tour_lengths[high_mask] - p75) / spread) * bridge_weight
+
+    final_penalty = base_penalty.copy()
+    final_penalty[high_mask] *= progressive_boost
+
+    # Symmetrically update distances
+    np.add.at(updated_edge_distance, (u_idx, v_idx), final_penalty)
+    np.add.at(updated_edge_distance, (v_idx, u_idx), final_penalty)
+
+    return updated_edge_distance
+# ===== Eval Output =====
+[*] Running ...
+[*] mode=val, data=/home/ducanh/projects/EAs_project/MoH/problems/tsp_gls/data/val/val_instance_data_sol_200.pkl, seed=0, n_instances=8
+[*] instance_indices=[6, 9, 0, 2, 4, 3, 5, 1]
+[*] instance 6: obj=10.5144, gap=0.6563
+[*] instance 9: obj=10.7115, gap=0.4548
+[*] instance 0: obj=10.8857, gap=0.0000
+[*] instance 2: obj=10.9556, gap=0.0712
+[*] instance 4: obj=10.9148, gap=0.6241
+[*] instance 3: obj=10.6191, gap=0.1622
+[*] instance 5: obj=10.9053, gap=0.2002
+[*] instance 1: obj=11.0657, gap=0.3764
+[*] ave_gap on size 200: 0.31814856606975084
+0.31814856606975084

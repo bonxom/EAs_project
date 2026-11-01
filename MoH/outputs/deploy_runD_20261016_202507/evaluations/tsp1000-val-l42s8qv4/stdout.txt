@@ -1,0 +1,13 @@
+[*] Running ...
+[*] mode=val, data=/home/ducanh/projects/EAs_project/MoH/problems/tsp_gls/data/val/val_instance_data_sol_1000.pkl, seed=0, n_instances=8
+[*] instance_indices=[6, 9, 0, 2, 4, 3, 5, 1]
+[*] instance 6: obj=23.6590, gap=3.5827
+[*] instance 9: obj=23.6530, gap=3.3548
+[*] instance 0: obj=23.7843, gap=4.1914
+[*] instance 2: obj=24.0246, gap=3.8423
+[*] instance 4: obj=24.1291, gap=3.4730
+[*] instance 3: obj=23.6929, gap=2.9049
+[*] instance 5: obj=24.1092, gap=3.3418
+[*] instance 1: obj=23.9937, gap=3.5427
+[*] ave_gap on size 1000: 3.5292143483143965
+3.5292143483143965

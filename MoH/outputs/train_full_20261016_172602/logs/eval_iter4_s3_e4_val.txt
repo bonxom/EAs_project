@@ -1,0 +1,54 @@
+# ===== Heuristic Code =====
+#{This algorithm sparsifies Guided Local Search penalization by selectively targeting edges exceeding median relative-to-density cost with superlinear scaling while zeroing sub-threshold penalties to prevent baseline drift.}#
+
+import numpy as np
+
+def update_edge_distance(edge_distance, local_opt_tour, edge_n_used):
+    updated_edge_distance = np.copy(edge_distance)
+    n = len(local_opt_tour)
+
+    # Calculate k-nearest neighbor reference distances for local density normalization
+    k = min(6, n - 1)
+    sorted_dists = np.partition(edge_distance, k, axis=1)[:, 1:k+1]
+    k_nn_avg = np.mean(sorted_dists, axis=1)
+
+    u_idx = local_opt_tour
+    v_idx = np.roll(local_opt_tour, -1)
+    tour_edge_lengths = edge_distance[u_idx, v_idx]
+
+    # Baseline expected edge length based on endpoint neighborhood scales
+    expected_length = 0.5 * (k_nn_avg[u_idx] + k_nn_avg[v_idx]) + 1e-6
+    relative_edge_cost = tour_edge_lengths / expected_length
+
+    # Calculate hyperbolic usage decay to avoid over-penalizing frequently broken edges
+    usage_factor = 1.0 / (1.0 + 0.4 * edge_n_used[u_idx, v_idx])
+    edge_utility = relative_edge_cost * usage_factor
+
+    # Ruin-and-recreate thresholding: zero out sub-threshold edges to concentrate GLS gradient
+    thresh = np.percentile(edge_utility, 50)
+    active_mask = edge_utility > thresh
+
+    penalties = np.zeros_like(edge_utility)
+    # Superlinear scaling on targeted bottleneck edges scaled to relative tour magnitude
+    excess = edge_utility[active_mask] - thresh
+    penalties[active_mask] = (excess ** 1.5) * (tour_edge_lengths[active_mask] / (np.mean(tour_edge_lengths) + 1e-6))
+
+    # Accumulate symmetric penalties directly onto targeted tour edges
+    np.add.at(updated_edge_distance, (u_idx, v_idx), penalties)
+    np.add.at(updated_edge_distance, (v_idx, u_idx), penalties)
+
+    return updated_edge_distance
+# ===== Eval Output =====
+[*] Running ...
+[*] mode=val, data=/home/ducanh/projects/EAs_project/MoH/problems/tsp_gls/data/val/val_instance_data_sol_200.pkl, seed=0, n_instances=8
+[*] instance_indices=[6, 9, 0, 2, 4, 3, 5, 1]
+[*] instance 6: obj=10.4462, gap=0.0031
+[*] instance 9: obj=10.7619, gap=0.9272
+[*] instance 0: obj=10.9465, gap=0.5579
+[*] instance 2: obj=11.0530, gap=0.9613
+[*] instance 4: obj=10.9095, gap=0.5747
+[*] instance 3: obj=10.6372, gap=0.3329
+[*] instance 5: obj=11.1072, gap=2.0550
+[*] instance 1: obj=11.0580, gap=0.3062
+[*] ave_gap on size 200: 0.7147997538170775
+0.7147997538170775

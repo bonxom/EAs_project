@@ -1,0 +1,97 @@
+# ===== Heuristic Code =====
+# {This algorithm computes memory-discounted edge penalties focused on persistent sub-tours with contextual segment-level usage and selectively rewards mutual nearest-neighbor alternative shortcuts around disrupted vertices.}
+
+import numpy as np
+
+def update_edge_distance(edge_distance, local_opt_tour, edge_n_used):
+    updated_edge_distance = np.copy(edge_distance)
+    n = len(local_opt_tour)
+
+    # Extract current tour edges
+    tour_edges = [(local_opt_tour[i], local_opt_tour[(i + 1) % n]) for i in range(n)]
+    costs = np.array([edge_distance[u, v] for u, v in tour_edges], dtype=np.float64)
+    used_counts = np.array([edge_n_used[u, v] for u, v in tour_edges], dtype=np.float64)
+
+    # Calculate contextual segment usage: average usage of adjacent edges to identify persistent sub-tours
+    seg_used = np.zeros(n, dtype=np.float64)
+    for i in range(n):
+        prev_idx = (i - 1 + n) % n
+        next_idx = (i + 1) % n
+        # Weighted combination emphasizing the edge itself and its neighboring sub-tour context
+        seg_used[i] = 0.5 * used_counts[i] + 0.25 * (used_counts[prev_idx] + used_counts[next_idx])
+
+    # Utility calculation balancing edge cost and memory-weighted sub-tour persistence
+    mean_cost = np.mean(costs)
+    std_cost = np.std(costs) + 1e-8
+
+    utilities = np.zeros(n, dtype=np.float64)
+    for i in range(n):
+        # Discount factor for frequency: sub-linear scaling to avoid over-penalization while prioritizing persistent edges
+        freq_factor = np.log1p(seg_used[i] + 1.0)
+        norm_cost = (costs[i] - mean_cost) / std_cost
+        sigmoid_cost = 1.0 / (1.0 + np.exp(-norm_cost))
+        utilities[i] = (costs[i] * (0.8 + 0.4 * sigmoid_cost)) * freq_factor / (1.0 + 0.5 * used_counts[i])
+
+    threshold = np.median(utilities)
+    max_util = np.max(utilities) + 1e-8
+    penalized_nodes = set()
+
+    # Penalize edges in persistent high-utility sub-tours
+    for idx in range(n):
+        if utilities[idx] >= threshold:
+            u, v = tour_edges[idx]
+            used = used_counts[idx]
+            # Guided penalty scaled by utility and damped by square root of usage
+            penalty = (costs[idx] / (1.0 + np.sqrt(used + 1.0))) * (0.75 + 0.5 * (utilities[idx] / max_util))
+            updated_edge_distance[u, v] += penalty
+            updated_edge_distance[v, u] += penalty
+            penalized_nodes.add(u)
+            penalized_nodes.add(v)
+
+    # Sparsely reward reciprocal nearest neighbors around penalized nodes to guide escape routes
+    k_neighbors = min(6, max(3, n // 20))
+    base_decay = 0.04
+    candidate_neighbors = {}
+
+    for u in penalized_nodes:
+        dists = edge_distance[u].copy()
+        dists[u] = np.inf
+        sorted_indices = np.argsort(dists)
+        valid_candidates = []
+        for v in sorted_indices:
+            if edge_n_used[u, v] <= 1:
+                valid_candidates.append(int(v))
+                if len(valid_candidates) >= k_neighbors:
+                    break
+        candidate_neighbors[u] = valid_candidates
+
+    visited_pairs = set()
+    for u in penalized_nodes:
+        for rank_u, v in enumerate(candidate_neighbors[u]):
+            pair = (min(u, v), max(u, v))
+            if pair in visited_pairs:
+                continue
+            if v in candidate_neighbors and u in candidate_neighbors[v]:
+                rank_v = candidate_neighbors[v].index(u)
+                avg_rank = 0.5 * (rank_u + rank_v)
+                rank_factor = 1.0 / (1.0 + avg_rank * 0.4)
+                decay = updated_edge_distance[u, v] * base_decay * rank_factor
+                updated_edge_distance[u, v] -= decay
+                updated_edge_distance[v, u] -= decay
+                visited_pairs.add(pair)
+
+    return updated_edge_distance
+# ===== Eval Output =====
+[*] Running ...
+[*] mode=val, data=/home/ducanh/projects/EAs_project/MoH/problems/tsp_gls/data/val/val_instance_data_sol_50.pkl, seed=0, n_instances=8
+[*] instance_indices=[6, 9, 0, 2, 4, 3, 5, 1]
+[*] instance 6: obj=5.7136, gap=0.5983
+[*] instance 9: obj=5.9639, gap=0.0000
+[*] instance 0: obj=5.7783, gap=0.0000
+[*] instance 2: obj=5.8071, gap=0.0000
+[*] instance 4: obj=5.3965, gap=0.0000
+[*] instance 3: obj=5.8224, gap=1.1392
+[*] instance 5: obj=5.6187, gap=0.0000
+[*] instance 1: obj=5.1651, gap=0.0000
+[*] ave_gap on size 50: 0.21718291265821477
+0.21718291265821477

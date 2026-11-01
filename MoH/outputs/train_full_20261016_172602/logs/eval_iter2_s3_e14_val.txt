@@ -1,0 +1,78 @@
+# ===== Heuristic Code =====
+#{This algorithm computes additive symmetric edge penalties combining local density normalization and historical usage damping, modulated by a continuous temperature-annealed soft-max rank distribution that concentrates the penalty mass onto bottleneck edges while maintaining smooth exploratory pressure across the remaining tour edges.}
+
+import numpy as np
+
+def update_edge_distance(edge_distance, local_opt_tour, edge_n_used):
+    updated_edge_distance = np.copy(edge_distance)
+    n = len(local_opt_tour)
+
+    # Estimate local node density using k-nearest neighbors
+    k = min(6, n)
+    sorted_dists = np.sort(edge_distance, axis=1)
+    k_nn_avg = np.mean(sorted_dists[:, 1:k], axis=1)
+    node_density = 1.0 / (k_nn_avg + 1e-6)
+    node_density = node_density / np.mean(node_density)
+
+    # Extract current tour edge attributes
+    u_idx = local_opt_tour
+    v_idx = np.roll(local_opt_tour, -1)
+    tour_edge_lengths = edge_distance[u_idx, v_idx]
+
+    # Relative edge length compared to average tour length
+    avg_tour_length = np.mean(tour_edge_lengths)
+    relative_length = tour_edge_lengths / (avg_tour_length + 1e-6)
+
+    # Usage damping factor
+    usage = edge_n_used[u_idx, v_idx]
+    usage_factor = 1.0 / (1.0 + 0.3 * usage)
+
+    # Local density context
+    density_factor = 0.5 * (node_density[u_idx] + node_density[v_idx])
+
+    # Base local and global score components
+    rank_penalty = 1.0 / (1.0 + np.exp(-4.0 * (relative_length - 1.0)))
+    local_penalty = relative_length * usage_factor * density_factor
+
+    freq_mean = np.mean(usage)
+    w_global = 0.6 / (1.0 + 0.1 * freq_mean)
+    w_local = 1.0 - w_global
+    base_penalty = w_global * rank_penalty + w_local * local_penalty
+
+    # Temperature-controlled softmax rank weighting replacing rigid threshold
+    # Sort scores to compute normalized rank positions [0, 1]
+    sorted_indices = np.argsort(tour_edge_lengths)
+    ranks = np.empty(n, dtype=np.float64)
+    ranks[sorted_indices] = np.linspace(0.0, 1.0, n)
+
+    # Soft concentration: higher temperature on upper quartile concentrates weight smoothly
+    temperature = 0.18
+    soft_weights = np.exp((ranks - 1.0) / temperature)
+    soft_weights = soft_weights / np.sum(soft_weights)
+
+    # Allocate total penalty budget dynamically proportional to base penalty scale
+    total_budget = np.sum(base_penalty)
+    continuous_weighting = soft_weights * total_budget
+
+    # Blend smoothed continuous bottleneck allocation with non-zero baseline exploration
+    combined_penalty = 0.4 * base_penalty + 0.6 * continuous_weighting
+
+    # Symmetrically apply penalties to distance matrix
+    np.add.at(updated_edge_distance, (u_idx, v_idx), combined_penalty)
+    np.add.at(updated_edge_distance, (v_idx, u_idx), combined_penalty)
+
+    return updated_edge_distance
+# ===== Eval Output =====
+[*] Running ...
+[*] mode=val, data=/home/ducanh/projects/EAs_project/MoH/problems/tsp_gls/data/val/val_instance_data_sol_200.pkl, seed=0, n_instances=8
+[*] instance_indices=[6, 9, 0, 2, 4, 3, 5, 1]
+[*] instance 6: obj=10.4980, gap=0.4992
+[*] instance 9: obj=10.6885, gap=0.2384
+[*] instance 0: obj=10.9046, gap=0.1737
+[*] instance 2: obj=11.0140, gap=0.6050
+[*] instance 4: obj=10.9449, gap=0.9012
+[*] instance 3: obj=10.6505, gap=0.4583
+[*] instance 5: obj=10.9443, gap=0.5586
+[*] instance 1: obj=11.1272, gap=0.9347
+[*] ave_gap on size 200: 0.5461326953216966
+0.5461326953216966

@@ -1,0 +1,78 @@
+# ===== Heuristic Code =====
+#{This algorithm evaluates subpath detour inefficiencies across overlapping 2-hop chains in the local optimum tour, jointly penalizing excessive subpath edges while concurrently rewarding potential shortcut bypasses through conservative metric redistribution.}#
+
+import numpy as np
+
+def update_edge_distance(edge_distance, local_opt_tour, edge_n_used):
+    updated_edge_distance = np.copy(edge_distance)
+    n = len(local_opt_tour)
+    if n < 4:
+        return updated_edge_distance
+
+    # Nodes along the tour: u -> v -> w
+    u = np.array(local_opt_tour, dtype=np.intp)
+    v = np.roll(u, -1)
+    w = np.roll(u, -2)
+
+    # Base cost calculations for the 2-hop subpaths and direct shortcuts
+    c_uv = edge_distance[u, v].astype(np.float64)
+    c_vw = edge_distance[v, w].astype(np.float64)
+    c_uw = edge_distance[u, w].astype(np.float64)
+
+    used_uv = edge_n_used[u, v].astype(np.float64)
+    used_vw = edge_n_used[v, w].astype(np.float64)
+
+    # Detour inefficiency: how much the 2-hop path exceeds the direct shortcut
+    # Scaled by normalized frequency of edge usage
+    subpath_cost = c_uv + c_vw
+    detour_excess = np.maximum(0.0, subpath_cost - c_uw)
+    usage_factor = 1.0 + np.log1p(used_uv + used_vw)
+
+    # Path-contextual utility reflecting inefficient detour per unit of usage
+    subpath_utility = (subpath_cost * (1.0 + detour_excess / (subpath_cost + 1e-8))) / usage_factor
+
+    # Identify top 30% most inefficient 2-hop chains (at least 1)
+    k = max(1, int(np.ceil(0.30 * n)))
+    top_indices = np.argpartition(subpath_utility, -k)[-k:]
+
+    # Compute base perturbation scale relative to mean edge cost
+    scale = np.mean(subpath_cost) * 0.05 + 1e-8
+
+    for idx in top_indices:
+        n_u, n_v, n_w = u[idx], v[idx], w[idx]
+
+        # Dual redistribution: penalize the two inefficient edges proportionally
+        util = subpath_utility[idx]
+        delta_p = scale * (util / (np.max(subpath_utility) + 1e-8))
+
+        # Penalize (u, v) and (v, w)
+        updated_edge_distance[n_u, n_v] += delta_p
+        updated_edge_distance[n_v, n_u] += delta_p
+        updated_edge_distance[n_v, n_w] += delta_p
+        updated_edge_distance[n_w, n_v] += delta_p
+
+        # Rewarding the direct shortcut (u, w) to promote bypass
+        # Ensure distance does not collapse below 50% of original
+        orig_uw = edge_distance[n_u, n_w]
+        reward = delta_p * 0.75
+        new_uw = max(orig_uw * 0.5, updated_edge_distance[n_u, n_w] - reward)
+        updated_edge_distance[n_u, n_w] = new_uw
+        updated_edge_distance[n_w, n_u] = new_uw
+
+    # Enforce zero diagonal
+    np.fill_diagonal(updated_edge_distance, 0.0)
+    return updated_edge_distance
+# ===== Eval Output =====
+[*] Running ...
+[*] mode=val, data=/home/ducanh/projects/EAs_project/MoH/problems/tsp_gls/data/val/val_instance_data_sol_50.pkl, seed=0, n_instances=8
+[*] instance_indices=[6, 9, 0, 2, 4, 3, 5, 1]
+[*] instance 6: obj=5.7136, gap=0.5983
+[*] instance 9: obj=6.0516, gap=1.4712
+[*] instance 0: obj=5.8546, gap=1.3193
+[*] instance 2: obj=5.8274, gap=0.3500
+[*] instance 4: obj=5.5821, gap=3.4387
+[*] instance 3: obj=5.8975, gap=2.4424
+[*] instance 5: obj=5.6187, gap=0.0000
+[*] instance 1: obj=5.3071, gap=2.7501
+[*] ave_gap on size 50: 1.5462627502294461
+1.5462627502294461

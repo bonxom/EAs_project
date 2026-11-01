@@ -1,0 +1,66 @@
+# ===== Heuristic Code =====
+#{Applies continuous penalty evaporation across accumulated edge weights combined with an aggressive stagnation-triggered penalty flattening and dynamic utility-based penalization to escape persistent local optima without modifying the original input in-place.}
+
+import numpy as np
+
+def update_edge_distance(edge_distance, local_opt_tour, edge_n_used):
+    # Create an explicit copy of the distance matrix to avoid in-place modification
+    updated_edge_distance = np.copy(edge_distance)
+
+    # Extract current tour directed edge indices
+    u_idx = local_opt_tour
+    v_idx = np.roll(local_opt_tour, -1)
+
+    # Fully vectorized edge utility evaluation
+    tour_lengths = edge_distance[u_idx, v_idx]
+    tour_counts = edge_n_used[u_idx, v_idx]
+    utilities = tour_lengths / (1.0 + tour_counts)
+
+    # Assess stagnation based on edge usage frequency in the current local optimum
+    max_count = np.max(tour_counts)
+    mean_count = np.mean(tour_counts)
+    avg_edge = np.mean(tour_lengths)
+
+    # Continuous penalty evaporation: decay historical penalization relative to base distance
+    # Identify penalized edges where edge_n_used indicates prior modifications
+    penalized_mask = edge_n_used > 0
+    if np.any(penalized_mask):
+        # Apply a global decay factor of 0.95 to accumulated penalties
+        decay_factor = 0.95
+        # The accumulated penalty is approximately proportional to usage; evaporate excess weight
+        updated_edge_distance[penalized_mask] *= decay_factor
+
+    # Stagnation-triggered recreation: if search repeatedly revisits the same edges
+    if max_count >= 5 and (max_count - mean_count) < 2.0:
+        # Aggressive utility-flattening reset to break deep stagnation traps
+        recreate_mask = utilities >= np.median(utilities)
+        penalty_scale = 0.6 * avg_edge
+    else:
+        # Standard Guided Local Search penalty application targeting highest utility edges
+        max_utility = np.max(utilities)
+        threshold = 0.99 * max_utility
+        recreate_mask = utilities >= threshold
+        penalty_scale = 0.3 * avg_edge
+
+    sel_u = u_idx[recreate_mask]
+    sel_v = v_idx[recreate_mask]
+
+    # Symmetric penalty update using vectorized advanced indexing
+    updated_edge_distance[sel_u, sel_v] += penalty_scale
+    updated_edge_distance[sel_v, sel_u] += penalty_scale
+
+    return updated_edge_distance
+# ===== Eval Output =====
+[*] Running ...
+[*] mode=val, data=/home/ducanh/projects/EAs_project/MoH/problems/tsp_gls/data/val/val_instance_data_sol_20.pkl, seed=0, n_instances=8
+[*] instance_indices=[6, 9, 0, 2, 4, 3, 5, 1]
+[*] instance 6: obj=3.7045, gap=0.0000
+[*] instance 9: obj=4.1442, gap=0.0000
+[*] instance 0: obj=3.6827, gap=0.0000
+[*] instance 2: obj=3.8184, gap=0.0000
+[*] instance 4: obj=3.8385, gap=0.0000
+[*] instance 3: obj=3.6971, gap=0.0000
+[*] instance 5: obj=3.4281, gap=0.0000
+[*] instance 1: obj=3.6958, gap=0.0000
+[*] ave_gap on size 20: 1.2218318606871392e-06
+1.2218318606871392e-06

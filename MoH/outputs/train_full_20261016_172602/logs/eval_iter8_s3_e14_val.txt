@@ -1,0 +1,105 @@
+# ===== Heuristic Code =====
+import numpy as np
+
+def update_edge_distance(edge_distance, local_opt_tour, edge_n_used):
+    # Copy edge distance matrix to avoid modifying original input
+    updated_edge_distance = np.copy(edge_distance)
+    n = len(local_opt_tour)
+    if n < 4:
+        return updated_edge_distance
+
+    # Construct symmetric k-NN affinity graph
+    k = max(3, min(int(np.sqrt(n)), 15))
+    sorted_indices = np.argsort(edge_distance, axis=1)
+    knn_indices = sorted_indices[:, 1:k+1]
+
+    # Adaptive local bandwidth sigma per node
+    k_dist = np.take_along_axis(edge_distance, sorted_indices[:, k:k+1], axis=1).flatten()
+    sigma = np.maximum(k_dist, 1e-6)
+
+    # Sparse adjacency affinity matrix
+    row_idx = np.repeat(np.arange(n), k)
+    col_idx = knn_indices.flatten()
+    sim_vals = np.exp(- (edge_distance[row_idx, col_idx] ** 2) / (sigma[row_idx] * sigma[col_idx] + 1e-12))
+
+    W = np.zeros((n, n), dtype=np.float64)
+    W[row_idx, col_idx] = sim_vals
+    W = 0.5 * (W + W.T)
+    np.fill_diagonal(W, 0.0)
+
+    # Graph Laplacian and power iteration for second eigenvector (Fiedler vector proxy)
+    d = np.sum(W, axis=1)
+    D_inv_sqrt = 1.0 / np.sqrt(np.maximum(d, 1e-8))
+    # Normalized adjacency operator: S = D^{-1/2} W D^{-1/2}
+    S = D_inv_sqrt[:, None] * W * D_inv_sqrt[None, :]
+
+    # Deterministic power iteration with deflation against trivial eigenvector
+    v0 = np.sqrt(d)
+    v0_norm = np.linalg.norm(v0)
+    if v0_norm > 1e-12:
+        v0 = v0 / v0_norm
+    else:
+        v0 = np.ones(n) / np.sqrt(n)
+
+    # Initialize orthogonal vector deterministically using node degree ranking
+    x = np.argsort(np.argsort(d)).astype(np.float64)
+    x = x - np.dot(x, v0) * v0
+    norm_x = np.linalg.norm(x)
+    if norm_x > 1e-12:
+        x = x / norm_x
+    else:
+        x = np.linspace(-1.0, 1.0, n)
+        x = x - np.dot(x, v0) * v0
+        x = x / (np.linalg.norm(x) + 1e-12)
+
+    # 12 iterations of power iteration with projection
+    for _ in range(12):
+        x = S @ x
+        x = x - np.dot(x, v0) * v0
+        norm_x = np.linalg.norm(x)
+        if norm_x > 1e-12:
+            x = x / norm_x
+
+    # Topological bridge metric: difference in spectral cluster coordinate
+    u_idx = local_opt_tour
+    v_idx = np.roll(local_opt_tour, -1)
+    bridge_metric = np.abs(x[u_idx] - x[v_idx])
+    max_b = np.max(bridge_metric)
+    if max_b > 1e-8:
+        bridge_factor = 1.0 + (bridge_metric / max_b) * 2.0
+    else:
+        bridge_factor = np.ones(n)
+
+    # Standard GLS components: cost normalization and edge utilization penalty
+    tour_edge_lengths = edge_distance[u_idx, v_idx]
+    avg_tour_length = np.mean(tour_edge_lengths)
+    relative_length = tour_edge_lengths / (avg_tour_length + 1e-6)
+
+    usage_factor = 1.0 / (1.0 + 0.5 * edge_n_used[u_idx, v_idx])
+
+    # Combined GLS penalty targeting bridge edges with high exploration pressure
+    penalties = tour_edge_lengths * usage_factor * bridge_factor * 0.15
+
+    # Prioritize longest edges crossing clusters
+    high_impact_threshold = np.percentile(penalties, 65)
+    penalties[penalties >= high_impact_threshold] *= 1.4
+
+    # Apply symmetric updates to distance matrix
+    np.add.at(updated_edge_distance, (u_idx, v_idx), penalties)
+    np.add.at(updated_edge_distance, (v_idx, u_idx), penalties)
+
+    return updated_edge_distance
+# ===== Eval Output =====
+[*] Running ...
+[*] mode=val, data=/home/ducanh/projects/EAs_project/MoH/problems/tsp_gls/data/val/val_instance_data_sol_200.pkl, seed=0, n_instances=8
+[*] instance_indices=[6, 9, 0, 2, 4, 3, 5, 1]
+[*] instance 6: obj=10.6574, gap=2.0250
+[*] instance 9: obj=10.8891, gap=2.1202
+[*] instance 0: obj=11.4240, gap=4.9448
+[*] instance 2: obj=11.2189, gap=2.4770
+[*] instance 4: obj=11.0488, gap=1.8593
+[*] instance 3: obj=10.8100, gap=1.9632
+[*] instance 5: obj=11.2442, gap=3.3134
+[*] instance 1: obj=11.3853, gap=3.2756
+[*] ave_gap on size 200: 2.747318680158317
+2.747318680158317

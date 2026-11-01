@@ -1,0 +1,96 @@
+# ===== Heuristic Code =====
+#{A bottleneck-focused subpath ruin strategy that identifies contiguous high-utility tour segments and concentrates penalties along segment boundaries to force structural topological reconfiguration while rewarding promising unused incident shortcuts.}#
+
+import numpy as np
+
+def update_edge_distance(edge_distance, local_opt_tour, edge_n_used):
+    updated_edge_distance = np.copy(edge_distance)
+    n = len(local_opt_tour)
+    if n < 4:
+        return updated_edge_distance
+
+    u_idx = np.array(local_opt_tour, dtype=np.intp)
+    v_idx = np.roll(u_idx, -1)
+
+    costs = edge_distance[u_idx, v_idx].astype(np.float64)
+    used = edge_n_used[u_idx, v_idx].astype(np.float64)
+
+    # Calculate edge utility based on cost and historical frequency
+    mean_cost = np.mean(costs)
+    std_cost = np.std(costs) + 1e-8
+    z_scores = (costs - mean_cost) / std_cost
+    weights = 1.0 / (1.0 + np.exp(-z_scores))
+    utilities = (costs * (1.0 + weights)) / (1.0 + used)
+    max_util = np.max(utilities) + 1e-8
+
+    # Identify bottleneck subpaths via rolling window accumulation of utilities
+    k = max(2, min(n // 4, 8))
+    # Circular rolling sum over tour edges
+    extended_utils = np.concatenate([utilities, utilities[:k-1]])
+    cum_utils = np.cumsum(extended_utils)
+    rolling_sums = cum_utils[k-1:] - np.concatenate([[0.0], cum_utils[:len(cum_utils)-k]])
+
+    # Select top contiguous bottleneck subpaths without arbitrary blunt thresholding
+    num_subpaths = max(1, min(n // (2 * k), 4))
+    sorted_subpath_starts = np.argsort(-rolling_sums)
+
+    selected_edges_mask = np.zeros(n, dtype=bool)
+    subpath_boundary_mask = np.zeros(n, dtype=bool)
+    covered_nodes = np.zeros(n, dtype=bool)
+
+    for start in sorted_subpath_starts:
+        indices = [(start + j) % n for j in range(k)]
+        if not np.any(covered_nodes[indices]):
+            covered_nodes[indices] = True
+            selected_edges_mask[indices] = True
+            # Emphasize boundary edges of the contiguous subpath for topological cuts
+            subpath_boundary_mask[indices[0]] = True
+            subpath_boundary_mask[indices[-1]] = True
+            num_subpaths -= 1
+            if num_subpaths == 0:
+                break
+
+    # If no disjoint subpath fit, fallback to top individual utility edges
+    if not np.any(selected_edges_mask):
+        top_k = max(1, n // 8)
+        selected_edges_mask[np.argsort(-utilities)[:top_k]] = True
+
+    p_u = u_idx[selected_edges_mask]
+    p_v = v_idx[selected_edges_mask]
+    p_costs = costs[selected_edges_mask]
+    p_used = used[selected_edges_mask]
+    p_utils = utilities[selected_edges_mask]
+
+    # Boundary edges receive amplified penalties to stimulate 2-opt/3-opt reconnections
+    boundary_boost = np.where(subpath_boundary_mask[selected_edges_mask], 1.5, 1.0)
+    penalties = (p_costs / (1.0 + np.sqrt(p_used + 1.0))) * (1.0 + p_utils / max_util) * boundary_boost
+
+    updated_edge_distance[p_u, p_v] += penalties
+    updated_edge_distance[p_v, p_u] += penalties
+
+    # Reward promising unused incident edges connected to perturbed nodes
+    penalized_nodes = np.unique(np.concatenate((p_u, p_v)))
+    decay_ratio = 0.02
+    for u in penalized_nodes:
+        unused_mask = (edge_n_used[u] == 0)
+        unused_mask[u] = False
+        if np.any(unused_mask):
+            current_vals = updated_edge_distance[u, unused_mask]
+            updated_edge_distance[u, unused_mask] -= current_vals * decay_ratio
+            updated_edge_distance[unused_mask, u] = updated_edge_distance[u, unused_mask]
+
+    return updated_edge_distance
+# ===== Eval Output =====
+[*] Running ...
+[*] mode=val, data=/home/ducanh/projects/EAs_project/MoH/problems/tsp_gls/data/val/val_instance_data_sol_50.pkl, seed=0, n_instances=8
+[*] instance_indices=[6, 9, 0, 2, 4, 3, 5, 1]
+[*] instance 6: obj=5.7136, gap=0.5983
+[*] instance 9: obj=5.9639, gap=0.0000
+[*] instance 0: obj=5.7783, gap=0.0000
+[*] instance 2: obj=5.8071, gap=0.0000
+[*] instance 4: obj=5.3965, gap=0.0000
+[*] instance 3: obj=5.8123, gap=0.9633
+[*] instance 5: obj=5.6187, gap=0.0000
+[*] instance 1: obj=5.1651, gap=0.0000
+[*] ave_gap on size 50: 0.1952036921433975
+0.1952036921433975

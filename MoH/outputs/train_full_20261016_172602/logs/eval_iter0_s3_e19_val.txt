@@ -1,0 +1,72 @@
+# ===== Heuristic Code =====
+# {A guided crossover heuristic that applies sub-linear penalty scaling to long tour edges, progressively boosting penalties above the 75th percentile modulated by structural node density while damping by edge persistence to escape persistent local optima.}
+
+import numpy as np
+
+def update_edge_distance(edge_distance, local_opt_tour, edge_n_used):
+    updated_edge_distance = np.copy(edge_distance)
+    n = len(local_opt_tour)
+    if n < 3:
+        return updated_edge_distance
+
+    # Efficient k-NN density estimation via partition
+    k = min(5, n - 1)
+    k_nn_dists = np.partition(edge_distance, kth=k, axis=1)[:, 1:k+1]
+    k_nn_avg = np.mean(k_nn_dists, axis=1)
+    density = 1.0 / (k_nn_avg + 1e-6)
+    density_norm = density / (np.mean(density) + 1e-6)
+
+    # Edge extraction for the current local optimum tour
+    u_idx = local_opt_tour
+    v_idx = np.roll(local_opt_tour, -1)
+    tour_lengths = edge_distance[u_idx, v_idx]
+    usage = edge_n_used[u_idx, v_idx]
+
+    # Relative length and dual-component usage damping
+    mean_len = np.mean(tour_lengths) + 1e-6
+    rel_lengths = tour_lengths / mean_len
+    rank_penalty = 1.0 / (1.0 + np.exp(-4.0 * (rel_lengths - 1.0)))
+
+    # Sub-linear usage factor
+    usage_factor = 1.0 / (1.0 + 0.35 * np.sqrt(usage))
+    density_factor = 0.5 * (density_norm[u_idx] + density_norm[v_idx])
+    local_penalty = rel_lengths * usage_factor * density_factor
+
+    # Dynamic global vs local penalty weighting
+    freq_mean = np.mean(usage)
+    w_global = 0.6 / (1.0 + 0.1 * freq_mean)
+    w_local = 1.0 - w_global
+    base_penalty = w_global * rank_penalty * usage_factor + w_local * local_penalty
+
+    # Progressive boost for long edges above the 75th percentile inversely modulated by edge persistence
+    p75 = np.percentile(tour_lengths, 75)
+    max_len = np.max(tour_lengths)
+    spread = max_len - p75 + 1e-6
+    high_mask = tour_lengths >= p75
+
+    bridge_weight = np.clip(density_factor[high_mask], 0.5, 1.5)
+    persistence_damping = 1.0 / np.sqrt(1.0 + 0.25 * usage[high_mask])
+    progressive_boost = 1.0 + 0.6 * ((tour_lengths[high_mask] - p75) / spread) * bridge_weight * persistence_damping
+
+    final_penalty = base_penalty.copy()
+    final_penalty[high_mask] *= progressive_boost
+
+    # Symmetrically update the edge distance matrix
+    np.add.at(updated_edge_distance, (u_idx, v_idx), final_penalty)
+    np.add.at(updated_edge_distance, (v_idx, u_idx), final_penalty)
+
+    return updated_edge_distance
+# ===== Eval Output =====
+[*] Running ...
+[*] mode=val, data=/home/ducanh/projects/EAs_project/MoH/problems/tsp_gls/data/val/val_instance_data_sol_200.pkl, seed=0, n_instances=8
+[*] instance_indices=[6, 9, 0, 2, 4, 3, 5, 1]
+[*] instance 6: obj=10.4458, gap=0.0000
+[*] instance 9: obj=10.6787, gap=0.1467
+[*] instance 0: obj=10.8879, gap=0.0201
+[*] instance 2: obj=10.9753, gap=0.2513
+[*] instance 4: obj=10.8554, gap=0.0758
+[*] instance 3: obj=10.6205, gap=0.1756
+[*] instance 5: obj=10.8959, gap=0.1137
+[*] instance 1: obj=11.1464, gap=1.1086
+[*] ave_gap on size 200: 0.23648312611161404
+0.23648312611161404

@@ -1,0 +1,74 @@
+# ===== Heuristic Code =====
+#{Implement an adaptive Guided Local Search with non-linear super-penalties on high-frequency tour edges, periodic memory dampening, and targeted negative distance incentives on under-explored k-nearest neighbors to trigger radical basin escapes.}#
+
+import numpy as np
+
+def update_edge_distance(edge_distance, local_opt_tour, edge_n_used):
+    updated_edge_distance = np.copy(edge_distance)
+    n = edge_distance.shape[0]
+    if n <= 1:
+        return updated_edge_distance
+
+    tour_u = local_opt_tour
+    tour_v = np.roll(local_opt_tour, -1)
+
+    tour_lengths = edge_distance[tour_u, tour_v]
+    avg_tour_edge = np.mean(tour_lengths) if tour_lengths.size > 0 else 1.0
+
+    tour_counts = edge_n_used[tour_u, tour_v]
+    utilities = tour_lengths / (1.0 + tour_counts)
+    max_utility = np.max(utilities) if utilities.size > 0 else 0.0
+
+    # Identify edges with high utility in the current local optimum
+    high_util_mask = utilities >= 0.75 * max_utility
+    selected_u = tour_u[high_util_mask]
+    selected_v = tour_v[high_util_mask]
+    selected_counts = tour_counts[high_util_mask]
+
+    # Apply non-linear super-penalties to persistently trapped edges
+    # Exponential/quadratic scaling based on usage frequency forces structural departure
+    super_penalty = (0.35 * avg_tour_edge) * (1.0 + np.sqrt(selected_counts.astype(np.float64)))
+
+    for u, v, pen in zip(selected_u, selected_v, super_penalty):
+        updated_edge_distance[u, v] += pen
+        updated_edge_distance[v, u] += pen
+
+    # Radical exploration: reward globally under-explored edges in the k-nearest neighbor graph
+    k = min(max(3, n // 10), 15)
+    # Determine top-k nearest neighbors for each node using original distances
+    knn_indices = np.argsort(edge_distance, axis=1)[:, 1:k+1]
+    row_indices = np.repeat(np.arange(n), k)
+    col_indices = knn_indices.flatten()
+
+    knn_counts = edge_n_used[row_indices, col_indices]
+
+    # Identify completely unvisited or rarely explored k-NN candidate edges
+    bonus_mask = (knn_counts == 0)
+    bonus_u = row_indices[bonus_mask]
+    bonus_v = col_indices[bonus_mask]
+
+    if bonus_u.size > 0:
+        # Provide temporary negative perturbations (bonuses) to attract search into disjoint basins
+        bonus_val = 0.15 * avg_tour_edge
+        # Ensure distances stay positive and strictly well-conditioned
+        for u, v in zip(bonus_u, bonus_v):
+            orig_d = edge_distance[u, v]
+            reduction = min(bonus_val, 0.4 * orig_d)
+            updated_edge_distance[u, v] = max(1e-4, updated_edge_distance[u, v] - reduction)
+            updated_edge_distance[v, u] = updated_edge_distance[u, v]
+
+    return updated_edge_distance
+# ===== Eval Output =====
+[*] Running ...
+[*] mode=val, data=/home/ducanh/projects/EAs_project/MoH/problems/tsp_gls/data/val/val_instance_data_sol_20.pkl, seed=0, n_instances=8
+[*] instance_indices=[6, 9, 0, 2, 4, 3, 5, 1]
+[*] instance 6: obj=3.7045, gap=0.0000
+[*] instance 9: obj=4.1442, gap=0.0000
+[*] instance 0: obj=3.6827, gap=0.0000
+[*] instance 2: obj=3.8184, gap=0.0000
+[*] instance 4: obj=3.8385, gap=0.0000
+[*] instance 3: obj=3.6971, gap=0.0000
+[*] instance 5: obj=3.4281, gap=0.0000
+[*] instance 1: obj=3.6958, gap=0.0000
+[*] ave_gap on size 20: 1.2218318606871392e-06
+1.2218318606871392e-06

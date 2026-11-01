@@ -1,0 +1,111 @@
+# ===== Heuristic Code =====
+#{We enhance edge penalty selection by replacing rigid top-k ranking with a tour-aware Non-Maximum Suppression (NMS) mechanism that dynamically scales the target budget based on stagnation levels and suppresses adjacent edge penalties to prevent disruptive cluster destruction.}
+
+import numpy as np
+
+def update_edge_distance(edge_distance, local_opt_tour, edge_n_used):
+    updated_edge_distance = np.copy(edge_distance)
+    num_nodes = len(local_opt_tour)
+    tour = np.asarray(local_opt_tour)
+
+    u_idx = tour
+    v_idx = np.roll(tour, -1)
+    w_idx = np.roll(tour, -2)
+
+    edge_n_used *= 0.96
+
+    d_uv = edge_distance[u_idx, v_idx]
+    d_vw = edge_distance[v_idx, w_idx]
+    d_uw = edge_distance[u_idx, w_idx]
+
+    detour_ratio = (d_uv + d_vw) / (d_uw + 1e-8)
+    denom = 2.0 * d_uv * d_vw + 1e-8
+    cos_turn = (d_uv**2 + d_vw**2 - d_uw**2) / denom
+    cos_turn = np.clip(cos_turn, -1.0, 1.0)
+    acute_deficit = 1.0 - cos_turn
+    geom_inefficiency = detour_ratio * (1.0 + 0.5 * acute_deficit)
+
+    base_dist = d_uv
+    base_freq = edge_n_used[u_idx, v_idx]
+    local_geom_factor = 0.5 * (geom_inefficiency + np.roll(geom_inefficiency, 1))
+    utilities = (base_dist / (1.0 + base_freq)) * (1.0 + 0.35 * local_geom_factor)
+
+    # Adaptive target penalty budget scaled inversely with saturation/repeated edge usage
+    mean_tour_freq = np.mean(base_freq)
+    adaptive_ratio = np.clip(0.18 / (1.0 + 0.15 * mean_tour_freq), 0.06, 0.20)
+    k_target = max(1, int(np.ceil(adaptive_ratio * num_nodes)))
+
+    # Non-Maximum Suppression (NMS) along the tour topology to avoid penalizing contiguous edges
+    sorted_order = np.argsort(-utilities)
+    suppressed = np.zeros(num_nodes, dtype=bool)
+    selected_indices = []
+
+    for candidate in sorted_order:
+        if not suppressed[candidate]:
+            selected_indices.append(candidate)
+            # Suppress direct predecessor and successor along the tour ring
+            suppressed[(candidate - 1) % num_nodes] = True
+            suppressed[candidate] = True
+            suppressed[(candidate + 1) % num_nodes] = True
+            if len(selected_indices) >= k_target:
+                break
+
+    # Fallback to pure utility if suppression was too strict
+    if len(selected_indices) < max(1, k_target // 2):
+        for candidate in sorted_order:
+            if candidate not in selected_indices:
+                selected_indices.append(candidate)
+                if len(selected_indices) >= k_target:
+                    break
+
+    global_mean_dist = np.mean(edge_distance)
+    adaptive_lambda = 0.30 * global_mean_dist
+
+    for idx in selected_indices:
+        u, v = u_idx[idx], v_idx[idx]
+        edge_n_used[u, v] += 1.0
+        edge_n_used[v, u] += 1.0
+        freq_penalty = 1.0 + np.log1p(edge_n_used[u, v])
+        geom_weight = 1.0 + 0.5 * local_geom_factor[idx]
+        penalty = adaptive_lambda * freq_penalty * geom_weight
+        updated_edge_distance[u, v] += penalty
+        updated_edge_distance[v, u] += penalty
+
+    # Non-overlapping shortcut bypass discounting for high-detour vertices
+    k_shortcuts = max(1, int(np.ceil(0.10 * num_nodes)))
+    detour_order = np.argsort(-detour_ratio)
+    shortcut_suppressed = np.zeros(num_nodes, dtype=bool)
+
+    shortcut_count = 0
+    for idx in detour_order:
+        if not shortcut_suppressed[idx]:
+            shortcut_suppressed[(idx - 1) % num_nodes] = True
+            shortcut_suppressed[idx] = True
+            shortcut_suppressed[(idx + 1) % num_nodes] = True
+
+            u, w = u_idx[idx], w_idx[idx]
+            freq = edge_n_used[u, w]
+            if freq < 1.0:
+                discount = 0.10 * global_mean_dist * (1.0 / (1.0 + freq))
+                updated_edge_distance[u, w] = max(1e-6, updated_edge_distance[u, w] - discount)
+                updated_edge_distance[w, u] = updated_edge_distance[u, w]
+
+            shortcut_count += 1
+            if shortcut_count >= k_shortcuts:
+                break
+
+    return updated_edge_distance
+# ===== Eval Output =====
+[*] Running ...
+[*] mode=val, data=/home/ducanh/projects/EAs_project/MoH/problems/tsp_gls/data/val/val_instance_data_sol_100.pkl, seed=0, n_instances=8
+[*] instance_indices=[6, 9, 0, 2, 4, 3, 5, 1]
+[*] instance 6: obj=7.7669, gap=0.0944
+[*] instance 9: obj=8.0474, gap=0.0512
+[*] instance 0: obj=8.0001, gap=0.0000
+[*] instance 2: obj=8.0900, gap=0.1994
+[*] instance 4: obj=7.8131, gap=0.0000
+[*] instance 3: obj=7.3713, gap=0.0000
+[*] instance 5: obj=7.6365, gap=0.0000
+[*] instance 1: obj=7.5570, gap=0.0000
+[*] ave_gap on size 100: 0.04312902962302634
+0.04312902962302634

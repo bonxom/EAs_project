@@ -1,0 +1,103 @@
+# ===== Heuristic Code =====
+#{Adaptive GLS with a 4-node quadruplet lookahead window that penalizes edges involved in crossing diagonals and geometric inefficiencies while selectively discounting promising 2-opt and relocate shortcut moves.}
+
+import numpy as np
+
+def update_edge_distance(edge_distance, local_opt_tour, edge_n_used):
+    updated_edge_distance = np.copy(edge_distance)
+    num_nodes = len(local_opt_tour)
+    tour = np.asarray(local_opt_tour)
+
+    # 4-node lookahead window: u -> v -> w -> x
+    u_idx = tour
+    v_idx = np.roll(tour, -1)
+    w_idx = np.roll(tour, -2)
+    x_idx = np.roll(tour, -3)
+
+    # Trace memory decay
+    edge_n_used *= 0.96
+
+    # Edge distances along and across the quadruplet window
+    d_uv = edge_distance[u_idx, v_idx]
+    d_vw = edge_distance[v_idx, w_idx]
+    d_wx = edge_distance[w_idx, x_idx]
+    d_uw = edge_distance[u_idx, w_idx]
+    d_vx = edge_distance[v_idx, x_idx]
+    d_ux = edge_distance[u_idx, x_idx]
+
+    # 2.5-opt / Relocate potential: bypass v (u-w) or bypass w (v-x)
+    relocate_gain_v = (d_uv + d_vw) - d_uw
+    relocate_gain_w = (d_vw + d_wx) - d_vx
+
+    # 2-opt crossing swap potential: compare (u-v + w-x) against crossed connections (u-w + v-x) and (u-x + v-w)
+    swap_gain_cross = (d_uv + d_wx) - (d_ux + d_vw)
+    swap_gain_twist = (d_uv + d_wx) - (d_uw + d_vx)
+    quad_swap_incentive = np.maximum(0.0, np.maximum(swap_gain_cross, swap_gain_twist))
+
+    # Detour & turn geometry on triplet u-v-w
+    detour_vw = (d_uv + d_vw) / (d_uw + 1e-8)
+    denom_v = 2.0 * d_uv * d_vw + 1e-8
+    cos_v = np.clip((d_uv**2 + d_vw**2 - d_uw**2) / denom_v, -1.0, 1.0)
+    acute_deficit_v = 1.0 - cos_v
+
+    # Combined geometric inefficiency score embedding crossing-elimination
+    norm_scale = np.mean(d_uv) + 1e-8
+    geom_crossing_factor = (quad_swap_incentive + np.maximum(0.0, relocate_gain_v)) / norm_scale
+    quad_inefficiency = (detour_vw * (1.0 + 0.4 * acute_deficit_v)) * (1.0 + 0.5 * geom_crossing_factor)
+
+    # Local context smoothing for edge (u, v)
+    local_geom_factor = 0.5 * (quad_inefficiency + np.roll(quad_inefficiency, 1))
+
+    # Guided Local Search utility calculation
+    base_dist = d_uv
+    base_freq = edge_n_used[u_idx, v_idx]
+    utilities = (base_dist / (1.0 + base_freq)) * (1.0 + 0.40 * local_geom_factor)
+
+    # Adaptive penalty allocation to top-k inefficient edges
+    k = max(1, int(np.ceil(0.14 * num_nodes)))
+    top_k_indices = np.argsort(utilities)[-k:]
+    global_mean_dist = np.mean(edge_distance)
+    adaptive_lambda = 0.30 * global_mean_dist
+
+    for idx in top_k_indices:
+        u, v = u_idx[idx], v_idx[idx]
+        edge_n_used[u, v] += 1.0
+        edge_n_used[v, u] += 1.0
+        freq_penalty = 1.0 + np.log1p(edge_n_used[u, v])
+        geom_weight = 1.0 + 0.5 * local_geom_factor[idx]
+        penalty = adaptive_lambda * freq_penalty * geom_weight
+        updated_edge_distance[u, v] += penalty
+        updated_edge_distance[v, u] += penalty
+
+    # Reward promising shortcut moves discovered during quadruplet analysis (2-opt crossing breaks)
+    top_crossing_indices = np.argsort(quad_swap_incentive)[-k:]
+    for idx in top_crossing_indices:
+        u, w = u_idx[idx], w_idx[idx]
+        freq_uw = edge_n_used[u, w]
+        if freq_uw < 1.0:
+            discount = 0.10 * global_mean_dist * (1.0 / (1.0 + freq_uw))
+            updated_edge_distance[u, w] = max(1e-6, updated_edge_distance[u, w] - discount)
+            updated_edge_distance[w, u] = updated_edge_distance[u, w]
+
+        u_lead, x_tail = u_idx[idx], x_idx[idx]
+        freq_ux = edge_n_used[u_lead, x_tail]
+        if freq_ux < 1.0:
+            discount_ux = 0.08 * global_mean_dist * (1.0 / (1.0 + freq_ux))
+            updated_edge_distance[u_lead, x_tail] = max(1e-6, updated_edge_distance[u_lead, x_tail] - discount_ux)
+            updated_edge_distance[x_tail, u_lead] = updated_edge_distance[u_lead, x_tail]
+
+    return updated_edge_distance
+# ===== Eval Output =====
+[*] Running ...
+[*] mode=val, data=/home/ducanh/projects/EAs_project/MoH/problems/tsp_gls/data/val/val_instance_data_sol_100.pkl, seed=0, n_instances=8
+[*] instance_indices=[6, 9, 0, 2, 4, 3, 5, 1]
+[*] instance 6: obj=7.7596, gap=0.0000
+[*] instance 9: obj=8.0830, gap=0.4935
+[*] instance 0: obj=8.0001, gap=0.0000
+[*] instance 2: obj=8.0746, gap=0.0094
+[*] instance 4: obj=7.8131, gap=0.0000
+[*] instance 3: obj=7.3713, gap=0.0000
+[*] instance 5: obj=7.6365, gap=0.0000
+[*] instance 1: obj=7.5570, gap=0.0000
+[*] ave_gap on size 100: 0.06287232957655486
+0.06287232957655486

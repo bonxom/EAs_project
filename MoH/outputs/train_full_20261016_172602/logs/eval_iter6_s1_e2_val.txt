@@ -1,0 +1,70 @@
+# ===== Heuristic Code =====
+#{This algorithm incorporates a gentle global memory evaporation step towards original edge costs before applying sigmoid-weighted utility-based selective penalties and targeted unused-edge discount rewards to prevent metric distortion and avoid cyclic local optima.}
+
+import numpy as np
+
+def update_edge_distance(edge_distance, local_opt_tour, edge_n_used):
+    # Copy edge distance matrix to avoid modifying input in-place
+    updated_edge_distance = np.copy(edge_distance)
+
+    # Conservative global evaporation towards base costs to prevent unbounded distortion
+    evaporation_rate = 0.003
+    updated_edge_distance = updated_edge_distance * (1.0 - evaporation_rate) + edge_distance * evaporation_rate
+
+    # Extract edges from current local optimal tour
+    u_idx = np.array(local_opt_tour, dtype=np.intp)
+    v_idx = np.roll(u_idx, -1)
+
+    # Evaluate tour edges cost and historical usage
+    costs = edge_distance[u_idx, v_idx].astype(np.float64)
+    used = edge_n_used[u_idx, v_idx].astype(np.float64)
+
+    mean_cost = np.mean(costs)
+    std_cost = np.std(costs) + 1e-8
+    z_scores = (costs - mean_cost) / std_cost
+    weights = 1.0 / (1.0 + np.exp(-z_scores))
+
+    # Calculate edge utilities with sigmoidal cost weighting and frequency inhibition
+    utilities = (costs * (1.0 + weights)) / (1.0 + used)
+    threshold = np.median(utilities)
+    max_util = np.max(utilities) + 1e-8
+
+    # Select above-median utility edges for penalization
+    penalize_mask = utilities >= threshold
+    p_u = u_idx[penalize_mask]
+    p_v = v_idx[penalize_mask]
+    p_costs = costs[penalize_mask]
+    p_used = used[penalize_mask]
+    p_utils = utilities[penalize_mask]
+
+    # Apply scaled additive penalties to selected edges
+    penalties = (p_costs / (1.0 + np.sqrt(p_used + 1.0))) * (1.0 + p_utils / max_util)
+    updated_edge_distance[p_u, p_v] += penalties
+    updated_edge_distance[p_v, p_u] += penalties
+
+    # Discount unused incident edges on penalized nodes to encourage exploring alternative escapes
+    penalized_nodes = np.unique(np.concatenate((p_u, p_v)))
+    decay_ratio = 0.02
+    for u in penalized_nodes:
+        unused_mask = (edge_n_used[u] == 0)
+        unused_mask[u] = False
+        if np.any(unused_mask):
+            current_vals = updated_edge_distance[u, unused_mask]
+            updated_edge_distance[u, unused_mask] -= current_vals * decay_ratio
+            updated_edge_distance[unused_mask, u] = updated_edge_distance[u, unused_mask]
+
+    return updated_edge_distance
+# ===== Eval Output =====
+[*] Running ...
+[*] mode=val, data=/home/ducanh/projects/EAs_project/MoH/problems/tsp_gls/data/val/val_instance_data_sol_50.pkl, seed=0, n_instances=8
+[*] instance_indices=[6, 9, 0, 2, 4, 3, 5, 1]
+[*] instance 6: obj=5.6796, gap=0.0000
+[*] instance 9: obj=5.9639, gap=0.0000
+[*] instance 0: obj=5.7783, gap=0.0000
+[*] instance 2: obj=5.8071, gap=0.0000
+[*] instance 4: obj=5.3965, gap=0.0000
+[*] instance 3: obj=5.7569, gap=0.0000
+[*] instance 5: obj=5.6187, gap=0.0000
+[*] instance 1: obj=5.1651, gap=0.0000
+[*] ave_gap on size 50: 2.528279113844789e-06
+2.528279113844789e-06

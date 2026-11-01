@@ -1,0 +1,108 @@
+# ===== Heuristic Code =====
+#{This algorithm evaluates tour edges using a Pareto-inspired multi-attribute ranking of geometric detour, edge length, and entrenchment, and applies a conservative zero-sum perturbation that shifts distance from penalized edges directly to their corresponding 2-opt chord shortcuts.}#
+
+import numpy as np
+
+def update_edge_distance(edge_distance, local_opt_tour, edge_n_used):
+    updated_edge_distance = np.copy(edge_distance)
+    num_nodes = len(local_opt_tour)
+    if num_nodes < 4:
+        return updated_edge_distance
+
+    tour = np.asarray(local_opt_tour)
+    u_idx = tour
+    v_idx = np.roll(tour, -1)
+    w_idx = np.roll(tour, -2)
+    prev_idx = np.roll(tour, 1)
+
+    # Decay edge usage frequencies across iterations
+    edge_n_used *= 0.95
+
+    # Edge distances and shortcut geometries
+    d_uv = edge_distance[u_idx, v_idx]
+    d_vw = edge_distance[v_idx, w_idx]
+    d_uw = edge_distance[u_idx, w_idx]
+    d_prev_u = edge_distance[prev_idx, u_idx]
+    d_prev_v = edge_distance[prev_idx, v_idx]
+
+    # Geometric detour inefficiency
+    detour_ratio = (d_uv + d_vw) / (d_uw + 1e-8)
+
+    # Historical entrenchment
+    freq = edge_n_used[u_idx, v_idx]
+
+    # Local neighborhood length variance around edge (prev_u, uv, vw)
+    local_mean_d = (d_prev_u + d_uv + d_vw) / 3.0
+    local_dev = np.abs(d_uv - local_mean_d) / (local_mean_d + 1e-8)
+
+    # Multi-attribute non-dominated / rank-based score computation
+    rank_detour = np.argsort(np.argsort(-detour_ratio))
+    rank_dist = np.argsort(np.argsort(-d_uv))
+    rank_entrenchment = np.argsort(np.argsort(freq))
+    rank_dev = np.argsort(np.argsort(-local_dev))
+
+    # Composite Pareto rank score (lower is higher priority for perturbation)
+    composite_rank = (
+        0.35 * rank_detour +
+        0.30 * rank_dist +
+        0.20 * rank_entrenchment +
+        0.15 * rank_dev
+    )
+
+    # Deterministic adaptive selection: select top fraction guided by composite rank
+    k = max(2, int(np.ceil(0.12 * num_nodes)))
+    selected_indices = np.argsort(composite_rank)[:k]
+
+    mean_tour_edge = np.mean(d_uv)
+    base_delta = 0.25 * mean_tour_edge
+
+    for idx in selected_indices:
+        u = u_idx[idx]
+        v = v_idx[idx]
+        w = w_idx[idx]
+        p = prev_idx[idx]
+
+        edge_n_used[u, v] += 1.0
+        edge_n_used[v, u] += 1.0
+
+        # Scale shift by frequency and geometric inefficiency
+        entrench_factor = 1.0 / (1.0 + 0.3 * np.log1p(edge_n_used[u, v]))
+        shift_amount = base_delta * entrench_factor * (1.0 + 0.2 * np.clip(detour_ratio[idx] - 1.0, 0.0, 2.0))
+
+        # Identify candidate shortcuts: chord (u, w) bypassing v, and chord (p, v) bypassing u
+        # Allocate half of the shifted cost to discount each alternative chord (conservative zero-sum transfer)
+        half_shift = 0.5 * shift_amount
+
+        # Check maximum allowable discount on chords to avoid degenerate non-positive weights
+        max_disc_uw = max(0.0, updated_edge_distance[u, w] - 1e-6)
+        max_disc_pv = max(0.0, updated_edge_distance[p, v] - 1e-6)
+
+        actual_disc_uw = min(half_shift, max_disc_uw)
+        actual_disc_pv = min(half_shift, max_disc_pv)
+        actual_penalty = actual_disc_uw + actual_disc_pv
+
+        # Apply zero-sum conservative update
+        updated_edge_distance[u, v] += actual_penalty
+        updated_edge_distance[v, u] += actual_penalty
+
+        updated_edge_distance[u, w] -= actual_disc_uw
+        updated_edge_distance[w, u] -= actual_disc_uw
+
+        updated_edge_distance[p, v] -= actual_disc_pv
+        updated_edge_distance[v, p] -= actual_disc_pv
+
+    return updated_edge_distance
+# ===== Eval Output =====
+[*] Running ...
+[*] mode=val, data=/home/ducanh/projects/EAs_project/MoH/problems/tsp_gls/data/val/val_instance_data_sol_100.pkl, seed=0, n_instances=8
+[*] instance_indices=[6, 9, 0, 2, 4, 3, 5, 1]
+[*] instance 6: obj=8.1578, gap=5.1314
+[*] instance 9: obj=8.2312, gap=2.3357
+[*] instance 0: obj=8.2135, gap=2.6678
+[*] instance 2: obj=8.3390, gap=3.2835
+[*] instance 4: obj=8.3928, gap=7.4201
+[*] instance 3: obj=7.6648, gap=3.9815
+[*] instance 5: obj=7.7314, gap=1.2421
+[*] instance 1: obj=7.9120, gap=4.6968
+[*] ave_gap on size 100: 3.844873880001043
+3.844873880001043

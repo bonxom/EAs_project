@@ -1,0 +1,25 @@
+heu:
+  _target_: utils.llm_client.openai.OpenAIClient
+  model: ag/gemini-3.8-flash-low
+  temperature: 1.0
+  batch_size: 5
+  base_url: http://172.25.16.1:20128/v1
+  api_key: ${oc.env:LOCAL_LLM_API_KEY}
+checkpoint: checkpoints/tsp_gls_20_50_100_200_fresh_20261016_runD
+target_sizes:
+- 500
+- 1000
+inference_iterations: 10
+population_size: 10
+seed_count: 5
+initialization_attempts: 25
+reference_count: 2
+val_n_instances: 8
+test_n_instances: 100
+max_evaluations_per_target: 1000
+seed: 0
+optimizer_timeout: 3600
+instance_timeout: 90
+evaluation_timeout: null
+workers: 8
+evaluate_test: true

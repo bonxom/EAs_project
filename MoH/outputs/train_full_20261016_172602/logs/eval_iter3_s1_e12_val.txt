@@ -1,0 +1,74 @@
+# ===== Heuristic Code =====
+#{Adaptive utility-guided edge penalization using top-quantile filtering with bounded additive rewards and history-regulated scaling to prevent metric distortion and avoid local optima.}#
+
+import numpy as np
+
+def update_edge_distance(edge_distance, local_opt_tour, edge_n_used):
+    updated_edge_distance = np.copy(edge_distance)
+    n = len(local_opt_tour)
+    if n < 3:
+        return updated_edge_distance
+
+    u_idx = np.array(local_opt_tour, dtype=np.intp)
+    v_idx = np.roll(u_idx, -1)
+
+    costs = edge_distance[u_idx, v_idx].astype(np.float64)
+    used = edge_n_used[u_idx, v_idx].astype(np.float64)
+
+    mean_cost = np.mean(costs)
+    std_cost = np.std(costs) + 1e-8
+    z_scores = (costs - mean_cost) / std_cost
+    weights = 1.0 / (1.0 + np.exp(-np.clip(z_scores, -10.0, 10.0)))
+    utilities = (costs * (1.0 + weights)) / (1.0 + used)
+
+    # Adaptive quantile threshold instead of rigid median to focus on genuinely inefficient edges
+    threshold = np.quantile(utilities, 0.75)
+    penalize_mask = utilities >= threshold
+    if not np.any(penalize_mask):
+        penalize_mask = utilities == np.max(utilities)
+
+    p_u = u_idx[penalize_mask]
+    p_v = v_idx[penalize_mask]
+    p_costs = costs[penalize_mask]
+    p_used = used[penalize_mask]
+    p_utils = utilities[penalize_mask]
+    max_util = np.max(utilities) + 1e-8
+
+    # Proportional, history-damped penalty to avoid runaway expansion
+    penalties = (p_costs / (1.0 + np.sqrt(p_used + 1.0))) * (0.5 + 0.5 * (p_utils / max_util))
+    updated_edge_distance[p_u, p_v] += penalties
+    updated_edge_distance[p_v, p_u] += penalties
+
+    # Controlled bounded diversification for unused edges of penalized nodes without runaway multiplicative collapse
+    penalized_nodes = np.unique(np.concatenate((p_u, p_v)))
+    mean_pen = np.mean(penalties) if len(penalties) > 0 else 0.0
+
+    for u in penalized_nodes:
+        row_used = edge_n_used[u]
+        unused_mask = (row_used == 0)
+        unused_mask[u] = False
+        if np.any(unused_mask):
+            orig_vals = edge_distance[u, unused_mask]
+            # Floor decay relative to original distance to preserve underlying metric structure
+            discount = np.minimum(orig_vals * 0.015, mean_pen * 0.1)
+            updated_edge_distance[u, unused_mask] = np.maximum(
+                orig_vals * 0.85, 
+                updated_edge_distance[u, unused_mask] - discount
+            )
+            updated_edge_distance[unused_mask, u] = updated_edge_distance[u, unused_mask]
+
+    return updated_edge_distance
+# ===== Eval Output =====
+[*] Running ...
+[*] mode=val, data=/home/ducanh/projects/EAs_project/MoH/problems/tsp_gls/data/val/val_instance_data_sol_50.pkl, seed=0, n_instances=8
+[*] instance_indices=[6, 9, 0, 2, 4, 3, 5, 1]
+[*] instance 6: obj=5.7136, gap=0.5983
+[*] instance 9: obj=6.0108, gap=0.7860
+[*] instance 0: obj=5.7783, gap=0.0000
+[*] instance 2: obj=5.8071, gap=0.0000
+[*] instance 4: obj=5.5821, gap=3.4387
+[*] instance 3: obj=5.8806, gap=2.1487
+[*] instance 5: obj=5.6187, gap=0.0000
+[*] instance 1: obj=5.1651, gap=0.0000
+[*] ave_gap on size 50: 0.8714573067584303
+0.8714573067584303

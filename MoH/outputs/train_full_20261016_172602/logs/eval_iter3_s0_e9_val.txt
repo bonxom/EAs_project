@@ -1,0 +1,61 @@
+# ===== Heuristic Code =====
+#{Adaptive multi-scale guided local search penalty updating edges near peak utility with variance-scaled step sizes to intensify exploration around elite basins.}
+
+import numpy as np
+
+def update_edge_distance(edge_distance, local_opt_tour, edge_n_used):
+    # Create a copy to prevent in-place mutation of the original distance matrix
+    updated_edge_distance = np.copy(edge_distance)
+
+    # Extract consecutive directed edges along the local optimum tour
+    u_idx = local_opt_tour
+    v_idx = np.roll(local_opt_tour, -1)
+
+    tour_lengths = edge_distance[u_idx, v_idx]
+    tour_counts = edge_n_used[u_idx, v_idx]
+
+    # Compute Guided Local Search utilities based on length and usage frequency
+    utilities = tour_lengths / (1.0 + tour_counts)
+    max_utility = np.max(utilities)
+
+    if max_utility <= 0.0:
+        return updated_edge_distance
+
+    avg_edge = np.mean(tour_lengths)
+    std_edge = np.std(tour_lengths)
+
+    # Adaptive base penalty incorporating both average edge cost and variance
+    base_penalty = 0.25 * avg_edge * (1.0 + 0.5 * (std_edge / (avg_edge + 1e-12)))
+
+    # Intensified selection targeting top utility edges with soft-proportional scaling
+    threshold = 0.98 * max_utility
+    selected_mask = utilities >= threshold
+
+    sel_u = u_idx[selected_mask]
+    sel_v = v_idx[selected_mask]
+    sel_utilities = utilities[selected_mask]
+    sel_lengths = tour_lengths[selected_mask]
+
+    # Proportional weight ensuring smooth penalty scaling near the maximum utility
+    utility_weight = sel_utilities / max_utility
+    edge_penalties = (base_penalty * 0.8 + 0.2 * sel_lengths) * utility_weight
+
+    # Apply symmetric penalty updates
+    updated_edge_distance[sel_u, sel_v] += edge_penalties
+    updated_edge_distance[sel_v, sel_u] += edge_penalties
+
+    return updated_edge_distance
+# ===== Eval Output =====
+[*] Running ...
+[*] mode=val, data=/home/ducanh/projects/EAs_project/MoH/problems/tsp_gls/data/val/val_instance_data_sol_20.pkl, seed=0, n_instances=8
+[*] instance_indices=[6, 9, 0, 2, 4, 3, 5, 1]
+[*] instance 6: obj=3.7045, gap=0.0000
+[*] instance 9: obj=4.1442, gap=0.0000
+[*] instance 0: obj=3.6827, gap=0.0000
+[*] instance 2: obj=3.8184, gap=0.0000
+[*] instance 4: obj=3.8385, gap=0.0000
+[*] instance 3: obj=3.6971, gap=0.0000
+[*] instance 5: obj=3.4281, gap=0.0000
+[*] instance 1: obj=3.6958, gap=0.0000
+[*] ave_gap on size 20: 1.2218318606871392e-06
+1.2218318606871392e-06

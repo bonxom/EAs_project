@@ -1,0 +1,79 @@
+# ===== Heuristic Code =====
+#{Adaptive search-state controller adjusting penalty scaling, selection thresholds, and exploration discount dynamically based on tour cost coefficient of variation and edge usage stagnation metrics.}
+
+import numpy as np
+
+def update_edge_distance(edge_distance, local_opt_tour, edge_n_used):
+    updated_edge_distance = np.copy(edge_distance)
+    n = len(local_opt_tour)
+    if n < 3:
+        return updated_edge_distance
+
+    u_idx = np.array(local_opt_tour, dtype=np.intp)
+    v_idx = np.roll(u_idx, -1)
+
+    costs = edge_distance[u_idx, v_idx].astype(np.float64)
+    used = edge_n_used[u_idx, v_idx].astype(np.float64)
+
+    mean_cost = np.mean(costs)
+    std_cost = np.std(costs)
+    # Search-state stagnation indicator: edge repetition frequency
+    mean_used = np.mean(used)
+    max_used = np.max(used)
+    cv_cost = std_cost / (mean_cost + 1e-8)
+
+    # Adaptive state control: stagnation score from cost homogeneity and repeated edge visits
+    # Low CV combined with high mean_used indicates strong local minimum entrapment
+    stagnation_score = (1.0 / (1.0 + cv_cost)) * np.tanh(mean_used / 5.0)
+
+    # Transition dynamically from micro-penalties to heavy-ruin perturbation
+    alpha = 0.25 + 1.25 * stagnation_score
+    gamma = 0.5 + 0.5 * (1.0 - stagnation_score)
+
+    utilities = (costs ** gamma) / (1.0 + used)
+
+    # Dynamic quantile selection: penalize top edges aggressively under stagnation
+    quantile_cutoff = 0.60 - 0.25 * stagnation_score
+    threshold = np.quantile(utilities, quantile_cutoff)
+    max_util = np.max(utilities) + 1e-8
+
+    penalize_mask = utilities >= threshold
+    p_u = u_idx[penalize_mask]
+    p_v = v_idx[penalize_mask]
+    p_costs = costs[penalize_mask]
+    p_used = used[penalize_mask]
+    p_utils = utilities[penalize_mask]
+
+    # Stagnation-scaled penalty magnitude
+    penalties = alpha * (p_costs / (1.0 + np.sqrt(p_used + 1.0))) * (1.0 + p_utils / max_util)
+
+    updated_edge_distance[p_u, p_v] += penalties
+    updated_edge_distance[p_v, p_u] += penalties
+
+    # Adaptive exploration reward for completely unvisited incident edges
+    decay_ratio = 0.01 + 0.06 * stagnation_score
+    penalized_nodes = np.unique(np.concatenate((p_u, p_v)))
+
+    for u in penalized_nodes:
+        unused_mask = (edge_n_used[u] == 0)
+        unused_mask[u] = False
+        if np.any(unused_mask):
+            cur = updated_edge_distance[u, unused_mask]
+            updated_edge_distance[u, unused_mask] -= cur * decay_ratio
+            updated_edge_distance[unused_mask, u] = updated_edge_distance[u, unused_mask]
+
+    return updated_edge_distance
+# ===== Eval Output =====
+[*] Running ...
+[*] mode=val, data=/home/ducanh/projects/EAs_project/MoH/problems/tsp_gls/data/val/val_instance_data_sol_50.pkl, seed=0, n_instances=8
+[*] instance_indices=[6, 9, 0, 2, 4, 3, 5, 1]
+[*] instance 6: obj=5.7136, gap=0.5983
+[*] instance 9: obj=6.0108, gap=0.7860
+[*] instance 0: obj=5.7783, gap=0.0000
+[*] instance 2: obj=5.8071, gap=0.0000
+[*] instance 4: obj=5.5821, gap=3.4387
+[*] instance 3: obj=5.8123, gap=0.9633
+[*] instance 5: obj=5.6187, gap=0.0000
+[*] instance 1: obj=5.1651, gap=0.0000
+[*] ave_gap on size 50: 0.7232904217948505
+0.7232904217948505

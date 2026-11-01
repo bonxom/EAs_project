@@ -1,0 +1,81 @@
+# ===== Heuristic Code =====
+#{Context-aware subpath utility evaluates edges by combining intrinsic cost-usage ratios with local 3-edge path strain and incident chord bypass opportunities to penalize topologically inefficient tour segments while discounting attractive shortcut candidates.}
+
+import numpy as np
+
+def update_edge_distance(edge_distance, local_opt_tour, edge_n_used):
+    updated_edge_distance = np.copy(edge_distance)
+    n = len(local_opt_tour)
+    if n < 4:
+        return updated_edge_distance
+
+    u_idx = np.array(local_opt_tour, dtype=np.intp)
+    v_idx = np.roll(u_idx, -1)
+    prev_u = np.roll(u_idx, 1)
+    next_v = np.roll(v_idx, -1)
+
+    costs = edge_distance[u_idx, v_idx].astype(np.float64)
+    used = edge_n_used[u_idx, v_idx].astype(np.float64)
+
+    # Adjacent edge strain: compare 3-edge subpath cost vs direct chord bypass
+    c_prev = edge_distance[prev_u, u_idx].astype(np.float64)
+    c_next = edge_distance[v_idx, next_v].astype(np.float64)
+    chord_skip = edge_distance[prev_u, next_v].astype(np.float64)
+
+    # Subpath elongation ratio: high strain indicates crossed or locally suboptimal detours
+    path_cost = c_prev + costs + c_next
+    chord_ratio = path_cost / (chord_skip + 1e-8)
+    local_strain = 0.5 * (chord_ratio + (costs / (0.5 * (c_prev + c_next) + 1e-8)))
+
+    # Topological utility incorporating cost, usage, and contextual subpath strain
+    base_utility = costs / (1.0 + used)
+    utilities = base_utility * (1.0 + np.tanh(local_strain - 1.0))
+
+    threshold = np.median(utilities)
+    max_util = np.max(utilities) + 1e-8
+    penalize_mask = utilities >= threshold
+
+    p_u = u_idx[penalize_mask]
+    p_v = v_idx[penalize_mask]
+    p_costs = costs[penalize_mask]
+    p_used = used[penalize_mask]
+    p_utils = utilities[penalize_mask]
+
+    # Penalize structurally strained and high-utility edges
+    penalties = (p_costs / (1.0 + np.sqrt(p_used + 1.0))) * (1.0 + (p_utils / max_util))
+    updated_edge_distance[p_u, p_v] += penalties
+    updated_edge_distance[p_v, p_u] += penalties
+
+    # Reward promising bypass chords around penalized segments
+    p_prev = prev_u[penalize_mask]
+    p_next = next_v[penalize_mask]
+    chord_decay = 0.035
+    updated_edge_distance[p_prev, p_next] -= updated_edge_distance[p_prev, p_next] * chord_decay
+    updated_edge_distance[p_next, p_prev] = updated_edge_distance[p_prev, p_next]
+
+    # Counter-incentive discount on incident underused connections
+    penalized_nodes = np.unique(np.concatenate((p_u, p_v)))
+    decay_ratio = 0.02
+    for u in penalized_nodes:
+        unused_mask = (edge_n_used[u] == 0)
+        unused_mask[u] = False
+        if np.any(unused_mask):
+            current_vals = updated_edge_distance[u, unused_mask]
+            updated_edge_distance[u, unused_mask] -= current_vals * decay_ratio
+            updated_edge_distance[unused_mask, u] = updated_edge_distance[u, unused_mask]
+
+    return updated_edge_distance
+# ===== Eval Output =====
+[*] Running ...
+[*] mode=val, data=/home/ducanh/projects/EAs_project/MoH/problems/tsp_gls/data/val/val_instance_data_sol_50.pkl, seed=0, n_instances=8
+[*] instance_indices=[6, 9, 0, 2, 4, 3, 5, 1]
+[*] instance 6: obj=5.7136, gap=0.5983
+[*] instance 9: obj=5.9639, gap=0.0000
+[*] instance 0: obj=5.7783, gap=0.0000
+[*] instance 2: obj=5.8071, gap=0.0000
+[*] instance 4: obj=5.3965, gap=0.0000
+[*] instance 3: obj=5.8224, gap=1.1392
+[*] instance 5: obj=5.6187, gap=0.0000
+[*] instance 1: obj=5.1651, gap=0.0000
+[*] ave_gap on size 50: 0.21718291265821477
+0.21718291265821477

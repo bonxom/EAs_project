@@ -1,0 +1,91 @@
+# ===== Heuristic Code =====
+#{This algorithm calculates edge utilities by synthesizing cost z-score logistics with Shannon-entropy motif rigidity of incident node visit profiles, selectively penalizing the highest-scoring frozen edges while discounting unvisited incident connections to guide escape from local optima.}#
+
+import numpy as np
+
+def update_edge_distance(edge_distance, local_opt_tour, edge_n_used):
+    updated_edge_distance = np.copy(edge_distance)
+    n = len(local_opt_tour)
+    if n < 3:
+        return updated_edge_distance
+
+    u_idx = np.array(local_opt_tour, dtype=np.intp)
+    v_idx = np.roll(u_idx, -1)
+
+    costs = edge_distance[u_idx, v_idx].astype(np.float64)
+    used = edge_n_used[u_idx, v_idx].astype(np.float64)
+
+    # Compute node usage entropy and motif rigidity for search stagnation detection
+    node_usage_sum = np.sum(edge_n_used, axis=1, dtype=np.float64)
+    u_sum = node_usage_sum[u_idx] + 1e-12
+    v_sum = node_usage_sum[v_idx] + 1e-12
+
+    p_u = edge_n_used[u_idx] / u_sum[:, None]
+    p_v = edge_n_used[v_idx] / v_sum[:, None]
+
+    # Efficient Shannon entropy over positive entries
+    log_p_u = np.zeros_like(p_u)
+    np.log(p_u, where=(p_u > 0), out=log_p_u)
+    entropy_u = -np.sum(p_u * log_p_u, axis=1)
+
+    log_p_v = np.zeros_like(p_v)
+    np.log(p_v, where=(p_v > 0), out=log_p_v)
+    entropy_v = -np.sum(p_v * log_p_v, axis=1)
+
+    max_entropy = np.log(max(n - 1.0, 1.0))
+    avg_norm_entropy = 0.5 * (entropy_u + entropy_v) / (max_entropy + 1e-12)
+    motif_rigidity = np.clip(1.0 - avg_norm_entropy, 0.0, 1.0)
+
+    # Relative cost z-scores modulated by rigidity
+    mean_cost = np.mean(costs)
+    std_cost = np.std(costs) + 1e-8
+    z_scores = (costs - mean_cost) / std_cost
+    logistic_weights = 1.0 / (1.0 + np.exp(-z_scores))
+
+    # Reconstruct utility combining frequency, cost prominence, and structural rigidity
+    utilities = (costs / (1.0 + used)) * (1.0 + logistic_weights) * (1.0 + 1.5 * motif_rigidity)
+
+    threshold = np.median(utilities)
+    max_util = np.max(utilities) + 1e-8
+    penalize_mask = utilities >= threshold
+
+    p_u = u_idx[penalize_mask]
+    p_v = v_idx[penalize_mask]
+    p_costs = costs[penalize_mask]
+    p_used = used[penalize_mask]
+    p_utils = utilities[penalize_mask]
+    p_rigidity = motif_rigidity[penalize_mask]
+
+    # Modulated penalties proportional to stagnation depth
+    penalties = (p_costs / (1.0 + np.sqrt(p_used + 1.0))) * (1.0 + p_utils / max_util) * (0.8 + 0.4 * p_rigidity)
+
+    updated_edge_distance[p_u, p_v] += penalties
+    updated_edge_distance[p_v, p_u] += penalties
+
+    # Reward/discount unexplored incident edges for perturbed stagnant nodes
+    penalized_nodes = np.unique(np.concatenate((p_u, p_v)))
+    decay_ratio = 0.02
+    for node in penalized_nodes:
+        unused_mask = (edge_n_used[node] == 0)
+        unused_mask[node] = False
+        if np.any(unused_mask):
+            current_vals = updated_edge_distance[node, unused_mask]
+            discounts = current_vals * decay_ratio
+            updated_edge_distance[node, unused_mask] -= discounts
+            updated_edge_distance[unused_mask, node] = updated_edge_distance[node, unused_mask]
+
+    return updated_edge_distance
+# ===== Eval Output =====
+[*] Running ...
+[*] mode=val, data=/home/ducanh/projects/EAs_project/MoH/problems/tsp_gls/data/val/val_instance_data_sol_50.pkl, seed=0, n_instances=8
+[*] instance_indices=[6, 9, 0, 2, 4, 3, 5, 1]
+[*] instance 6: obj=5.7136, gap=0.5983
+[*] instance 9: obj=5.9639, gap=0.0000
+[*] instance 0: obj=5.7783, gap=0.0000
+[*] instance 2: obj=5.8274, gap=0.3500
+[*] instance 4: obj=5.3965, gap=0.0000
+[*] instance 3: obj=5.7569, gap=0.0000
+[*] instance 5: obj=5.6187, gap=0.0000
+[*] instance 1: obj=5.1651, gap=0.0000
+[*] ave_gap on size 50: 0.11854396301867187
+0.11854396301867187

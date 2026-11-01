@@ -1,0 +1,85 @@
+# ===== Heuristic Code =====
+#{Dynamic-k guided local search that dynamically modulates the number of penalized edges from minimal perturbations during descent to strong burst perturbations during cycling stagnation based on tour overlap and usage trajectory diversity.}#
+
+import numpy as np
+
+def update_edge_distance(edge_distance, local_opt_tour, edge_n_used):
+    updated_edge_distance = np.copy(edge_distance)
+    num_nodes = len(local_opt_tour)
+    u_idx = np.asarray(local_opt_tour)
+    v_idx = np.roll(u_idx, -1)
+    w_idx = np.roll(u_idx, -2)
+
+    edge_n_used *= 0.95
+
+    tour_dist = edge_distance[u_idx, v_idx]
+    tour_used = edge_n_used[u_idx, v_idx]
+
+    overlap_ratio = np.mean(tour_used > 1.0)
+    avg_tour_usage = np.mean(tour_used)
+    max_used = np.max(edge_n_used) + 1e-12
+    stagnation_metric = 0.5 * overlap_ratio + 0.5 * (avg_tour_usage / max_used)
+
+    min_k_frac = 0.02
+    max_k_frac = 0.25
+    dynamic_k_frac = min_k_frac + (max_k_frac - min_k_frac) / (1.0 + np.exp(-10.0 * (stagnation_metric - 0.4)))
+    k = max(1, min(num_nodes, int(np.round(dynamic_k_frac * num_nodes))))
+
+    utilities = tour_dist / (1.0 + tour_used)
+    top_k_indices = np.argsort(utilities)[-k:]
+
+    for idx in top_k_indices:
+        u, v = u_idx[idx], v_idx[idx]
+        edge_n_used[u, v] += 1.0
+        edge_n_used[v, u] += 1.0
+
+    stagnation_factor = 1.0 + 1.5 * overlap_ratio + (avg_tour_usage / max_used)
+
+    total_node_usage = np.sum(edge_n_used, axis=1, keepdims=True) + 1e-12
+    usage_probs = edge_n_used / total_node_usage
+    node_entropy = -np.sum(usage_probs * np.log(usage_probs + 1e-12), axis=1)
+    max_entropy = np.log(num_nodes) + 1e-12
+    entropy_rigidity = 1.0 - (node_entropy / max_entropy)
+
+    segment_weights = np.zeros(num_nodes)
+    for i in range(num_nodes):
+        u, v, w = u_idx[i], v_idx[i], w_idx[i]
+        segment_weights[v] = 0.5 * (edge_n_used[u, v] + edge_n_used[v, w])
+    norm_segment_weights = segment_weights / (np.max(segment_weights) + 1e-12)
+
+    node_centrality = np.sum(edge_n_used, axis=1)
+    norm_centrality = node_centrality / (np.max(node_centrality) + 1e-12)
+
+    node_mean_dist = np.mean(edge_distance, axis=1)
+    global_mean_dist = np.mean(node_mean_dist)
+    spatial_centrality = global_mean_dist / (node_mean_dist + 1e-12)
+    norm_spatial_centrality = spatial_centrality / (np.max(spatial_centrality) + 1e-12)
+
+    adaptive_lambda = (0.15 + 0.20 * np.tanh(stagnation_factor)) * global_mean_dist
+
+    for idx in top_k_indices:
+        u, v = u_idx[idx], v_idx[idx]
+        c_mod = 0.25 * (norm_centrality[u] + norm_centrality[v])
+        sc_mod = 0.25 * (norm_spatial_centrality[u] + norm_spatial_centrality[v])
+        r_mod = 0.20 * (entropy_rigidity[u] + entropy_rigidity[v])
+        s_mod = 0.15 * (norm_segment_weights[u] + norm_segment_weights[v])
+        modulation = 1.0 + c_mod + sc_mod + r_mod + s_mod
+        penalty = adaptive_lambda * edge_n_used[u, v] * modulation
+        updated_edge_distance[u, v] += penalty
+        updated_edge_distance[v, u] += penalty
+
+    return updated_edge_distance
+# ===== Eval Output =====
+[*] Running ...
+[*] mode=val, data=/home/ducanh/projects/EAs_project/MoH/problems/tsp_gls/data/val/val_instance_data_sol_100.pkl, seed=0, n_instances=8
+[*] instance_indices=[6, 9, 0, 2, 4, 3, 5, 1]
+[*] instance 6: obj=7.7733, gap=0.1759
+[*] instance 9: obj=8.0672, gap=0.2969
+[*] instance 0: obj=8.0001, gap=0.0000
+[*] instance 2: obj=8.1328, gap=0.7295
+[*] instance 4: obj=7.8131, gap=0.0000
+[*] instance 3: obj=7.3713, gap=0.0000
+[*] instance 5: obj=7.6365, gap=0.0000
+[*] instance 1: obj=7.5570, gap=0.0000
+[*] ave_gap on size 100: 0.15029063281973565
+0.15029063281973565

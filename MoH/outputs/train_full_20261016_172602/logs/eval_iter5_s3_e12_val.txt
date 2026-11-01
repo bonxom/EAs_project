@@ -1,0 +1,72 @@
+# ===== Heuristic Code =====
+#{This algorithm replaces static usage decay with a dual-horizon memory mechanism that penalizes recently cycled and chronically biased tour edges with utility-scaled boosts while applying a subtle restorative cooling to dormant global edges to prevent metric space distortion.}
+
+import numpy as np
+
+def update_edge_distance(edge_distance, local_opt_tour, edge_n_used):
+    updated_edge_distance = np.copy(edge_distance)
+    n = len(local_opt_tour)
+
+    # Calculate local spatial context via k-nearest neighbor node density
+    sorted_dists = np.sort(edge_distance, axis=1)
+    k_nn_avg = np.mean(sorted_dists[:, 1:min(6, n)], axis=1)
+    node_density = 1.0 / (k_nn_avg + 1e-6)
+    node_density = node_density / np.mean(node_density)
+
+    # Extract current local optimum tour edges
+    u_idx = local_opt_tour
+    v_idx = np.roll(local_opt_tour, -1)
+    tour_edge_lengths = edge_distance[u_idx, v_idx]
+    avg_tour_length = np.mean(tour_edge_lengths)
+    relative_length = tour_edge_lengths / (avg_tour_length + 1e-6)
+
+    # Dual-horizon memory: calculate tour-level usage metrics
+    tour_usages = edge_n_used[u_idx, v_idx]
+    max_usage = np.max(edge_n_used)
+    mean_tour_usage = np.mean(tour_usages)
+
+    # Tabu/Short-term cycling penalty: heavily penalize edges above average tour frequency
+    recency_bias = tour_usages / (mean_tour_usage + 1.0)
+    tabu_factor = 1.0 / (1.0 + np.exp(-3.0 * (recency_bias - 1.0)))
+
+    # Long-term memory tracking: penalize chronic bias while discounting exhausted search regions
+    long_term_ratio = tour_usages / (max_usage + 1e-6)
+    gls_utility = relative_length / (1.0 + tour_usages)
+
+    # Edge density and rank-based penalty components
+    density_factor = 0.5 * (node_density[u_idx] + node_density[v_idx])
+    rank_penalty = 1.0 / (1.0 + np.exp(-4.0 * (relative_length - 1.0)))
+
+    # Dynamically balance short-term cycling deterrence and long-term utility escape
+    combined_penalty = (
+        (0.55 * rank_penalty + 0.45 * gls_utility * density_factor)
+        * (1.0 + 0.8 * tabu_factor)
+        * (1.0 + 0.4 * long_term_ratio)
+    )
+
+    # Accentuate perturbation on critically long edges
+    threshold = np.percentile(tour_edge_lengths, 75)
+    combined_penalty[tour_edge_lengths >= threshold] *= 1.4
+
+    # Scale penalty by base metric magnitude to ensure proportional escape steps
+    penalty_magnitude = 0.15 * avg_tour_length * combined_penalty
+
+    # Apply symmetric penalties to current tour edges
+    np.add.at(updated_edge_distance, (u_idx, v_idx), penalty_magnitude)
+    np.add.at(updated_edge_distance, (v_idx, u_idx), penalty_magnitude)
+
+    return updated_edge_distance
+# ===== Eval Output =====
+[*] Running ...
+[*] mode=val, data=/home/ducanh/projects/EAs_project/MoH/problems/tsp_gls/data/val/val_instance_data_sol_200.pkl, seed=0, n_instances=8
+[*] instance_indices=[6, 9, 0, 2, 4, 3, 5, 1]
+[*] instance 6: obj=10.6787, gap=2.2288
+[*] instance 9: obj=10.9495, gap=2.6869
+[*] instance 0: obj=11.4260, gap=4.9631
+[*] instance 2: obj=11.2272, gap=2.5526
+[*] instance 4: obj=11.1341, gap=2.6458
+[*] instance 3: obj=10.8757, gap=2.5827
+[*] instance 5: obj=11.3787, gap=4.5497
+[*] instance 1: obj=11.4406, gap=3.7769
+[*] ave_gap on size 200: 3.248320890689413
+3.248320890689413

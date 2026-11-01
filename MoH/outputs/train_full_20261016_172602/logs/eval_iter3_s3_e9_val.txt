@@ -1,0 +1,71 @@
+# ===== Heuristic Code =====
+#{An intensification penalty strategy that computes directional curvature and normalized topological regret for tour edges, scaling additive perturbations via an adaptive sigmoid threshold to selectively break sub-optimal long bottlenecks while preserving elite structural motifs.}#
+
+import numpy as np
+
+def update_edge_distance(edge_distance, local_opt_tour, edge_n_used):
+    updated_edge_distance = np.copy(edge_distance)
+    n = len(local_opt_tour)
+    if n < 4:
+        return updated_edge_distance
+
+    u_idx = local_opt_tour
+    v_idx = np.roll(local_opt_tour, -1)
+    prev_idx = np.roll(local_opt_tour, 1)
+    next_idx = np.roll(local_opt_tour, -2)
+
+    # Base tour edge properties
+    tour_edge_lengths = edge_distance[u_idx, v_idx]
+    avg_tour_length = np.mean(tour_edge_lengths) + 1e-8
+    rel_length = tour_edge_lengths / avg_tour_length
+
+    # Local context: k-nearest neighbors density estimate
+    k = min(6, max(2, n - 1))
+    # Partition is faster than full sort for k-NN
+    k_nn_dists = np.partition(edge_distance, k, axis=1)[:, 1:k]
+    k_nn_avg = np.mean(k_nn_dists, axis=1) + 1e-8
+    node_density = 1.0 / k_nn_avg
+    norm_density = node_density / (np.mean(node_density) + 1e-8)
+    edge_density = 0.5 * (norm_density[u_idx] + norm_density[v_idx])
+
+    # Topological regret: difference between current edge and the best alternative local connection
+    # Evaluate 2-opt alternative cost delta around the edge (u, v)
+    alt_cost = edge_distance[prev_idx, v_idx] + edge_distance[u_idx, next_idx]
+    curr_cost = edge_distance[prev_idx, u_idx] + edge_distance[v_idx, next_idx]
+    regret = np.maximum(0.0, curr_cost - alt_cost) / avg_tour_length
+
+    # Historical usage damping factor (intensification around lesser-penalized sub-optimal edges)
+    edge_freq = edge_n_used[u_idx, v_idx]
+    usage_factor = 1.0 / (1.0 + 0.35 * edge_freq)
+
+    # Sigmoid modulation centered on above-average edges with steep transition for high-cost outliers
+    sigmoid_act = 1.0 / (1.0 + np.exp(-5.0 * (rel_length - 1.0)))
+
+    # Combined penalty calculation
+    base_penalty = (sigmoid_act * 0.65 + (rel_length * edge_density) * 0.35) * usage_factor
+    intensified_penalty = base_penalty * (1.0 + 0.5 * np.tanh(regret))
+
+    # Targeted boost for the upper quartile of cost edges to force local basin escape
+    p75 = np.percentile(tour_edge_lengths, 75)
+    boost_mask = tour_edge_lengths >= p75
+    intensified_penalty[boost_mask] *= 1.4
+
+    # Apply symmetric additive perturbations
+    np.add.at(updated_edge_distance, (u_idx, v_idx), intensified_penalty)
+    np.add.at(updated_edge_distance, (v_idx, u_idx), intensified_penalty)
+
+    return updated_edge_distance
+# ===== Eval Output =====
+[*] Running ...
+[*] mode=val, data=/home/ducanh/projects/EAs_project/MoH/problems/tsp_gls/data/val/val_instance_data_sol_200.pkl, seed=0, n_instances=8
+[*] instance_indices=[6, 9, 0, 2, 4, 3, 5, 1]
+[*] instance 6: obj=10.4460, gap=0.0019
+[*] instance 9: obj=10.7224, gap=0.5568
+[*] instance 0: obj=10.9080, gap=0.2044
+[*] instance 2: obj=10.9810, gap=0.3040
+[*] instance 4: obj=10.8946, gap=0.4376
+[*] instance 3: obj=10.6107, gap=0.0829
+[*] instance 5: obj=10.9113, gap=0.2553
+[*] instance 1: obj=11.1113, gap=0.7901
+[*] ave_gap on size 200: 0.3291032623018164
+0.3291032623018164

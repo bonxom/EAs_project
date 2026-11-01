@@ -1,0 +1,115 @@
+# ===== Heuristic Code =====
+#{Evaluates multi-hop ruin windows across 4-node and 5-node sub-paths using path-to-chord bypass expansion, crossing deficit detection, and convex deflection to guide targeted GLS edge penalties and multi-step chord discounts.}#
+
+import numpy as np
+
+def update_edge_distance(edge_distance, local_opt_tour, edge_n_used):
+    updated_edge_distance = np.copy(edge_distance)
+    num_nodes = len(local_opt_tour)
+    tour = np.asarray(local_opt_tour)
+
+    # Node sequences for 4-node (u, v, w, x) and 5-node (u, v, w, x, y) windows
+    u_idx = tour
+    v_idx = np.roll(tour, -1)
+    w_idx = np.roll(tour, -2)
+    x_idx = np.roll(tour, -3)
+    y_idx = np.roll(tour, -4)
+
+    edge_n_used *= 0.96
+
+    # Multi-hop consecutive step distances
+    d_uv = edge_distance[u_idx, v_idx]
+    d_vw = edge_distance[v_idx, w_idx]
+    d_wx = edge_distance[w_idx, x_idx]
+    d_xy = edge_distance[x_idx, y_idx]
+
+    # Shortcut chords across 2-step, 3-step, and 4-step spans
+    d_uw = edge_distance[u_idx, w_idx]
+    d_ux = edge_distance[u_idx, x_idx]
+    d_vx = edge_distance[v_idx, x_idx]
+    d_uy = edge_distance[u_idx, y_idx]
+
+    # 4-node window path length and multi-step bypass potential
+    path_len_4 = d_uv + d_vw + d_wx
+    chord_ux = d_ux + 1e-8
+    bypass_ratio_4 = path_len_4 / chord_ux
+
+    # 5-node window path length and long-range bypass potential
+    path_len_5 = path_len_4 + d_xy
+    chord_uy = d_uy + 1e-8
+    bypass_ratio_5 = path_len_5 / chord_uy
+
+    # Metric crossing deficit: if perimeter of crossed quad (u-w + v-x) is shorter than edges (u-v + w-x)
+    cross_metric = (d_uv + d_wx) - (d_uw + d_vx)
+    crossing_deficit = np.maximum(0.0, cross_metric) / (chord_ux + 1e-8)
+
+    # Convex deflection: deviation of intermediate chords from direct multi-hop perimeter
+    deflection_metric = (d_uw + d_vx) / (chord_ux + 1e-8)
+
+    # Combined multi-hop entanglement index
+    window_entanglement = (
+        0.50 * bypass_ratio_4 +
+        0.30 * bypass_ratio_5 +
+        0.70 * crossing_deficit +
+        0.20 * deflection_metric
+    )
+
+    # Distribute window-level entanglement back to constituent edges via rolling aggregation
+    edge_entanglement = (
+        window_entanglement +
+        np.roll(window_entanglement, 1) +
+        np.roll(window_entanglement, 2)
+    ) / 3.0
+
+    base_dist = d_uv
+    base_freq = edge_n_used[u_idx, v_idx]
+    utilities = (base_dist / (1.0 + base_freq)) * (1.0 + 0.35 * edge_entanglement)
+
+    k = max(1, int(np.ceil(0.14 * num_nodes)))
+    top_k_indices = np.argsort(utilities)[-k:]
+
+    global_mean_dist = float(np.mean(edge_distance))
+    adaptive_lambda = 0.30 * global_mean_dist
+
+    for idx in top_k_indices:
+        u, v = u_idx[idx], v_idx[idx]
+        edge_n_used[u, v] += 1.0
+        edge_n_used[v, u] += 1.0
+        freq_penalty = 1.0 + np.log1p(edge_n_used[u, v])
+        geom_weight = 1.0 + 0.40 * edge_entanglement[idx]
+        penalty = adaptive_lambda * freq_penalty * geom_weight
+        updated_edge_distance[u, v] += penalty
+        updated_edge_distance[v, u] += penalty
+
+    # Discount promising multi-hop shortcuts (3-step chord u-x and 2-step chord u-w)
+    high_bypass_4_indices = np.argsort(bypass_ratio_4)[-k:]
+    for idx in high_bypass_4_indices:
+        u, x = u_idx[idx], x_idx[idx]
+        freq_ux = edge_n_used[u, x]
+        if freq_ux < 1.0:
+            discount_ux = 0.12 * global_mean_dist * (1.0 / (1.0 + freq_ux))
+            updated_edge_distance[u, x] = max(1e-6, updated_edge_distance[u, x] - discount_ux)
+            updated_edge_distance[x, u] = updated_edge_distance[u, x]
+
+        u_2, w_2 = u_idx[idx], w_idx[idx]
+        freq_uw = edge_n_used[u_2, w_2]
+        if freq_uw < 1.0:
+            discount_uw = 0.08 * global_mean_dist * (1.0 / (1.0 + freq_uw))
+            updated_edge_distance[u_2, w_2] = max(1e-6, updated_edge_distance[u_2, w_2] - discount_uw)
+            updated_edge_distance[w_2, u_2] = updated_edge_distance[u_2, w_2]
+
+    return updated_edge_distance
+# ===== Eval Output =====
+[*] Running ...
+[*] mode=val, data=/home/ducanh/projects/EAs_project/MoH/problems/tsp_gls/data/val/val_instance_data_sol_100.pkl, seed=0, n_instances=8
+[*] instance_indices=[6, 9, 0, 2, 4, 3, 5, 1]
+[*] instance 6: obj=7.7627, gap=0.0399
+[*] instance 9: obj=8.0433, gap=0.0000
+[*] instance 0: obj=8.0001, gap=0.0000
+[*] instance 2: obj=8.0900, gap=0.1994
+[*] instance 4: obj=7.8131, gap=0.0000
+[*] instance 3: obj=7.3713, gap=0.0000
+[*] instance 5: obj=7.6365, gap=0.0000
+[*] instance 1: obj=7.5570, gap=0.0000
+[*] ave_gap on size 100: 0.029921358106396734
+0.029921358106396734

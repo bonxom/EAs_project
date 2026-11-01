@@ -1,0 +1,65 @@
+# ===== Heuristic Code =====
+#{This algorithm penalizes edges by calculating utility from the normalized discrepancy between actual edge cost and the k-nearest neighbor lower bound of the incident vertices, dividing by usage counts to deter edges that deviate most from local geometric optimality.}
+
+import numpy as np
+
+def update_edge_distance(edge_distance, local_opt_tour, edge_n_used):
+    # Create a copy of the edge distance matrix to avoid modifying the original input
+    updated_edge_distance = np.copy(edge_distance)
+    n = edge_distance.shape[0]
+
+    # Compute k-nearest neighbor reference baseline for each vertex
+    k = min(3, n - 1)
+    if k > 0:
+        # Partition to find the k smallest non-zero distances (ignoring the self-loop distance of 0)
+        sorted_dists = np.sort(edge_distance, axis=1)
+        # sorted_dists[:, 0] is diagonal (0), so columns 1 to k correspond to the k nearest neighbors
+        knn_baseline = np.mean(sorted_dists[:, 1:k + 1], axis=1)
+    else:
+        knn_baseline = np.zeros(n)
+
+    u_idx = local_opt_tour
+    v_idx = np.roll(local_opt_tour, -1)
+
+    tour_lengths = edge_distance[u_idx, v_idx]
+    tour_counts = edge_n_used[u_idx, v_idx]
+
+    # Calculate expected local baseline for each edge using incident vertices
+    edge_baseline = 0.5 * (knn_baseline[u_idx] + knn_baseline[v_idx])
+
+    # Compute normalized residual discrepancy: excess length relative to local geometric density
+    discrepancy = np.maximum(0.0, tour_lengths - edge_baseline)
+
+    # Weight discrepancy combined with tour length, dampened by edge frequency
+    effective_cost = discrepancy + 0.1 * tour_lengths
+    utilities = effective_cost / (1.0 + tour_counts)
+
+    max_utility = np.max(utilities)
+    avg_edge = np.mean(tour_lengths)
+    penalty = 0.3 * avg_edge
+
+    # Penalize edges matching or close to the maximal residual discrepancy utility
+    threshold = 0.95 * max_utility
+    selected_mask = utilities >= threshold
+
+    sel_u = u_idx[selected_mask]
+    sel_v = v_idx[selected_mask]
+
+    updated_edge_distance[sel_u, sel_v] += penalty
+    updated_edge_distance[sel_v, sel_u] += penalty
+
+    return updated_edge_distance
+# ===== Eval Output =====
+[*] Running ...
+[*] mode=val, data=/home/ducanh/projects/EAs_project/MoH/problems/tsp_gls/data/val/val_instance_data_sol_20.pkl, seed=0, n_instances=8
+[*] instance_indices=[6, 9, 0, 2, 4, 3, 5, 1]
+[*] instance 6: obj=3.7045, gap=0.0000
+[*] instance 9: obj=4.1442, gap=0.0000
+[*] instance 0: obj=3.6827, gap=0.0000
+[*] instance 2: obj=3.8184, gap=0.0000
+[*] instance 4: obj=3.8385, gap=0.0000
+[*] instance 3: obj=3.6971, gap=0.0000
+[*] instance 5: obj=3.4281, gap=0.0000
+[*] instance 1: obj=3.6958, gap=0.0000
+[*] ave_gap on size 20: 1.2218318606871392e-06
+1.2218318606871392e-06

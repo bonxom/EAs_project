@@ -1,0 +1,64 @@
+# ===== Heuristic Code =====
+#{This algorithm penalizes local tour edges by combining edge usage regularization with a topological bridge coefficient derived from k-NN neighborhood Jaccard overlap, selectively amplifying penalties on unnatural structural bridges while protecting tightly knit intra-cluster connections.}
+
+import numpy as np
+
+def update_edge_distance(edge_distance, local_opt_tour, edge_n_used):
+    updated_edge_distance = np.copy(edge_distance)
+    n = len(local_opt_tour)
+
+    k = min(8, max(2, n - 1))
+    knn_indices = np.argpartition(edge_distance, kth=k, axis=1)[:, 1:k+1]
+
+    u_idx = np.asarray(local_opt_tour, dtype=np.intp)
+    v_idx = np.roll(u_idx, -1)
+
+    knn_mask = np.zeros((n, n), dtype=bool)
+    rows = np.repeat(np.arange(n), k)
+    knn_mask[rows, knn_indices.ravel()] = True
+
+    u_knn_masks = knn_mask[u_idx]
+    v_knn_masks = knn_mask[v_idx]
+
+    intersection_sizes = np.count_nonzero(u_knn_masks & v_knn_masks, axis=1)
+    union_sizes = np.count_nonzero(u_knn_masks | v_knn_masks, axis=1)
+    jaccard_sim = intersection_sizes / np.maximum(union_sizes, 1)
+
+    bridge_factor = 1.0 + 1.5 * (1.0 - jaccard_sim)
+
+    tour_edge_lengths = edge_distance[u_idx, v_idx]
+    avg_tour_length = np.mean(tour_edge_lengths) + 1e-6
+    relative_length = tour_edge_lengths / avg_tour_length
+
+    rank_penalty = 1.0 / (1.0 + np.exp(-4.0 * (relative_length - 1.0)))
+    usage_factor = 1.0 / (1.0 + 0.3 * edge_n_used[u_idx, v_idx])
+
+    local_penalty = relative_length * usage_factor * bridge_factor
+
+    freq_mean = np.mean(edge_n_used[u_idx, v_idx])
+    w_global = 0.6 / (1.0 + 0.1 * freq_mean)
+    w_local = 1.0 - w_global
+    combined_penalty = w_global * rank_penalty + w_local * local_penalty
+
+    threshold = np.percentile(tour_edge_lengths, 75)
+    high_penalty_mask = tour_edge_lengths >= threshold
+    combined_penalty[high_penalty_mask] *= 1.5
+
+    np.add.at(updated_edge_distance, (u_idx, v_idx), combined_penalty)
+    np.add.at(updated_edge_distance, (v_idx, u_idx), combined_penalty)
+
+    return updated_edge_distance
+# ===== Eval Output =====
+[*] Running ...
+[*] mode=val, data=/home/ducanh/projects/EAs_project/MoH/problems/tsp_gls/data/val/val_instance_data_sol_200.pkl, seed=0, n_instances=8
+[*] instance_indices=[6, 9, 0, 2, 4, 3, 5, 1]
+[*] instance 6: obj=10.4480, gap=0.0209
+[*] instance 9: obj=10.6798, gap=0.1578
+[*] instance 0: obj=10.8935, gap=0.0714
+[*] instance 2: obj=11.0228, gap=0.6855
+[*] instance 4: obj=10.8872, gap=0.3689
+[*] instance 3: obj=10.6228, gap=0.1976
+[*] instance 5: obj=10.9303, gap=0.4291
+[*] instance 1: obj=11.0955, gap=0.6468
+[*] ave_gap on size 200: 0.3222438815469242
+0.3222438815469242

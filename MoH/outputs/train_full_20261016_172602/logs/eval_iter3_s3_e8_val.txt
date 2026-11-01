@@ -1,0 +1,71 @@
+# ===== Heuristic Code =====
+#{This algorithm computes endpoint k-NN neighborhood radii using argpartition for computational efficiency, derives a bridge-criticality metric from the ratio of edge distance to the geometric mean of endpoint radii, and applies an adaptive penalty that heavily targets inefficient intra-dense edges while exempting essential sparse-to-sparse bridges.}#
+
+import numpy as np
+
+def update_edge_distance(edge_distance, local_opt_tour, edge_n_used):
+    updated_edge_distance = np.copy(edge_distance)
+    n = len(local_opt_tour)
+    if n < 4:
+        return updated_edge_distance
+
+    # Efficient k-NN radius calculation via partition rather than full sort
+    k = min(5, n - 1)
+    k_part = np.partition(edge_distance, k, axis=1)
+    knn_radius = np.mean(k_part[:, 1:k + 1], axis=1) + 1e-8
+
+    u_idx = local_opt_tour
+    v_idx = np.roll(local_opt_tour, -1)
+
+    tour_edge_lengths = edge_distance[u_idx, v_idx]
+    avg_tour_length = np.mean(tour_edge_lengths) + 1e-8
+    relative_length = tour_edge_lengths / avg_tour_length
+
+    # Geometric mean of local neighborhood radii around endpoints
+    geom_radius = np.sqrt(knn_radius[u_idx] * knn_radius[v_idx])
+
+    # Bridge-criticality: edge length relative to the local geometric neighborhood scale
+    local_scale_ratio = tour_edge_lengths / geom_radius
+
+    # Relative density of endpoints compared to global average neighborhood radius
+    mean_radius = np.mean(knn_radius)
+    density_u = mean_radius / knn_radius[u_idx]
+    density_v = mean_radius / knn_radius[v_idx]
+    endpoint_density_prod = np.sqrt(density_u * density_v)
+
+    # Bridge exemption: edges that are long but connect naturally sparse areas (sparse-to-sparse)
+    # receive a reduced penalty, while long edges within or between dense clusters receive high penalty.
+    cluster_inefficiency = local_scale_ratio * np.tanh(endpoint_density_prod)
+
+    # Standard guided local search frequency damping
+    usage_damp = 1.0 / (1.0 + 0.35 * edge_n_used[u_idx, v_idx])
+
+    # Adaptive sigmoid penalty weighting
+    rank_penalty = 1.0 / (1.0 + np.exp(-3.5 * (relative_length - 1.0)))
+    local_penalty = cluster_inefficiency * usage_damp
+
+    mean_used = np.mean(edge_n_used[u_idx, v_idx])
+    w_global = 0.5 / (1.0 + 0.08 * mean_used)
+    w_local = 1.0 - w_global
+
+    # Calculate scale-proportional penalty values
+    penalty_magnitude = (w_global * rank_penalty + w_local * local_penalty) * avg_tour_length * 0.1
+
+    np.add.at(updated_edge_distance, (u_idx, v_idx), penalty_magnitude)
+    np.add.at(updated_edge_distance, (v_idx, u_idx), penalty_magnitude)
+
+    return updated_edge_distance
+# ===== Eval Output =====
+[*] Running ...
+[*] mode=val, data=/home/ducanh/projects/EAs_project/MoH/problems/tsp_gls/data/val/val_instance_data_sol_200.pkl, seed=0, n_instances=8
+[*] instance_indices=[6, 9, 0, 2, 4, 3, 5, 1]
+[*] instance 6: obj=10.8258, gap=3.6371
+[*] instance 9: obj=11.0360, gap=3.4977
+[*] instance 0: obj=11.4320, gap=5.0183
+[*] instance 2: obj=11.2240, gap=2.5227
+[*] instance 4: obj=11.2936, gap=4.1159
+[*] instance 3: obj=10.8664, gap=2.4950
+[*] instance 5: obj=11.3288, gap=4.0912
+[*] instance 1: obj=11.4922, gap=4.2453
+[*] ave_gap on size 200: 3.7029022313704445
+3.7029022313704445

@@ -1,0 +1,131 @@
+# ===== Heuristic Code =====
+#{Adaptive Forman-Ricci curvature and geometric cluster bridging approximation penalizes high-stress bottlenecks and rigid multi-scale chains while selectively deflating negative-curvature shortcuts across under-connected tour clusters.}#
+
+import numpy as np
+
+def update_edge_distance(edge_distance, local_opt_tour, edge_n_used):
+    # Step 1: Deterministic copy of edge distance matrix
+    updated_edge_distance = np.copy(edge_distance)
+    n = len(local_opt_tour)
+    if n < 6:
+        return updated_edge_distance
+
+    tour = np.array(local_opt_tour, dtype=np.intp)
+    u_idx = tour
+    v_idx = np.roll(tour, -1)
+    w_idx = np.roll(tour, -2)
+    x_idx = np.roll(tour, -3)
+    p_idx = np.roll(tour, 1)
+
+    # Step 2: Edge costs and historical usage frequencies along the tour
+    e_costs = edge_distance[u_idx, v_idx].astype(np.float64)
+    e_used = edge_n_used[u_idx, v_idx].astype(np.float64)
+
+    # Step 3: Multi-scale chain co-occurrence persistence
+    e_used_p1 = np.roll(e_used, -1)
+    e_used_m1 = np.roll(e_used, 1)
+    e_used_p2 = np.roll(e_used, -2)
+
+    chain_2 = np.minimum(e_used, e_used_p1)
+    chain_3 = np.minimum(np.minimum(e_used_m1, e_used), e_used_p1)
+    chain_4 = np.minimum(chain_2, np.minimum(e_used_p2, np.roll(e_used, -3)))
+
+    avg_chain2 = np.mean(chain_2) + 1e-8
+    avg_chain3 = np.mean(chain_3) + 1e-8
+    avg_chain4 = np.mean(chain_4) + 1e-8
+
+    chain_persistence = (
+        0.45 * (chain_2 / avg_chain2) +
+        0.35 * (chain_3 / avg_chain3) +
+        0.20 * (chain_4 / avg_chain4)
+    )
+
+    # Step 4: Discrete Forman-Ricci curvature approximation along the embedded tour manifold
+    # Triangles formed by local chords: (p, u, v) via (p, v) and (u, v, w) via (u, w)
+    pv_costs = edge_distance[p_idx, v_idx].astype(np.float64)
+    uw_costs = edge_distance[u_idx, w_idx].astype(np.float64)
+    pu_costs = edge_distance[p_idx, u_idx].astype(np.float64)
+    vw_costs = edge_distance[v_idx, w_idx].astype(np.float64)
+
+    tri_puv = (pu_costs + e_costs) / np.maximum(pv_costs, 1e-8)
+    tri_uvw = (e_costs + vw_costs) / np.maximum(uw_costs, 1e-8)
+    # Forman curvature proxy: negative values indicate structural bottleneck / bridge edges
+    curv_proxy = 4.0 - tri_puv - tri_uvw
+    neg_curv_stress = np.maximum(0.0, -curv_proxy)
+
+    mean_cost = np.mean(e_costs)
+    std_cost = np.std(e_costs) + 1e-8
+    cost_sig = 1.0 / (1.0 + np.exp(-(e_costs - mean_cost) / std_cost))
+
+    # Rigidity blends persistence and graph-manifold stress
+    rigidity_factor = 1.0 + np.power(chain_persistence, 1.5) * (1.0 + 0.5 * neg_curv_stress)
+
+    # Step 5: Utility evaluation and super-linear penalty to bottleneck/rigid edges
+    utilities = (e_costs * (1.0 + 1.2 * cost_sig) * rigidity_factor) / (1.0 + np.sqrt(e_used + 1.0))
+    threshold = np.quantile(utilities, 0.45)
+    penalize_mask = utilities >= threshold
+
+    p_u = u_idx[penalize_mask]
+    p_v = v_idx[penalize_mask]
+    p_costs = e_costs[penalize_mask]
+    p_used = e_used[penalize_mask]
+    p_rigidity = rigidity_factor[penalize_mask]
+
+    penalties = (p_costs / (1.0 + np.sqrt(p_used + 1.0))) * p_rigidity * 1.20
+    updated_edge_distance[p_u, p_v] += penalties
+    updated_edge_distance[p_v, p_u] += penalties
+
+    # Step 6: Targeted curvature-informed chord deflation (2-chords and 3-chords)
+    chord2_mask = chain_2 >= np.median(chain_2)
+    c2_u = u_idx[chord2_mask]
+    c2_w = w_idx[chord2_mask]
+    c2_used = edge_n_used[c2_u, c2_w]
+    c2_rare = c2_used <= np.median(c2_used)
+
+    sel_c2_u = c2_u[c2_rare]
+    sel_c2_w = c2_w[c2_rare]
+    discount2 = 0.085 * updated_edge_distance[sel_c2_u, sel_c2_w] / (1.0 + np.sqrt(c2_used[c2_rare] + 1.0))
+    updated_edge_distance[sel_c2_u, sel_c2_w] -= discount2
+    updated_edge_distance[sel_c2_w, sel_c2_u] -= discount2
+
+    chord3_mask = chain_3 >= np.quantile(chain_3, 0.65)
+    c3_u = u_idx[chord3_mask]
+    c3_x = x_idx[chord3_mask]
+    c3_used = edge_n_used[c3_u, c3_x]
+    c3_rare = c3_used <= np.median(c3_used)
+
+    sel_c3_u = c3_u[c3_rare]
+    sel_c3_x = c3_x[c3_rare]
+    discount3 = 0.045 * updated_edge_distance[sel_c3_u, sel_c3_x] / (1.0 + np.sqrt(c3_used[c3_rare] + 1.0))
+    updated_edge_distance[sel_c3_u, sel_c3_x] -= discount3
+    updated_edge_distance[sel_c3_x, sel_c3_u] -= discount3
+
+    # Step 7: Deflate long-range unvisited edges at high-stress bottleneck nodes
+    severe_mask = utilities >= np.quantile(utilities, 0.75)
+    severely_penalized = np.unique(np.concatenate((u_idx[severe_mask], v_idx[severe_mask])))
+
+    decay_ratio = 0.040
+    for node in severely_penalized:
+        unused_mask = (edge_n_used[node] == 0)
+        unused_mask[node] = False
+        if np.any(unused_mask):
+            vals = updated_edge_distance[node, unused_mask]
+            delta = vals * decay_ratio
+            updated_edge_distance[node, unused_mask] -= delta
+            updated_edge_distance[unused_mask, node] = updated_edge_distance[node, unused_mask]
+
+    return updated_edge_distance
+# ===== Eval Output =====
+[*] Running ...
+[*] mode=val, data=/home/ducanh/projects/EAs_project/MoH/problems/tsp_gls/data/val/val_instance_data_sol_50.pkl, seed=0, n_instances=8
+[*] instance_indices=[6, 9, 0, 2, 4, 3, 5, 1]
+[*] instance 6: obj=5.6796, gap=0.0000
+[*] instance 9: obj=5.9639, gap=0.0000
+[*] instance 0: obj=5.7783, gap=0.0000
+[*] instance 2: obj=5.8071, gap=0.0000
+[*] instance 4: obj=5.3965, gap=0.0000
+[*] instance 3: obj=5.8123, gap=0.9633
+[*] instance 5: obj=5.6187, gap=0.0000
+[*] instance 1: obj=5.1651, gap=0.0000
+[*] ave_gap on size 50: 0.12041743360707291
+0.12041743360707291

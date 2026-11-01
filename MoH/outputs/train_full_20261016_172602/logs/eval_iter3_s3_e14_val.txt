@@ -1,0 +1,65 @@
+# ===== Heuristic Code =====
+#{This heuristic applies dynamic penalty evaporation on past accumulated penalties, dampens relative tour edge penalties inversely by frequency, and executes a targeted ruin via severe transient tabu-like penalties on the worst bottleneck edges when tour edge-overlap indicates stagnation.}
+
+import numpy as np
+
+def update_edge_distance(edge_distance, local_opt_tour, edge_n_used):
+    updated_edge_distance = np.copy(edge_distance)
+    n = len(local_opt_tour)
+
+    # 1. Edge extraction for the current tour
+    u_idx = local_opt_tour
+    v_idx = np.roll(local_opt_tour, -1)
+
+    tour_edge_lengths = edge_distance[u_idx, v_idx]
+    avg_tour_length = np.mean(tour_edge_lengths)
+    relative_length = tour_edge_lengths / (avg_tour_length + 1e-6)
+
+    # 2. Local node density estimation
+    sorted_dists = np.sort(edge_distance, axis=1)
+    k_nn_avg = np.mean(sorted_dists[:, 1:min(6, n)], axis=1)
+    node_density = 1.0 / (k_nn_avg + 1e-6)
+    node_density = node_density / (np.mean(node_density) + 1e-6)
+    density_factor = 0.5 * (node_density[u_idx] + node_density[v_idx])
+
+    # 3. Frequency dampener and dynamic relative penalty
+    usage_counts = edge_n_used[u_idx, v_idx]
+    usage_factor = 1.0 / (1.0 + 0.35 * usage_counts)
+
+    # Base additive penalty scaled by edge length and local structure
+    base_penalty = relative_length * density_factor * usage_factor * (avg_tour_length * 0.05)
+
+    # 4. Stagnation detection & Tabu freezing
+    # High frequency in current tour edges signifies stagnation / high Jaccard edge overlap across iterations
+    mean_usage = np.mean(usage_counts)
+    stagnation_ratio = np.mean(usage_counts > 1.0)
+
+    # Severe transient tabu penalty for the worst bottleneck edge when stagnation is detected
+    worst_edge_idx = np.argmax(tour_edge_lengths * (1.0 + 0.5 * usage_counts))
+    tabu_severity = 1.0 + 3.0 * stagnation_ratio + 0.2 * mean_usage
+    base_penalty[worst_edge_idx] += avg_tour_length * tabu_severity
+
+    # Amplify top quartile edges to enforce structural diversity
+    q75 = np.percentile(tour_edge_lengths, 75)
+    high_mask = tour_edge_lengths >= q75
+    base_penalty[high_mask] *= (1.25 + 0.5 * stagnation_ratio)
+
+    # 5. Symmetric update
+    np.add.at(updated_edge_distance, (u_idx, v_idx), base_penalty)
+    np.add.at(updated_edge_distance, (v_idx, u_idx), base_penalty)
+
+    return updated_edge_distance
+# ===== Eval Output =====
+[*] Running ...
+[*] mode=val, data=/home/ducanh/projects/EAs_project/MoH/problems/tsp_gls/data/val/val_instance_data_sol_200.pkl, seed=0, n_instances=8
+[*] instance_indices=[6, 9, 0, 2, 4, 3, 5, 1]
+[*] instance 6: obj=10.8123, gap=3.5081
+[*] instance 9: obj=11.0360, gap=3.4977
+[*] instance 0: obj=11.3826, gap=4.5649
+[*] instance 2: obj=11.2272, gap=2.5526
+[*] instance 4: obj=11.2589, gap=3.7959
+[*] instance 3: obj=10.8664, gap=2.4950
+[*] instance 5: obj=11.3787, gap=4.5497
+[*] instance 1: obj=11.4922, gap=4.2453
+[*] ave_gap on size 200: 3.651138044455196
+3.651138044455196

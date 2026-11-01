@@ -1,0 +1,34 @@
+{
+  "test_100": {
+    "bytes": 8212860,
+    "sha256": "72ce89bacab5965357da5f3d1654521e69ec84bd0d30dd15b2b123bd896d7ff2"
+  },
+  "test_20": {
+    "bytes": 371678,
+    "sha256": "adc75f26dfb932a552dfc9eb3421f819faba382d362dba6c61e9a0fee21f4c75"
+  },
+  "test_200": {
+    "bytes": 32412887,
+    "sha256": "43a245fd483dc1067cc956715cc793087ad85dd2c9bf51207891b4d3c457515f"
+  },
+  "test_50": {
+    "bytes": 2111867,
+    "sha256": "068690e5440035c6fa758ecf07b081d9897f0eab0c7d31ff73413e82d548ab7a"
+  },
+  "val_100": {
+    "bytes": 821466,
+    "sha256": "a193640f1627f5287502176446f3764e009dec914f832cd8c35679813b833b53"
+  },
+  "val_20": {
+    "bytes": 37346,
+    "sha256": "7e43a2d9e5efdcc12e2ae3dc8c427b23486e5572a97fde16b61a923eb0a0cb08"
+  },
+  "val_200": {
+    "bytes": 3241466,
+    "sha256": "2c1aa10c11390da173a2a1f6d6ce56102295422a3fb93ac69dbf214b89aa95e6"
+  },
+  "val_50": {
+    "bytes": 211364,
+    "sha256": "a97b2121aa2dda10f55e8f6061240aac22a79f0b988d6fe52b6f04d32b99381a"
+  }
+}

@@ -1,0 +1,77 @@
+# ===== Heuristic Code =====
+#{This strategy preserves Z-score and usage-scaled tour edge penalization while replacing unconstrained discounting with a self-normalizing potential field that applies bounded, usage-modulated incentives on incident alternative edges coupled with an asymptotic restoration toward original metric baselines to prevent distance distortion blow-up.}
+
+import numpy as np
+
+def update_edge_distance(edge_distance, local_opt_tour, edge_n_used):
+    updated_edge_distance = np.copy(edge_distance)
+    n = len(local_opt_tour)
+
+    # 1. Extract tour edges and edge statistics
+    u_idx = np.array(local_opt_tour, dtype=np.intp)
+    v_idx = np.roll(u_idx, -1)
+    costs = edge_distance[u_idx, v_idx].astype(np.float64)
+    used = edge_n_used[u_idx, v_idx].astype(np.float64)
+
+    # 2. Compute Z-score-based utility normalized inversely by usage frequency
+    mean_cost = np.mean(costs)
+    std_cost = np.std(costs) + 1e-8
+    z_scores = (costs - mean_cost) / std_cost
+    weights = 1.0 / (1.0 + np.exp(-z_scores))
+    utilities = (costs * (1.0 + weights)) / (1.0 + used)
+
+    # 3. Penalize above-median utility tour edges symmetrically
+    threshold = np.median(utilities)
+    max_util = np.max(utilities) + 1e-8
+    penalize_mask = utilities >= threshold
+
+    p_u = u_idx[penalize_mask]
+    p_v = v_idx[penalize_mask]
+    p_costs = costs[penalize_mask]
+    p_used = used[penalize_mask]
+    p_utils = utilities[penalize_mask]
+
+    penalties = (p_costs / (1.0 + np.sqrt(p_used + 1.0))) * (1.0 + p_utils / max_util)
+    updated_edge_distance[p_u, p_v] += penalties
+    updated_edge_distance[p_v, p_u] += penalties
+
+    # 4. Self-normalizing potential field on incident alternative edges
+    penalized_nodes = np.unique(np.concatenate((p_u, p_v)))
+    baseline_floor = 0.5 * edge_distance
+    evaporation_rate = 0.05
+    discount_factor = 0.03
+
+    for u in penalized_nodes:
+        # Identify non-self edges incident to u
+        mask = np.ones(n, dtype=bool)
+        mask[u] = False
+
+        # Dissipation / evaporation of previous distortion back toward original metric baseline
+        diff = updated_edge_distance[u, mask] - edge_distance[u, mask]
+        updated_edge_distance[u, mask] -= diff * evaporation_rate
+
+        # Apply controlled incentive discounting to unexplored/under-explored alternative incident edges
+        alt_used = edge_n_used[u, mask].astype(np.float64)
+        incentive = (edge_distance[u, mask] * discount_factor) / (1.0 + alt_used)
+        new_vals = updated_edge_distance[u, mask] - incentive
+
+        # Enforce soft baseline lower-bound to guarantee metric integrity
+        bounded_vals = np.maximum(new_vals, baseline_floor[u, mask])
+        updated_edge_distance[u, mask] = bounded_vals
+        updated_edge_distance[mask, u] = bounded_vals
+
+    return updated_edge_distance
+# ===== Eval Output =====
+[*] Running ...
+[*] mode=val, data=/home/ducanh/projects/EAs_project/MoH/problems/tsp_gls/data/val/val_instance_data_sol_50.pkl, seed=0, n_instances=8
+[*] instance_indices=[6, 9, 0, 2, 4, 3, 5, 1]
+[*] instance 6: obj=5.7136, gap=0.5983
+[*] instance 9: obj=5.9639, gap=0.0000
+[*] instance 0: obj=5.7783, gap=0.0000
+[*] instance 2: obj=5.8071, gap=0.0000
+[*] instance 4: obj=5.3965, gap=0.0000
+[*] instance 3: obj=5.7569, gap=0.0000
+[*] instance 5: obj=5.6492, gap=0.5441
+[*] instance 1: obj=5.1651, gap=0.0000
+[*] ave_gap on size 50: 0.14279541467067947
+0.14279541467067947

@@ -1,0 +1,88 @@
+# ===== Heuristic Code =====
+#{Refine guided penalties by replacing global static k-NN density with adaptive tour-neighborhood elasticity based on alternate candidate gap to endpoints, modulated by edge usage and relative tour scale.}#
+
+import numpy as np
+
+def update_edge_distance(edge_distance, local_opt_tour, edge_n_used):
+    updated_edge_distance = np.copy(edge_distance)
+    n = len(local_opt_tour)
+    if n < 4:
+        return updated_edge_distance
+
+    tour = np.asarray(local_opt_tour, dtype=np.intp)
+    u_idx = tour
+    v_idx = np.roll(tour, -1)
+    prev_idx = np.roll(tour, 1)
+    next_idx = np.roll(tour, -2)
+
+    tour_edge_lengths = edge_distance[u_idx, v_idx]
+    avg_tour_length = np.mean(tour_edge_lengths) + 1e-12
+    relative_length = tour_edge_lengths / avg_tour_length
+
+    # Compute adaptive neighborhood elasticity: alternate candidates for u and v excluding immediate tour incident neighbors
+    # For each endpoint in the tour, extract distances excluding self, previous, and next tour neighbors
+    # Vectorized / efficient row-wise extraction for the tour nodes
+    u_dists = edge_distance[u_idx].copy()
+    v_dists = edge_distance[v_idx].copy()
+
+    # Mask out self, current edge partner, and adjacent tour edges
+    arange_n = np.arange(n)
+    u_dists[arange_n, u_idx] = np.inf
+    u_dists[arange_n, v_idx] = np.inf
+    u_dists[arange_n, prev_idx] = np.inf
+
+    v_dists[arange_n, v_idx] = np.inf
+    v_dists[arange_n, u_idx] = np.inf
+    v_dists[arange_n, next_idx] = np.inf
+
+    k_alt = min(3, n - 3)
+    if k_alt > 0:
+        u_sorted = np.partition(u_dists, k_alt - 1, axis=1)[:, :k_alt]
+        v_sorted = np.partition(v_dists, k_alt - 1, axis=1)[:, :k_alt]
+        u_alt_median = np.median(u_sorted, axis=1)
+        v_alt_median = np.median(v_sorted, axis=1)
+        alt_median_baseline = 0.5 * (u_alt_median + v_alt_median)
+        elasticity_gap = tour_edge_lengths - alt_median_baseline
+        # Normalised elasticity: positive if tour edge is longer than nearby alternatives
+        crowding_factor = 1.0 / (1.0 + np.exp(-3.0 * (elasticity_gap / avg_tour_length)))
+    else:
+        crowding_factor = np.ones(n, dtype=np.float64)
+
+    # Historical edge usage penalty suppression (diversification vs intensification)
+    used_counts = edge_n_used[u_idx, v_idx]
+    usage_factor = 1.0 / (1.0 + 0.35 * used_counts)
+
+    # Sigmoidal scale-invariant rank penalty
+    rank_penalty = 1.0 / (1.0 + np.exp(-4.5 * (relative_length - 1.0)))
+
+    # Local penalty integrating elasticity gap and usage
+    local_penalty = relative_length * crowding_factor * usage_factor
+
+    freq_mean = np.mean(used_counts)
+    w_global = 0.55 / (1.0 + 0.08 * freq_mean)
+    w_local = 1.0 - w_global
+
+    combined_penalty = (w_global * rank_penalty + w_local * local_penalty) * (avg_tour_length * 0.1)
+
+    # Boost penalty for the longest edges in the tour
+    q75 = np.percentile(tour_edge_lengths, 75)
+    combined_penalty[tour_edge_lengths >= q75] *= 1.4
+
+    np.add.at(updated_edge_distance, (u_idx, v_idx), combined_penalty)
+    np.add.at(updated_edge_distance, (v_idx, u_idx), combined_penalty)
+
+    return updated_edge_distance
+# ===== Eval Output =====
+[*] Running ...
+[*] mode=val, data=/home/ducanh/projects/EAs_project/MoH/problems/tsp_gls/data/val/val_instance_data_sol_200.pkl, seed=0, n_instances=8
+[*] instance_indices=[6, 9, 0, 2, 4, 3, 5, 1]
+[*] instance 6: obj=10.8258, gap=3.6371
+[*] instance 9: obj=11.0360, gap=3.4977
+[*] instance 0: obj=11.4260, gap=4.9631
+[*] instance 2: obj=11.2240, gap=2.5227
+[*] instance 4: obj=11.2036, gap=3.2865
+[*] instance 3: obj=10.8628, gap=2.4615
+[*] instance 5: obj=11.2029, gap=2.9343
+[*] instance 1: obj=11.4935, gap=4.2570
+[*] ave_gap on size 200: 3.444988458877371
+3.444988458877371

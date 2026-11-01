@@ -1,0 +1,60 @@
+# ===== Heuristic Code =====
+#{A continuous Pareto-rank scaling heuristic that smoothly amplifies penalties on longest tour edges using an empirical cumulative cost power-law transform rather than discrete percentile thresholds.}
+
+import numpy as np
+
+def update_edge_distance(edge_distance, local_opt_tour, edge_n_used):
+    updated_edge_distance = np.copy(edge_distance)
+    n = len(local_opt_tour)
+
+    # Estimate local node density using k-nearest neighbors
+    sorted_dists = np.sort(edge_distance, axis=1)
+    k_nn_avg = np.mean(sorted_dists[:, 1:min(6, n)], axis=1)
+    node_density = 1.0 / (k_nn_avg + 1e-6)
+    node_density = node_density / np.mean(node_density)
+
+    # Extract edge coordinates for the local optimal tour
+    u_idx = local_opt_tour
+    v_idx = np.roll(local_opt_tour, -1)
+    tour_edge_lengths = edge_distance[u_idx, v_idx]
+
+    # Length relative to average tour edge
+    avg_tour_length = np.mean(tour_edge_lengths)
+    relative_length = tour_edge_lengths / (avg_tour_length + 1e-6)
+
+    # Base penalty components: logistic rank scaling, historical usage damping, and density factor
+    rank_penalty = 1.0 / (1.0 + np.exp(-4.0 * (relative_length - 1.0)))
+    usage_factor = 1.0 / (1.0 + 0.3 * edge_n_used[u_idx, v_idx])
+    density_factor = 0.5 * (node_density[u_idx] + node_density[v_idx])
+    local_penalty = relative_length * usage_factor * density_factor
+
+    # Global vs local weighting adapted to usage frequency
+    freq_mean = np.mean(edge_n_used[u_idx, v_idx])
+    w_global = 0.6 / (1.0 + 0.1 * freq_mean)
+    w_local = 1.0 - w_global
+    combined_penalty = w_global * rank_penalty + w_local * local_penalty
+
+    # Continuous Pareto-rank ruin: rank-order percentile with power-law magnification
+    rank_order = np.argsort(np.argsort(tour_edge_lengths)) / max(1, n - 1)
+    pareto_multiplier = 1.0 + 1.2 * np.power(rank_order, 3.5)
+    combined_penalty *= pareto_multiplier
+
+    # Apply symmetric additive penalties
+    np.add.at(updated_edge_distance, (u_idx, v_idx), combined_penalty)
+    np.add.at(updated_edge_distance, (v_idx, u_idx), combined_penalty)
+
+    return updated_edge_distance
+# ===== Eval Output =====
+[*] Running ...
+[*] mode=val, data=/home/ducanh/projects/EAs_project/MoH/problems/tsp_gls/data/val/val_instance_data_sol_200.pkl, seed=0, n_instances=8
+[*] instance_indices=[6, 9, 0, 2, 4, 3, 5, 1]
+[*] instance 6: obj=10.4509, gap=0.0489
+[*] instance 9: obj=10.6976, gap=0.3247
+[*] instance 0: obj=10.8857, gap=0.0000
+[*] instance 2: obj=10.9665, gap=0.1706
+[*] instance 4: obj=10.9181, gap=0.6541
+[*] instance 3: obj=10.6160, gap=0.1329
+[*] instance 5: obj=10.9404, gap=0.5222
+[*] instance 1: obj=11.0812, gap=0.5170
+[*] ave_gap on size 200: 0.29629850808843006
+0.29629850808843006

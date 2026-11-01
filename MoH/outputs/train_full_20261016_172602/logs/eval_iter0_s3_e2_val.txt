@@ -1,0 +1,57 @@
+# ===== Heuristic Code =====
+#{Filter edges exceeding the 75th length percentile and penalize them using multi-scale bridging normalized by geometric cluster density with sub-linear usage decay to prevent penalty dilution.}#
+
+import numpy as np
+
+def update_edge_distance(edge_distance, local_opt_tour, edge_n_used):
+    updated_edge_distance = np.copy(edge_distance)
+    n = len(local_opt_tour)
+    u = local_opt_tour
+    v = np.roll(local_opt_tour, -1)
+
+    tour_lens = edge_distance[u, v]
+    usage = edge_n_used[u, v]
+
+    # Strict elite rank-based thresholding (75th percentile of tour edge length)
+    length_threshold = np.percentile(tour_lens, 75.0)
+    eligible_mask = tour_lens >= length_threshold
+
+    if np.any(eligible_mask):
+        k = min(6, n - 1)
+        k_nn_dists = np.partition(edge_distance, k, axis=1)[:, 1:k]
+        node_scale = np.mean(k_nn_dists, axis=1) + 1e-6
+        cluster_scale = np.sqrt(node_scale[u] * node_scale[v])
+
+        # Bridging metric scaled relative to geometric mean cluster density
+        bridging_ratio = tour_lens / cluster_scale
+
+        # Sub-linear usage decay modulation
+        usage_factor = 1.0 / (1.0 + 0.35 * np.sqrt(usage))
+
+        # Penalties computed strictly on eligible long edges
+        penalties = np.zeros(n, dtype=edge_distance.dtype)
+        p_u = u[eligible_mask]
+        p_v = v[eligible_mask]
+
+        # Combine normalized bridging metric with usage factor
+        base_penalties = (bridging_ratio[eligible_mask] * cluster_scale[eligible_mask]) * usage_factor[eligible_mask]
+        penalties[eligible_mask] = base_penalties
+
+        np.add.at(updated_edge_distance, (p_u, p_v), base_penalties)
+        np.add.at(updated_edge_distance, (p_v, p_u), base_penalties)
+
+    return updated_edge_distance
+# ===== Eval Output =====
+[*] Running ...
+[*] mode=val, data=/home/ducanh/projects/EAs_project/MoH/problems/tsp_gls/data/val/val_instance_data_sol_200.pkl, seed=0, n_instances=8
+[*] instance_indices=[6, 9, 0, 2, 4, 3, 5, 1]
+[*] instance 6: obj=10.5984, gap=1.4604
+[*] instance 9: obj=10.8912, gap=2.1397
+[*] instance 0: obj=11.0672, gap=1.6669
+[*] instance 2: obj=11.2202, gap=2.4882
+[*] instance 4: obj=10.9314, gap=0.7770
+[*] instance 3: obj=10.6839, gap=0.7734
+[*] instance 5: obj=11.1331, gap=2.2931
+[*] instance 1: obj=11.2874, gap=2.3870
+[*] ave_gap on size 200: 1.7481956560619905
+1.7481956560619905

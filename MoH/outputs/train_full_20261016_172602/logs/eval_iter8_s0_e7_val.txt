@@ -1,0 +1,78 @@
+# ===== Heuristic Code =====
+#{This metaheuristic updates the distance landscape via age-decayed memory penalization of high-utility tour edges, coupled with a deterministic entropy-guided 4-opt structural perturbation kick when utility variance collapses.}#
+
+import numpy as np
+
+def update_edge_distance(edge_distance, local_opt_tour, edge_n_used):
+    updated_edge_distance = np.copy(edge_distance)
+    n = len(local_opt_tour)
+    if n < 4:
+        return updated_edge_distance
+
+    # Exponential memory decay on edge usage frequency to facilitate backbone re-entry
+    gamma = 0.95
+    edge_n_used *= gamma
+
+    u_idx = local_opt_tour
+    v_idx = np.roll(local_opt_tour, -1)
+
+    # Edge cost and usage along current tour
+    tour_lengths = edge_distance[u_idx, v_idx]
+    tour_counts = edge_n_used[u_idx, v_idx]
+
+    # Guided Local Search utility calculation
+    utilities = tour_lengths / (1.0 + tour_counts)
+    util_mean = np.mean(utilities)
+    util_var = np.var(utilities)
+    norm_var = util_var / ((util_mean ** 2) + 1e-12)
+
+    # Base guided penalization on high-utility segments
+    max_utility = np.max(utilities)
+    penalty_base = 0.35 * np.mean(tour_lengths)
+    threshold = 0.92 * max_utility
+    selected_mask = utilities >= threshold
+
+    sel_u = u_idx[selected_mask]
+    sel_v = v_idx[selected_mask]
+
+    # Apply penalization dynamically weighted by relative utility dominance
+    penalties = penalty_base * (1.0 + (utilities[selected_mask] / (max_utility + 1e-12)))
+    updated_edge_distance[sel_u, sel_v] += penalties
+    updated_edge_distance[sel_v, sel_u] += penalties
+
+    # Deterministic stagnation trigger: utility distribution entropy/variance collapse
+    entropy_threshold = 0.015
+    if norm_var < entropy_threshold and n >= 8:
+        # Deterministic 4-opt structural cut indices based on quartile positions
+        p1 = n // 4
+        p2 = n // 2
+        p3 = (3 * n) // 4
+        p4 = n - 1
+
+        bridge_edges = [
+            (local_opt_tour[0], local_opt_tour[p1]),
+            (local_opt_tour[p1], local_opt_tour[p2]),
+            (local_opt_tour[p2], local_opt_tour[p3]),
+            (local_opt_tour[p3], local_opt_tour[p4])
+        ]
+
+        kick_penalty = penalty_base * 2.0
+        for b_u, b_v in bridge_edges:
+            updated_edge_distance[b_u, b_v] += kick_penalty
+            updated_edge_distance[b_v, b_u] += kick_penalty
+
+    return updated_edge_distance
+# ===== Eval Output =====
+[*] Running ...
+[*] mode=val, data=/home/ducanh/projects/EAs_project/MoH/problems/tsp_gls/data/val/val_instance_data_sol_20.pkl, seed=0, n_instances=8
+[*] instance_indices=[6, 9, 0, 2, 4, 3, 5, 1]
+[*] instance 6: obj=3.7045, gap=0.0000
+[*] instance 9: obj=4.1442, gap=0.0000
+[*] instance 0: obj=3.6827, gap=0.0000
+[*] instance 2: obj=3.8184, gap=0.0000
+[*] instance 4: obj=3.8385, gap=0.0000
+[*] instance 3: obj=3.6971, gap=0.0000
+[*] instance 5: obj=3.4281, gap=0.0000
+[*] instance 1: obj=3.6958, gap=0.0000
+[*] ave_gap on size 20: 1.2218318606871392e-06
+1.2218318606871392e-06

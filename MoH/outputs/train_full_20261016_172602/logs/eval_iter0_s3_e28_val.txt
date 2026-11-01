@@ -1,0 +1,98 @@
+# ===== Heuristic Code =====
+#{Enhanced geometric angularity distortion using bidirectional multi-scale cosine turning metrics, normalized 2-opt chord crossing vulnerability, and guided GLS penalty scaling.}
+
+import numpy as np
+
+def update_edge_distance(edge_distance, local_opt_tour, edge_n_used):
+    updated_edge_distance = np.copy(edge_distance)
+    n = len(local_opt_tour)
+    if n < 4:
+        return updated_edge_distance
+
+    # Cyclic indices for multi-scale lookahead/behind
+    p2_idx = np.roll(local_opt_tour, 2)
+    p_idx = np.roll(local_opt_tour, 1)
+    u_idx = local_opt_tour
+    v_idx = np.roll(local_opt_tour, -1)
+    w_idx = np.roll(local_opt_tour, -2)
+    w2_idx = np.roll(local_opt_tour, -3)
+
+    # Edge distances along tour and bypass chords
+    d_uv = edge_distance[u_idx, v_idx]
+    d_pu = edge_distance[p_idx, u_idx]
+    d_pv = edge_distance[p_idx, v_idx]
+    d_vw = edge_distance[v_idx, w_idx]
+    d_uw = edge_distance[u_idx, w_idx]
+    d_pw = edge_distance[p_idx, w_idx]
+
+    # Immediate turning angles at u and v (acute turns correspond to cos > 0)
+    cos_u = (d_pu**2 + d_uv**2 - d_pv**2) / (2.0 * np.maximum(d_pu * d_uv, 1e-8))
+    cos_v = (d_uv**2 + d_vw**2 - d_uw**2) / (2.0 * np.maximum(d_uv * d_vw, 1e-8))
+    cos_u = np.clip(cos_u, -1.0, 1.0)
+    cos_v = np.clip(cos_v, -1.0, 1.0)
+
+    # Multi-step angular trend (smoothness across 3 consecutive edges p-u-v-w)
+    cos_p_v_w = (d_pv**2 + d_vw**2 - d_pw**2) / (2.0 * np.maximum(d_pv * d_vw, 1e-8))
+    cos_p_v_w = np.clip(cos_p_v_w, -1.0, 1.0)
+
+    # Acute turning penalty: values > 0 indicate hairpin/jagged kinks
+    sharp_u = np.maximum(0.0, cos_u)
+    sharp_v = np.maximum(0.0, cos_v)
+    sharp_chain = np.maximum(0.0, cos_p_v_w)
+    angular_multiplier = 1.0 + 1.6 * (sharp_u + sharp_v) + 0.8 * sharp_chain
+
+    # 2-opt chord crossing vulnerability: if bypass d_pv + d_uw is significantly shorter than d_uv + d_pu/d_vw
+    shortcut_ratio = (d_pv + d_uw) / (d_pu + 2.0 * d_uv + d_vw + 1e-8)
+    entanglement_factor = 1.0 + np.maximum(0.0, 1.0 - shortcut_ratio)
+
+    # Relative edge length
+    mean_d = np.mean(d_uv)
+    std_d = np.std(d_uv) + 1e-8
+    rel_len = d_uv / (mean_d + 1e-8)
+    z_len = np.clip((d_uv - mean_d) / std_d, -2.0, 3.0)
+    length_sigmoid = 1.0 / (1.0 + np.exp(-1.5 * z_len))
+
+    # Usage frequency damping via guided local search penalty profile
+    usage = edge_n_used[u_idx, v_idx]
+    usage_damp = 1.0 / (1.0 + 0.3 * usage)
+
+    # Local neighborhood density modulation via k-NN
+    k_nn = min(8, n - 1)
+    # Using partition for fast k-NN retrieval
+    partitioned = np.partition(edge_distance, k_nn, axis=1)[:, 1:k_nn + 1]
+    knn_mean = np.mean(partitioned, axis=1)
+    density = 1.0 / (knn_mean + 1e-8)
+    norm_density = 0.5 * (density[u_idx] + density[v_idx]) / (np.mean(density) + 1e-8)
+    density_factor = 0.7 + 0.3 * np.clip(norm_density, 0.2, 2.0)
+
+    # Base guided local search increment proportional to edge cost
+    base_penalty = 0.25 * d_uv
+
+    # Aggregate penalty computation
+    penalty = (base_penalty * rel_len * angular_multiplier * entanglement_factor *
+               (0.4 + 0.6 * length_sigmoid) * density_factor * usage_damp)
+
+    # Focus extra pressure on upper quartile jagged edges
+    q75 = np.percentile(d_uv, 75)
+    high_cost_mask = (d_uv >= q75) & ((sharp_u > 0.2) | (sharp_v > 0.2))
+    penalty[high_cost_mask] *= 1.4
+
+    # Symmetric matrix update
+    np.add.at(updated_edge_distance, (u_idx, v_idx), penalty)
+    np.add.at(updated_edge_distance, (v_idx, u_idx), penalty)
+
+    return updated_edge_distance
+# ===== Eval Output =====
+[*] Running ...
+[*] mode=val, data=/home/ducanh/projects/EAs_project/MoH/problems/tsp_gls/data/val/val_instance_data_sol_200.pkl, seed=0, n_instances=8
+[*] instance_indices=[6, 9, 0, 2, 4, 3, 5, 1]
+[*] instance 6: obj=10.5972, gap=1.4487
+[*] instance 9: obj=10.9718, gap=2.8953
+[*] instance 0: obj=11.1149, gap=2.1052
+[*] instance 2: obj=11.1058, gap=1.4436
+[*] instance 4: obj=10.9535, gap=0.9807
+[*] instance 3: obj=10.6868, gap=0.8012
+[*] instance 5: obj=11.2597, gap=3.4561
+[*] instance 1: obj=11.3349, gap=2.8178
+[*] ave_gap on size 200: 1.993580965958916
+1.993580965958916

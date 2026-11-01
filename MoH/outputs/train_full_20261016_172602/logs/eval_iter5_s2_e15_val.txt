@@ -1,0 +1,93 @@
+# ===== Heuristic Code =====
+#{Dynamic feedback Guided Local Search that integrates geometric detour-and-sharpness evaluation with edge tenacity memory, exponentially penalizing edges that stubbornly persist across consecutive local optima while incentivizing underused direct shortcuts.}#
+
+import numpy as np
+
+def update_edge_distance(edge_distance, local_opt_tour, edge_n_used):
+    updated_edge_distance = np.copy(edge_distance)
+    num_nodes = len(local_opt_tour)
+    tour = np.asarray(local_opt_tour)
+
+    # Identify sequence of triplets (u -> v -> w) along the tour
+    u_idx = tour
+    v_idx = np.roll(tour, -1)
+    w_idx = np.roll(tour, -2)
+
+    # Soft decay on historical usage frequency to maintain recency
+    edge_n_used *= 0.95
+
+    # Compute edge lengths
+    d_uv = edge_distance[u_idx, v_idx]
+    d_vw = edge_distance[v_idx, w_idx]
+    d_uw = edge_distance[u_idx, w_idx]
+
+    # Detour slack: ratio of path (u->v->w) over direct shortcut (u->w)
+    detour_slack = (d_uv + d_vw) - d_uw
+    detour_ratio = (d_uv + d_vw) / (d_uw + 1e-8)
+
+    # Cosine of the interior turning angle at node v
+    denom = 2.0 * d_uv * d_vw + 1e-8
+    cos_turn = np.clip((d_uv**2 + d_vw**2 - d_uw**2) / denom, -1.0, 1.0)
+    acute_deficit = 1.0 - cos_turn  # Higher for sharper turns / zig-zags
+
+    # Context-aware geometric inefficiency combining slack and angle severity
+    geom_severity = (detour_ratio - 1.0) * (1.0 + acute_deficit)
+    node_geom_inefficiency = np.maximum(0.0, geom_severity)
+
+    # Average geometric inefficiency between consecutive segments sharing an edge
+    edge_geom_factor = 0.5 * (node_geom_inefficiency + np.roll(node_geom_inefficiency, 1))
+
+    # Dynamic persistence / tenacity memory: how stubbornly edges survive penalization
+    current_freq = edge_n_used[u_idx, v_idx]
+    tenacity_factor = np.exp(np.clip(current_freq * 0.45, 0.0, 4.0))
+
+    # GLS utility: cost-efficiency scaled by geometric inefficiency and tenacity memory
+    base_dist = d_uv
+    utilities = (base_dist / (1.0 + 0.5 * current_freq)) * (1.0 + 0.30 * edge_geom_factor) * (0.8 + 0.2 * tenacity_factor)
+
+    # Select top-k worst edges to penalize
+    k = max(1, int(np.ceil(0.14 * num_nodes)))
+    top_k_indices = np.argsort(utilities)[-k:]
+
+    global_mean_dist = np.mean(edge_distance)
+    adaptive_lambda = 0.28 * global_mean_dist
+
+    # Apply exponential feedback-driven penalization
+    for idx in top_k_indices:
+        u, v = u_idx[idx], v_idx[idx]
+        edge_n_used[u, v] += 1.0
+        edge_n_used[v, u] += 1.0
+
+        updated_tenacity = np.exp(np.clip(edge_n_used[u, v] * 0.35, 0.0, 3.5))
+        geom_weight = 1.0 + 0.40 * edge_geom_factor[idx]
+
+        penalty = adaptive_lambda * updated_tenacity * geom_weight
+        updated_edge_distance[u, v] += penalty
+        updated_edge_distance[v, u] += penalty
+
+    # Ruin-and-recreate incentive: discount underused shortcuts bypassing high detours
+    top_detour_indices = np.argsort(detour_slack)[-k:]
+    for idx in top_detour_indices:
+        u, w = u_idx[idx], w_idx[idx]
+        freq = edge_n_used[u, w]
+        if freq < 1.0:
+            discount = 0.08 * global_mean_dist * (1.0 / (1.0 + freq))
+            new_val = max(1e-6, updated_edge_distance[u, w] - discount)
+            updated_edge_distance[u, w] = new_val
+            updated_edge_distance[w, u] = new_val
+
+    return updated_edge_distance
+# ===== Eval Output =====
+[*] Running ...
+[*] mode=val, data=/home/ducanh/projects/EAs_project/MoH/problems/tsp_gls/data/val/val_instance_data_sol_100.pkl, seed=0, n_instances=8
+[*] instance_indices=[6, 9, 0, 2, 4, 3, 5, 1]
+[*] instance 6: obj=7.7596, gap=0.0000
+[*] instance 9: obj=8.1034, gap=0.7476
+[*] instance 0: obj=8.0001, gap=0.0000
+[*] instance 2: obj=8.0936, gap=0.2438
+[*] instance 4: obj=7.8131, gap=0.0000
+[*] instance 3: obj=7.3842, gap=0.1750
+[*] instance 5: obj=7.6365, gap=0.0000
+[*] instance 1: obj=7.5785, gap=0.2842
+[*] ave_gap on size 100: 0.18131853835174627
+0.18131853835174627

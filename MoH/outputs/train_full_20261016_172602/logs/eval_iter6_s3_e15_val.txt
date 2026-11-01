@@ -1,0 +1,77 @@
+# ===== Heuristic Code =====
+#{Guided Local Search is enhanced by replacing hard quartile thresholding with an adaptive ruin-and-recreate mechanism that scales edge penalties via incident regret and power-law amplification driven by stagnation edge-overlap.}#
+
+import numpy as np
+
+def update_edge_distance(edge_distance, local_opt_tour, edge_n_used):
+    updated_edge_distance = np.copy(edge_distance)
+    n = len(local_opt_tour)
+    if n < 4:
+        return updated_edge_distance
+
+    # Calculate k-nearest neighbor density for normalization
+    sorted_dists = np.sort(edge_distance, axis=1)
+    k_nn_avg = np.mean(sorted_dists[:, 1:min(6, n)], axis=1)
+    node_density = 1.0 / (k_nn_avg + 1e-6)
+    node_density = node_density / (np.mean(node_density) + 1e-6)
+
+    u_idx = np.asarray(local_opt_tour)
+    v_idx = np.roll(local_opt_tour, -1)
+    tour_edge_lengths = edge_distance[u_idx, v_idx]
+    avg_tour_length = np.mean(tour_edge_lengths)
+
+    # Relative length and guided local search rank penalty
+    relative_length = tour_edge_lengths / (avg_tour_length + 1e-6)
+    rank_penalty = 1.0 / (1.0 + np.exp(-4.0 * (relative_length - 1.0)))
+
+    # Usage factor and local graph density modulation
+    edge_usage = edge_n_used[u_idx, v_idx]
+    usage_factor = 1.0 / (1.0 + 0.3 * edge_usage)
+    density_factor = 0.5 * (node_density[u_idx] + node_density[v_idx])
+    local_penalty = relative_length * usage_factor * density_factor
+
+    # Dynamic global vs local weighting based on search progress
+    freq_mean = np.mean(edge_usage)
+    w_global = 0.6 / (1.0 + 0.1 * freq_mean)
+    w_local = 1.0 - w_global
+    base_penalty = w_global * rank_penalty + w_local * local_penalty
+
+    # Stagnation proxy: edge persistence / overlap from historical reuse
+    # Higher average reuse on current tour indicates stagnation
+    stagnation_factor = np.clip(freq_mean / (np.max(edge_n_used) + 1e-6), 0.0, 1.0)
+
+    # Incident regret calculation: gap between current edge length and the 2nd-best alternative incident edge
+    # sorted_dists[:, 0] is self (0.0), sorted_dists[:, 1] is best neighbor, sorted_dists[:, 2] is second-best
+    alt_u = sorted_dists[u_idx, 2]
+    alt_v = sorted_dists[v_idx, 2]
+    alt_best = 0.5 * (alt_u + alt_v)
+    regret = np.maximum(0.0, tour_edge_lengths - alt_best)
+    normalized_regret = regret / (avg_tour_length + 1e-6)
+
+    # Smooth Pareto / power-law amplification dynamically elevated under stagnation
+    # Power exponent scales smoothly from 1.2 up to 2.5 when stagnation is detected
+    power_exp = 1.2 + 1.3 * stagnation_factor
+    regret_score = (normalized_regret / (np.max(normalized_regret) + 1e-6))
+    amplification = 1.0 + (1.0 + 1.5 * stagnation_factor) * np.power(regret_score, power_exp)
+
+    final_penalty = base_penalty * amplification
+
+    # Apply symmetric additive penalties
+    np.add.at(updated_edge_distance, (u_idx, v_idx), final_penalty)
+    np.add.at(updated_edge_distance, (v_idx, u_idx), final_penalty)
+
+    return updated_edge_distance
+# ===== Eval Output =====
+[*] Running ...
+[*] mode=val, data=/home/ducanh/projects/EAs_project/MoH/problems/tsp_gls/data/val/val_instance_data_sol_200.pkl, seed=0, n_instances=8
+[*] instance_indices=[6, 9, 0, 2, 4, 3, 5, 1]
+[*] instance 6: obj=10.4664, gap=0.1968
+[*] instance 9: obj=10.6931, gap=0.2818
+[*] instance 0: obj=10.8857, gap=0.0000
+[*] instance 2: obj=10.9883, gap=0.3706
+[*] instance 4: obj=10.9096, gap=0.5753
+[*] instance 3: obj=10.6089, gap=0.0665
+[*] instance 5: obj=10.9081, gap=0.2259
+[*] instance 1: obj=11.0789, gap=0.4957
+[*] ave_gap on size 200: 0.2765661705510625
+0.2765661705510625

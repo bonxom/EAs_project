@@ -1,0 +1,75 @@
+# ===== Heuristic Code =====
+#{Replaces arithmetic density with geometric-mean density and directional k-NN neighborhood rank penalties, selectively sparing bridge edges connecting sparse regions while penalizing edges that fall outside mutual k-NN spheres.}
+
+import numpy as np
+
+def update_edge_distance(edge_distance, local_opt_tour, edge_n_used):
+    updated_edge_distance = np.copy(edge_distance)
+    n = len(local_opt_tour)
+    if n < 4:
+        return updated_edge_distance
+
+    k = min(10, n - 1)
+    # k-nearest neighbor radius for each node
+    sorted_dists = np.sort(edge_distance, axis=1)
+    knn_radius = sorted_dists[:, k]
+    k_nn_avg = np.mean(sorted_dists[:, 1:min(6, n)], axis=1)
+    node_density = 1.0 / (k_nn_avg + 1e-6)
+    node_density = node_density / (np.mean(node_density) + 1e-6)
+
+    u_idx = np.asarray(local_opt_tour, dtype=np.intp)
+    v_idx = np.roll(u_idx, -1)
+    tour_edge_lengths = edge_distance[u_idx, v_idx]
+    avg_tour_length = np.mean(tour_edge_lengths)
+    relative_length = tour_edge_lengths / (avg_tour_length + 1e-6)
+
+    # Core GLS rank penalty based on relative edge length
+    rank_penalty = 1.0 / (1.0 + np.exp(-4.0 * (relative_length - 1.0)))
+    usage_factor = 1.0 / (1.0 + 0.3 * edge_n_used[u_idx, v_idx])
+
+    # Recreate: Bottleneck directional asymmetry & mutual k-NN sphere penalty
+    # Geometric mean density ensures an edge is heavily scaled down if either endpoint is sparse (bridge candidate)
+    geom_density = np.sqrt(node_density[u_idx] * node_density[v_idx])
+
+    # Exceedance ratio over endpoint k-NN radii
+    exceed_u = np.maximum(0.0, tour_edge_lengths - knn_radius[u_idx]) / (knn_radius[u_idx] + 1e-6)
+    exceed_v = np.maximum(0.0, tour_edge_lengths - knn_radius[v_idx]) / (knn_radius[v_idx] + 1e-6)
+    knn_violation_factor = 1.0 + np.minimum(exceed_u, exceed_v) + 0.5 * np.maximum(exceed_u, exceed_v)
+
+    # Bridge protection: if an edge connects two sparse regions or spans low density, suppress penalty
+    min_density = np.minimum(node_density[u_idx], node_density[v_idx])
+    sparse_bridge_mask = min_density < 0.65
+    bridge_suppression = np.where(sparse_bridge_mask, 0.45, 1.0)
+
+    # Localized neighborhood-aware penalty
+    local_penalty = relative_length * usage_factor * geom_density * knn_violation_factor * bridge_suppression
+
+    freq_mean = np.mean(edge_n_used[u_idx, v_idx])
+    w_global = 0.6 / (1.0 + 0.1 * freq_mean)
+    w_local = 1.0 - w_global
+    combined_penalty = w_global * rank_penalty + w_local * local_penalty
+
+    # Heavy penalty boost for tour edges in the upper quartile of tour edge lengths
+    threshold = np.percentile(tour_edge_lengths, 75)
+    high_penalty_mask = (tour_edge_lengths >= threshold) & (~sparse_bridge_mask)
+    combined_penalty[high_penalty_mask] *= 1.5
+
+    # Symmetric update
+    np.add.at(updated_edge_distance, (u_idx, v_idx), combined_penalty)
+    np.add.at(updated_edge_distance, (v_idx, u_idx), combined_penalty)
+
+    return updated_edge_distance
+# ===== Eval Output =====
+[*] Running ...
+[*] mode=val, data=/home/ducanh/projects/EAs_project/MoH/problems/tsp_gls/data/val/val_instance_data_sol_200.pkl, seed=0, n_instances=8
+[*] instance_indices=[6, 9, 0, 2, 4, 3, 5, 1]
+[*] instance 6: obj=10.4511, gap=0.0508
+[*] instance 9: obj=10.6630, gap=0.0000
+[*] instance 0: obj=10.9000, gap=0.1313
+[*] instance 2: obj=11.0430, gap=0.8700
+[*] instance 4: obj=10.8914, gap=0.4079
+[*] instance 3: obj=10.6377, gap=0.3382
+[*] instance 5: obj=10.9125, gap=0.2656
+[*] instance 1: obj=11.0769, gap=0.4778
+[*] ave_gap on size 200: 0.317691907961834
+0.317691907961834

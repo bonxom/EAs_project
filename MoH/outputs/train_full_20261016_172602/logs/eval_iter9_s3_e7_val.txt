@@ -1,0 +1,73 @@
+# ===== Heuristic Code =====
+#{Aggregates multi-scale contiguous subpath inefficiency scores across sliding windows of lengths 2 to 4 to apply compound structured penalties along entire suboptimal path segments, inducing macro-reconfiguration of structural bottlenecks.}#
+
+import numpy as np
+
+def update_edge_distance(edge_distance, local_opt_tour, edge_n_used):
+    updated_edge_distance = np.copy(edge_distance)
+    n = len(local_opt_tour)
+    if n < 4:
+        return updated_edge_distance
+
+    u_idx = local_opt_tour
+    v_idx = np.roll(local_opt_tour, -1)
+
+    # Base edge lengths and normalization
+    e_lens = edge_distance[u_idx, v_idx]
+    mean_len = np.mean(e_lens) + 1e-8
+    std_len = np.std(e_lens) + 1e-8
+    norm_lens = (e_lens - mean_len) / std_len
+
+    # Edge usage discount to avoid over-penalizing frequently broken edges
+    usage = edge_n_used[u_idx, v_idx]
+    usage_factor = 1.0 / np.sqrt(1.0 + usage)
+
+    # Pointwise cost potential
+    base_potential = np.maximum(0.0, norm_lens + 0.5) * usage_factor * mean_len * 0.15
+
+    # Multi-scale sliding window aggregation to identify contiguous inefficient chains
+    # Window sizes 2, 3, and 4
+    chain_penalties = np.zeros(n, dtype=np.float64)
+    weights = {2: 0.5, 3: 0.35, 4: 0.25}
+
+    for w, weight in weights.items():
+        if n < w:
+            continue
+        # Compute sliding window sums circularly
+        rolled_potentials = np.column_stack([np.roll(base_potential, -k) for k in range(w)])
+        w_scores = np.sum(rolled_potentials, axis=1) / w
+
+        # Identify top regional bottlenecks for this window scale
+        w_thresh = np.percentile(w_scores, 70)
+        active_chains = np.maximum(0.0, w_scores - w_thresh)
+
+        # Distribute chain penalty back across the edges in the window
+        for k in range(w):
+            chain_penalties += np.roll(active_chains * weight, k)
+
+    # Base individual edge penalty combined with structural chain penalty
+    total_penalty = base_potential * 0.4 + chain_penalties * 0.6
+
+    # Ensure minimum perturbation on the worst overall edges while maintaining scale
+    strong_mask = e_lens >= np.percentile(e_lens, 80)
+    total_penalty[strong_mask] *= 1.4
+
+    # Apply symmetric updates to the tour edges
+    np.add.at(updated_edge_distance, (u_idx, v_idx), total_penalty)
+    np.add.at(updated_edge_distance, (v_idx, u_idx), total_penalty)
+
+    return updated_edge_distance
+# ===== Eval Output =====
+[*] Running ...
+[*] mode=val, data=/home/ducanh/projects/EAs_project/MoH/problems/tsp_gls/data/val/val_instance_data_sol_200.pkl, seed=0, n_instances=8
+[*] instance_indices=[6, 9, 0, 2, 4, 3, 5, 1]
+[*] instance 6: obj=10.6787, gap=2.2288
+[*] instance 9: obj=11.0360, gap=3.4977
+[*] instance 0: obj=11.4260, gap=4.9631
+[*] instance 2: obj=11.2240, gap=2.5227
+[*] instance 4: obj=11.2078, gap=3.3247
+[*] instance 3: obj=10.8628, gap=2.4615
+[*] instance 5: obj=11.2230, gap=3.1189
+[*] instance 1: obj=11.3698, gap=3.1346
+[*] ave_gap on size 200: 3.1565074501346766
+3.1565074501346766

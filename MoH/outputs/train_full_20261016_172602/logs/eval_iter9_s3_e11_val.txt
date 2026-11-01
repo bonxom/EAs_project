@@ -1,0 +1,73 @@
+# ===== Heuristic Code =====
+#{Replace rigid thresholding with a non-dominated Pareto ranking that evaluates edge length against incident vertex congestion, smoothly scaling edge penalties via continuous tournament-based Pareto rank weights without binary cutoffs.}
+
+import numpy as np
+
+def update_edge_distance(edge_distance, local_opt_tour, edge_n_used):
+    updated_edge_distance = np.copy(edge_distance)
+    n = len(local_opt_tour)
+
+    # Estimate local node density using k-nearest neighbor distances
+    sorted_dists = np.sort(edge_distance, axis=1)
+    k_nn_avg = np.mean(sorted_dists[:, 1:min(6, n)], axis=1)
+    node_density = 1.0 / (k_nn_avg + 1e-6)
+    node_density = node_density / np.mean(node_density)
+
+    u_idx = local_opt_tour
+    v_idx = np.roll(local_opt_tour, -1)
+
+    tour_edge_lengths = edge_distance[u_idx, v_idx]
+    avg_tour_length = np.mean(tour_edge_lengths)
+    relative_length = tour_edge_lengths / (avg_tour_length + 1e-6)
+
+    rank_penalty = 1.0 / (1.0 + np.exp(-4.0 * (relative_length - 1.0)))
+    usage_factor = 1.0 / (1.0 + 0.3 * edge_n_used[u_idx, v_idx])
+    density_factor = 0.5 * (node_density[u_idx] + node_density[v_idx])
+    local_penalty = relative_length * usage_factor * density_factor
+
+    freq_mean = np.mean(edge_n_used[u_idx, v_idx])
+    w_global = 0.6 / (1.0 + 0.1 * freq_mean)
+    w_local = 1.0 - w_global
+    base_penalty = w_global * rank_penalty + w_local * local_penalty
+
+    # Pareto multi-objective formulation: Objective 1 = Edge length, Objective 2 = Incident vertex congestion
+    # Calculate historical congestion at each vertex based on incident edges in the tour
+    vertex_congestion = np.zeros(edge_distance.shape[0])
+    edge_freq = edge_n_used[u_idx, v_idx]
+    np.add.at(vertex_congestion, u_idx, edge_freq)
+    np.add.at(vertex_congestion, v_idx, edge_freq)
+    incident_congestion = 0.5 * (vertex_congestion[u_idx] + vertex_congestion[v_idx])
+
+    # Continuous Pareto dominance ranking using vectorized pairwise comparison
+    # Edge i is dominated by edge j if j has greater or equal length and congestion (with at least one strict inequality)
+    len_diff = tour_edge_lengths[None, :] - tour_edge_lengths[:, None]
+    cong_diff = incident_congestion[None, :] - incident_congestion[:, None]
+
+    dominated_matrix = ((len_diff >= 0) & (cong_diff >= 0) & ((len_diff > 0) | (cong_diff > 0)))
+    dominance_count = np.sum(dominated_matrix, axis=1).astype(float)
+
+    # Map dominance count to a continuous Pareto rank multiplier: non-dominated edges (low count) receive highest boost
+    pareto_score = 1.0 - (dominance_count / max(1.0, float(n - 1)))
+    pareto_multiplier = 1.0 + 0.8 * pareto_score
+
+    combined_penalty = base_penalty * pareto_multiplier
+
+    # Add symmetric penalties to the distance matrix
+    np.add.at(updated_edge_distance, (u_idx, v_idx), combined_penalty)
+    np.add.at(updated_edge_distance, (v_idx, u_idx), combined_penalty)
+
+    return updated_edge_distance
+# ===== Eval Output =====
+[*] Running ...
+[*] mode=val, data=/home/ducanh/projects/EAs_project/MoH/problems/tsp_gls/data/val/val_instance_data_sol_200.pkl, seed=0, n_instances=8
+[*] instance_indices=[6, 9, 0, 2, 4, 3, 5, 1]
+[*] instance 6: obj=10.4462, gap=0.0031
+[*] instance 9: obj=10.6877, gap=0.2311
+[*] instance 0: obj=10.8968, gap=0.1014
+[*] instance 2: obj=10.9724, gap=0.2253
+[*] instance 4: obj=10.8641, gap=0.1562
+[*] instance 3: obj=10.6134, gap=0.1087
+[*] instance 5: obj=10.9214, gap=0.3482
+[*] instance 1: obj=11.0562, gap=0.2899
+[*] ave_gap on size 200: 0.18298011478831144
+0.18298011478831144

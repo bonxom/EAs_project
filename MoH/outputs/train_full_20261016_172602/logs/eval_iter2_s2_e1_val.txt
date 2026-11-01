@@ -1,0 +1,99 @@
+# ===== Heuristic Code =====
+#{Combines geometric triplet tour penalties with an adaptive nearest-neighbor and skip-chord attraction scheme that discounts spatial k-NN candidates aligned with tour directions.}#
+
+import numpy as np
+
+def update_edge_distance(edge_distance, local_opt_tour, edge_n_used):
+    updated_edge_distance = np.copy(edge_distance)
+    num_nodes = len(local_opt_tour)
+    tour = np.asarray(local_opt_tour)
+
+    u_idx = tour
+    v_idx = np.roll(tour, -1)
+    w_idx = np.roll(tour, -2)
+
+    edge_n_used *= 0.96
+
+    d_uv = edge_distance[u_idx, v_idx]
+    d_vw = edge_distance[v_idx, w_idx]
+    d_uw = edge_distance[u_idx, w_idx]
+
+    detour_ratio = (d_uv + d_vw) / (d_uw + 1e-8)
+    denom = 2.0 * d_uv * d_vw + 1e-8
+    cos_turn = (d_uv**2 + d_vw**2 - d_uw**2) / denom
+    cos_turn = np.clip(cos_turn, -1.0, 1.0)
+    acute_deficit = 1.0 - cos_turn
+    geom_inefficiency = detour_ratio * (1.0 + 0.5 * acute_deficit)
+
+    base_dist = d_uv
+    base_freq = edge_n_used[u_idx, v_idx]
+    local_geom_factor = 0.5 * (geom_inefficiency + np.roll(geom_inefficiency, 1))
+    utilities = (base_dist / (1.0 + base_freq)) * (1.0 + 0.35 * local_geom_factor)
+
+    k = max(1, int(np.ceil(0.14 * num_nodes)))
+    top_k_indices = np.argsort(utilities)[-k:]
+
+    global_mean_dist = np.mean(edge_distance)
+    adaptive_lambda = 0.30 * global_mean_dist
+
+    # Penalize the least efficient edges in the current tour
+    for idx in top_k_indices:
+        u, v = u_idx[idx], v_idx[idx]
+        edge_n_used[u, v] += 1.0
+        edge_n_used[v, u] += 1.0
+        freq_penalty = 1.0 + np.log1p(edge_n_used[u, v])
+        geom_weight = 1.0 + 0.5 * local_geom_factor[idx]
+        penalty = adaptive_lambda * freq_penalty * geom_weight
+        updated_edge_distance[u, v] += penalty
+        updated_edge_distance[v, u] += penalty
+
+    # Adaptive k-NN & chord attraction: evaluate both skip-chords and spatial nearest-neighbors
+    # Identify critical vertices involved in penalized moves
+    critical_nodes = np.unique(np.concatenate([u_idx[top_k_indices], v_idx[top_k_indices]]))
+
+    # Consider spatial k-nearest neighbors of critical vertices and direct 2-hop shortcuts
+    tour_pos = np.empty(num_nodes, dtype=int)
+    tour_pos[tour] = np.arange(num_nodes)
+
+    for u in critical_nodes:
+        # Spatial nearest neighbors of u
+        nn_candidates = np.argsort(edge_distance[u])[:6]
+
+        # 2-hop shortcut neighbor in tour
+        pos_u = tour_pos[u]
+        skip_neighbor = tour[(pos_u + 2) % num_nodes]
+        candidates = np.unique(np.append(nn_candidates, skip_neighbor))
+
+        for cand in candidates:
+            if cand == u:
+                continue
+            # Avoid discounting adjacent tour edges
+            dist_in_tour = abs(tour_pos[u] - tour_pos[cand])
+            if dist_in_tour == 1 or dist_in_tour == num_nodes - 1:
+                continue
+
+            freq = edge_n_used[u, cand]
+            if freq < 1.0:
+                # Modulate discount by distance relative to local scale and under-representation
+                raw_d = edge_distance[u, cand]
+                if raw_d < 1.5 * global_mean_dist:
+                    attraction = 0.08 * global_mean_dist * (1.0 / (1.0 + freq)) * (1.0 / (1.0 + raw_d / (global_mean_dist + 1e-8)))
+                    new_val = max(1e-6, updated_edge_distance[u, cand] - attraction)
+                    updated_edge_distance[u, cand] = new_val
+                    updated_edge_distance[cand, u] = new_val
+
+    return updated_edge_distance
+# ===== Eval Output =====
+[*] Running ...
+[*] mode=val, data=/home/ducanh/projects/EAs_project/MoH/problems/tsp_gls/data/val/val_instance_data_sol_100.pkl, seed=0, n_instances=8
+[*] instance_indices=[6, 9, 0, 2, 4, 3, 5, 1]
+[*] instance 6: obj=7.7730, gap=0.1720
+[*] instance 9: obj=8.0726, gap=0.3635
+[*] instance 0: obj=8.0296, gap=0.3689
+[*] instance 2: obj=8.1145, gap=0.5035
+[*] instance 4: obj=7.8131, gap=0.0000
+[*] instance 3: obj=7.3713, gap=0.0000
+[*] instance 5: obj=7.6365, gap=0.0000
+[*] instance 1: obj=7.5570, gap=0.0000
+[*] ave_gap on size 100: 0.17598637311685983
+0.17598637311685983

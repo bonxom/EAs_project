@@ -1,0 +1,92 @@
+# ===== Heuristic Code =====
+#{Penalize high-utility tour edges based on standardized cost and frequency, and recreate alternative search paths by applying directed topological 2-opt shadow discounts to the most promising low-detour reconnecting edges incident to each broken edge.}#
+
+import numpy as np
+
+def update_edge_distance(edge_distance, local_opt_tour, edge_n_used):
+    updated_edge_distance = np.copy(edge_distance)
+    n = len(local_opt_tour)
+    if n < 4:
+        return updated_edge_distance
+
+    u_idx = np.array(local_opt_tour, dtype=np.intp)
+    v_idx = np.roll(u_idx, -1)
+
+    costs = edge_distance[u_idx, v_idx].astype(np.float64)
+    used = edge_n_used[u_idx, v_idx].astype(np.float64)
+
+    mean_cost = np.mean(costs)
+    std_cost = np.std(costs) + 1e-8
+    z_scores = (costs - mean_cost) / std_cost
+    weights = 1.0 / (1.0 + np.exp(-z_scores))
+    utilities = (costs * (1.0 + weights)) / (1.0 + used)
+
+    threshold = np.median(utilities)
+    max_util = np.max(utilities) + 1e-8
+    penalize_mask = utilities >= threshold
+
+    p_u = u_idx[penalize_mask]
+    p_v = v_idx[penalize_mask]
+    p_costs = costs[penalize_mask]
+    p_used = used[penalize_mask]
+    p_utils = utilities[penalize_mask]
+
+    penalties = (p_costs / (1.0 + np.sqrt(p_used + 1.0))) * (1.0 + p_utils / max_util)
+    updated_edge_distance[p_u, p_v] += penalties
+    updated_edge_distance[p_v, p_u] += penalties
+
+    # Topological 2-Opt Shadow Incentive:
+    # Instead of uniform decay on all unused edges, identify for each penalized edge (u, v)
+    # the best surrogate reconnecting edges (u, w) and (v, z) that minimize detour and usage.
+    k_candidates = min(5, n - 2)
+    pos_map = np.empty(edge_distance.shape[0], dtype=np.intp)
+    pos_map[u_idx] = np.arange(n)
+
+    for u, v, cost_uv, pen in zip(p_u, p_v, p_costs, penalties):
+        pos_u = pos_map[u]
+        pos_v = pos_map[v]
+
+        # Candidate nodes excluding immediate tour neighbors
+        exclude_nodes = {u, v, local_opt_tour[(pos_u - 1) % n], local_opt_tour[(pos_v + 1) % n]}
+
+        # Evaluate surrogate connections for u and v
+        row_u_dist = edge_distance[u]
+        row_u_used = edge_n_used[u]
+        score_u = row_u_dist * (1.0 + 0.5 * np.log1p(row_u_used))
+
+        sorted_u = np.argsort(score_u)
+        valid_u = [w for w in sorted_u if w not in exclude_nodes][:k_candidates]
+
+        row_v_dist = edge_distance[v]
+        row_v_used = edge_n_used[v]
+        score_v = row_v_dist * (1.0 + 0.5 * np.log1p(row_v_used))
+
+        sorted_v = np.argsort(score_v)
+        valid_v = [z for z in sorted_v if z not in exclude_nodes][:k_candidates]
+
+        discount = 0.15 * pen
+        for w in valid_u:
+            if edge_n_used[u, w] == 0:
+                updated_edge_distance[u, w] = max(1e-6, updated_edge_distance[u, w] - discount)
+                updated_edge_distance[w, u] = updated_edge_distance[u, w]
+
+        for z in valid_v:
+            if edge_n_used[v, z] == 0:
+                updated_edge_distance[v, z] = max(1e-6, updated_edge_distance[v, z] - discount)
+                updated_edge_distance[z, v] = updated_edge_distance[v, z]
+
+    return updated_edge_distance
+# ===== Eval Output =====
+[*] Running ...
+[*] mode=val, data=/home/ducanh/projects/EAs_project/MoH/problems/tsp_gls/data/val/val_instance_data_sol_50.pkl, seed=0, n_instances=8
+[*] instance_indices=[6, 9, 0, 2, 4, 3, 5, 1]
+[*] instance 6: obj=5.6831, gap=0.0626
+[*] instance 9: obj=5.9639, gap=0.0000
+[*] instance 0: obj=5.8590, gap=1.3967
+[*] instance 2: obj=5.8071, gap=0.0000
+[*] instance 4: obj=5.3965, gap=0.0000
+[*] instance 3: obj=5.8128, gap=0.9724
+[*] instance 5: obj=5.6187, gap=0.0000
+[*] instance 1: obj=5.1651, gap=0.0000
+[*] ave_gap on size 50: 0.30396357246322003
+0.30396357246322003

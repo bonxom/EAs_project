@@ -1,0 +1,110 @@
+# ===== Heuristic Code =====
+#{This strategy identifies cohesive, high-stress tour sub-path chains through a rolling structural penalty-geometry window, ruins them by penalizing intra-segment edges, and warps the metric tensor to incentivize clean reconnection through nearest-neighbor boundary shortcuts.}#
+
+import numpy as np
+
+def update_edge_distance(edge_distance, local_opt_tour, edge_n_used):
+    updated_edge_distance = np.copy(edge_distance)
+    num_nodes = len(local_opt_tour)
+    tour = np.asarray(local_opt_tour, dtype=np.int64)
+
+    # 1. Frequency memory decay
+    edge_n_used *= 0.95
+
+    # 2. Vectorized geometry and detour stress computation
+    u_idx = tour
+    v_idx = np.roll(tour, -1)
+    w_idx = np.roll(tour, -2)
+
+    d_uv = edge_distance[u_idx, v_idx]
+    d_vw = edge_distance[v_idx, w_idx]
+    d_uw = edge_distance[u_idx, w_idx]
+
+    detour_ratio = (d_uv + d_vw) / (d_uw + 1e-8)
+    denom = 2.0 * d_uv * d_vw + 1e-8
+    cos_turn = np.clip((d_uv**2 + d_vw**2 - d_uw**2) / denom, -1.0, 1.0)
+    acute_deficit = 1.0 - cos_turn
+
+    freq_uv = edge_n_used[u_idx, v_idx]
+    # Edge-level raw stress combining length, detour ratio, acute turns, and low-frequency bias
+    edge_stress = (d_uv / (1.0 + freq_uv)) * detour_ratio * (1.0 + 0.5 * acute_deficit)
+
+    # 3. Structural sub-path identification via rolling window convolution
+    # Target segment length dynamically scaled to instance size (between 3 and 12 nodes)
+    seg_len = max(3, min(12, int(np.ceil(0.08 * num_nodes))))
+
+    # Cyclic convolution for chain stress
+    extended_stress = np.concatenate([edge_stress, edge_stress[:seg_len - 1]])
+    window_weights = np.ones(seg_len, dtype=np.float64)
+    chain_stress = np.convolve(extended_stress, window_weights, mode='valid')
+
+    # Select non-overlapping top cohesive chains to ruin
+    num_chains = max(1, int(np.ceil(num_nodes / (3.0 * seg_len))))
+    sorted_chain_starts = np.argsort(chain_stress)[::-1]
+
+    selected_chain_starts = []
+    occupied = np.zeros(num_nodes, dtype=bool)
+
+    for start in sorted_chain_starts:
+        if len(selected_chain_starts) >= num_chains:
+            break
+        # Check overlap
+        indices = (start + np.arange(seg_len)) % num_nodes
+        if not np.any(occupied[indices]):
+            occupied[indices] = True
+            selected_chain_starts.append(start)
+
+    global_mean_dist = np.mean(edge_distance)
+    adaptive_lambda = 0.40 * global_mean_dist
+
+    # 4. Ruin selected chains by penalizing their internal structure
+    for start in selected_chain_starts:
+        for offset in range(seg_len):
+            idx = (start + offset) % num_nodes
+            u = u_idx[idx]
+            v = v_idx[idx]
+
+            edge_n_used[u, v] += 1.0
+            edge_n_used[v, u] += 1.0
+
+            freq_pen = 1.0 + np.log1p(edge_n_used[u, v])
+            pen = adaptive_lambda * freq_pen * (1.0 + 0.2 * (detour_ratio[idx] - 1.0))
+            updated_edge_distance[u, v] += pen
+            updated_edge_distance[v, u] += pen
+
+        # 5. Metric warping: recreate potential reconnection channels around chain boundaries
+        # Connect boundary predecessor and successor, or incentivize direct alternative entryways
+        pred_node = u_idx[start]
+        succ_node = v_idx[(start + seg_len - 1) % num_nodes]
+
+        # Warp distance across the ruined segment bypass
+        discount = 0.20 * global_mean_dist / (1.0 + edge_n_used[pred_node, succ_node])
+        new_dist = max(1e-6, updated_edge_distance[pred_node, succ_node] - discount)
+        updated_edge_distance[pred_node, succ_node] = new_dist
+        updated_edge_distance[succ_node, pred_node] = new_dist
+
+        # Reward k-nearest non-adjacent reconnection candidates to boundary nodes
+        for boundary_node in (pred_node, succ_node):
+            candidates = np.argsort(edge_distance[boundary_node])[:4]
+            for cand in candidates:
+                if cand != boundary_node and edge_n_used[boundary_node, cand] < 1.0:
+                    cand_discount = 0.08 * global_mean_dist
+                    warped = max(1e-6, updated_edge_distance[boundary_node, cand] - cand_discount)
+                    updated_edge_distance[boundary_node, cand] = warped
+                    updated_edge_distance[cand, boundary_node] = warped
+
+    return updated_edge_distance
+# ===== Eval Output =====
+[*] Running ...
+[*] mode=val, data=/home/ducanh/projects/EAs_project/MoH/problems/tsp_gls/data/val/val_instance_data_sol_100.pkl, seed=0, n_instances=8
+[*] instance_indices=[6, 9, 0, 2, 4, 3, 5, 1]
+[*] instance 6: obj=7.7697, gap=0.1304
+[*] instance 9: obj=8.1052, gap=0.7697
+[*] instance 0: obj=8.0001, gap=0.0000
+[*] instance 2: obj=8.1004, gap=0.3285
+[*] instance 4: obj=7.8175, gap=0.0560
+[*] instance 3: obj=7.3713, gap=0.0000
+[*] instance 5: obj=7.6365, gap=0.0000
+[*] instance 1: obj=7.5628, gap=0.0756
+[*] ave_gap on size 100: 0.1700192132923939
+0.1700192132923939

@@ -1,0 +1,92 @@
+# ===== Heuristic Code =====
+#{A self-adaptive Guided Local Search perturbation that dynamically scales memory decay, penalty strength, edge perturbation quota, and shortcut incentives based on accumulated edge-frequency entropy and tour geometric variance.}
+
+import numpy as np
+
+def update_edge_distance(edge_distance, local_opt_tour, edge_n_used):
+    updated_edge_distance = np.copy(edge_distance)
+    num_nodes = len(local_opt_tour)
+    tour = np.asarray(local_opt_tour)
+
+    u_idx = tour
+    v_idx = np.roll(tour, -1)
+    w_idx = np.roll(tour, -2)
+
+    # Self-adaptive stagnation & concentration assessment via current tour edge usage
+    curr_freqs = edge_n_used[u_idx, v_idx]
+    mean_curr_freq = np.mean(curr_freqs)
+    max_curr_freq = np.max(curr_freqs)
+    stagnation_ratio = mean_curr_freq / (max_curr_freq + 1.0)
+
+    # Dynamic memory decay: retain more memory when exploring (low stagnation), decay faster when trapped
+    dynamic_decay = np.clip(0.98 - 0.08 * stagnation_ratio, 0.88, 0.98)
+    edge_n_used *= dynamic_decay
+
+    # Re-fetch decayed frequencies
+    curr_freqs = edge_n_used[u_idx, v_idx]
+
+    d_uv = edge_distance[u_idx, v_idx]
+    d_vw = edge_distance[v_idx, w_idx]
+    d_uw = edge_distance[u_idx, w_idx]
+
+    detour_ratio = (d_uv + d_vw) / (d_uw + 1e-8)
+    denom = 2.0 * d_uv * d_vw + 1e-8
+    cos_turn = np.clip((d_uv**2 + d_vw**2 - d_uw**2) / denom, -1.0, 1.0)
+    acute_deficit = 1.0 - cos_turn
+    geom_inefficiency = detour_ratio * (1.0 + 0.5 * acute_deficit)
+
+    # Feedback-driven perturbation quota (k) scaling with stagnation intensity
+    k_fraction = np.clip(0.10 + 0.12 * stagnation_ratio, 0.08, 0.25)
+    k = max(1, int(np.ceil(k_fraction * num_nodes)))
+
+    local_geom_factor = 0.5 * (geom_inefficiency + np.roll(geom_inefficiency, 1))
+    utilities = (d_uv / (1.0 + curr_freqs)) * (1.0 + 0.40 * local_geom_factor)
+
+    tour_mean_dist = np.mean(d_uv)
+    tour_std_dist = np.std(d_uv)
+    cv_dist = tour_std_dist / (tour_mean_dist + 1e-8)
+
+    # Dynamic penalty lambda adapting to search entrapment and tour variance
+    base_lambda = tour_mean_dist * (0.25 + 0.25 * stagnation_ratio + 0.10 * cv_dist)
+
+    top_k_indices = np.argsort(utilities)[-k:]
+    for idx in top_k_indices:
+        u, v = u_idx[idx], v_idx[idx]
+        edge_n_used[u, v] += 1.0
+        edge_n_used[v, u] += 1.0
+
+        freq_penalty = 1.0 + np.log1p(edge_n_used[u, v])
+        geom_weight = 1.0 + 0.45 * local_geom_factor[idx]
+        penalty = base_lambda * freq_penalty * geom_weight
+
+        updated_edge_distance[u, v] += penalty
+        updated_edge_distance[v, u] += penalty
+
+    # Adaptive shortcut discounting conditioned on unvisited, highly promising 2-opt bypasses
+    high_detour_indices = np.argsort(detour_ratio)[-k:]
+    discount_scale = 0.08 + 0.10 * (1.0 - stagnation_ratio)
+
+    for idx in high_detour_indices:
+        u, w = u_idx[idx], w_idx[idx]
+        freq = edge_n_used[u, w]
+        if freq < 0.75:
+            discount = discount_scale * tour_mean_dist / (1.0 + freq)
+            discount = min(discount, 0.5 * updated_edge_distance[u, w])
+            updated_edge_distance[u, w] = max(1e-6, updated_edge_distance[u, w] - discount)
+            updated_edge_distance[w, u] = updated_edge_distance[u, w]
+
+    return updated_edge_distance
+# ===== Eval Output =====
+[*] Running ...
+[*] mode=val, data=/home/ducanh/projects/EAs_project/MoH/problems/tsp_gls/data/val/val_instance_data_sol_100.pkl, seed=0, n_instances=8
+[*] instance_indices=[6, 9, 0, 2, 4, 3, 5, 1]
+[*] instance 6: obj=7.8248, gap=0.8404
+[*] instance 9: obj=8.1032, gap=0.7451
+[*] instance 0: obj=8.0296, gap=0.3689
+[*] instance 2: obj=8.0900, gap=0.1994
+[*] instance 4: obj=7.8530, gap=0.5108
+[*] instance 3: obj=7.3713, gap=0.0000
+[*] instance 5: obj=7.6677, gap=0.4080
+[*] instance 1: obj=7.5734, gap=0.2161
+[*] ave_gap on size 100: 0.41108802960698465
+0.41108802960698465

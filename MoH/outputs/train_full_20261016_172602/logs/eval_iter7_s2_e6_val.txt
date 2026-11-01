@@ -1,0 +1,109 @@
+# ===== Heuristic Code =====
+#{Expand neighborhood dynamics from fixed 2-hop triplets to multi-scale 3-hop and 4-hop chordal evaluations with quad-slack intersection detection to heavily penalize entangled edges and promote planar bypasses.}
+
+import numpy as np
+
+def update_edge_distance(edge_distance, local_opt_tour, edge_n_used):
+    updated_edge_distance = np.copy(edge_distance)
+    num_nodes = len(local_opt_tour)
+    tour = np.asarray(local_opt_tour)
+
+    # Node indices across a 4-hop window along the tour
+    u_idx = tour
+    v_idx = np.roll(tour, -1)
+    w_idx = np.roll(tour, -2)
+    x_idx = np.roll(tour, -3)
+
+    # Evaporate edge penalty frequencies
+    edge_n_used *= 0.96
+
+    # Base edge distances
+    d_uv = edge_distance[u_idx, v_idx]
+    d_vw = edge_distance[v_idx, w_idx]
+    d_wx = edge_distance[w_idx, x_idx]
+
+    # 2-hop (triplet) and 3-hop (quad) chords
+    d_uw = edge_distance[u_idx, w_idx]
+    d_ux = edge_distance[u_idx, x_idx]
+    d_vx = edge_distance[v_idx, x_idx]
+
+    # Multi-scale detour ratios across 2-hop and 3-hop chordal paths
+    detour_2hop = (d_uv + d_vw) / (d_uw + 1e-8)
+    detour_3hop = (d_uv + d_vw + d_wx) / (d_ux + 1e-8)
+
+    # Turn angle cos deficit across triplets
+    denom_uvw = 2.0 * d_uv * d_vw + 1e-8
+    cos_turn = np.clip((d_uv**2 + d_vw**2 - d_uw**2) / denom_uvw, -1.0, 1.0)
+    acute_deficit = 1.0 - cos_turn
+
+    # Quad-slack: measures topological cross-entanglement / 2-opt uncrossing potential
+    # Positive quad_slack indicates crossed or inefficient edge configuration (uv + wx vs ux + vw)
+    quad_slack = (d_uv + d_wx) - (d_ux + d_vw)
+    norm_slack = np.maximum(0.0, quad_slack) / (d_uv + d_wx + 1e-8)
+
+    # Combined geometric and topological inefficiency factor
+    multi_scale_geom = 0.5 * detour_2hop + 0.5 * detour_3hop
+    entanglement_factor = multi_scale_geom * (1.0 + 0.4 * acute_deficit + 0.6 * norm_slack)
+
+    # Edge-centric smoothing across adjacent incident steps
+    local_geom_factor = (
+        0.5 * entanglement_factor + 
+        0.25 * np.roll(entanglement_factor, 1) + 
+        0.25 * np.roll(entanglement_factor, -1)
+    )
+
+    base_dist = d_uv
+    base_freq = edge_n_used[u_idx, v_idx]
+    utilities = (base_dist / (1.0 + base_freq)) * (1.0 + 0.35 * local_geom_factor)
+
+    k = max(1, int(np.ceil(0.14 * num_nodes)))
+    top_k_indices = np.argsort(utilities)[-k:]
+    global_mean_dist = np.mean(edge_distance)
+    adaptive_lambda = 0.30 * global_mean_dist
+
+    # Penalize the most inefficient / entangled tour edges
+    for idx in top_k_indices:
+        u, v = u_idx[idx], v_idx[idx]
+        edge_n_used[u, v] += 1.0
+        edge_n_used[v, u] += 1.0
+        freq_penalty = 1.0 + np.log1p(edge_n_used[u, v])
+        geom_weight = 1.0 + 0.5 * local_geom_factor[idx]
+        penalty = adaptive_lambda * freq_penalty * geom_weight
+        updated_edge_distance[u, v] += penalty
+        updated_edge_distance[v, u] += penalty
+
+    # Discount promising chordal shortcuts (both 2-hop bypasses and 3-hop uncrossing chords)
+    shortcut_indices = np.argsort(detour_2hop + norm_slack)[-k:]
+    for idx in shortcut_indices:
+        # Prioritize 2-hop shortcut (u, w)
+        u, w = u_idx[idx], w_idx[idx]
+        freq_uw = edge_n_used[u, w]
+        if freq_uw < 1.0:
+            discount = 0.10 * global_mean_dist * (1.0 / (1.0 + freq_uw))
+            updated_edge_distance[u, w] = max(1e-6, updated_edge_distance[u, w] - discount)
+            updated_edge_distance[w, u] = updated_edge_distance[u, w]
+
+        # If strong cross-entanglement is detected, also discount uncrossing chord (u, x)
+        if norm_slack[idx] > 0.05:
+            x = x_idx[idx]
+            freq_ux = edge_n_used[u, x]
+            if freq_ux < 1.0:
+                discount_ux = 0.08 * global_mean_dist * (1.0 / (1.0 + freq_ux))
+                updated_edge_distance[u, x] = max(1e-6, updated_edge_distance[u, x] - discount_ux)
+                updated_edge_distance[x, u] = updated_edge_distance[u, x]
+
+    return updated_edge_distance
+# ===== Eval Output =====
+[*] Running ...
+[*] mode=val, data=/home/ducanh/projects/EAs_project/MoH/problems/tsp_gls/data/val/val_instance_data_sol_100.pkl, seed=0, n_instances=8
+[*] instance_indices=[6, 9, 0, 2, 4, 3, 5, 1]
+[*] instance 6: obj=7.7596, gap=0.0000
+[*] instance 9: obj=8.0699, gap=0.3302
+[*] instance 0: obj=8.0001, gap=0.0000
+[*] instance 2: obj=8.0739, gap=0.0000
+[*] instance 4: obj=7.8131, gap=0.0000
+[*] instance 3: obj=7.3713, gap=0.0000
+[*] instance 5: obj=7.6365, gap=0.0000
+[*] instance 1: obj=7.5570, gap=0.0000
+[*] ave_gap on size 100: 0.041276768225512184
+0.041276768225512184

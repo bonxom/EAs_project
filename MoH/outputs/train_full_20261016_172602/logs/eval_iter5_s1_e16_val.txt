@@ -1,0 +1,80 @@
+# ===== Heuristic Code =====
+#{A bounded dual-action guided local search heuristic that selectively penalizes top-utility tour edges scaled by the graph's k-nearest-neighbor baseline while applying long-term evaporative decay across existing metric distortions and discounting unvisited incident candidate edges.}#
+
+import numpy as np
+
+def update_edge_distance(edge_distance, local_opt_tour, edge_n_used):
+    updated_edge_distance = np.copy(edge_distance)
+    n = len(local_opt_tour)
+    if n <= 2:
+        return updated_edge_distance
+
+    # Evaporative normalization: softly decay previous perturbations to prevent distortion drift
+    evaporation_factor = 0.985
+    # Calculate global scale baseline using k-nearest neighbor mean distance
+    k = min(5, n - 1)
+    sorted_dists = np.partition(edge_distance, k, axis=1)[:, 1:k+1]
+    global_scale = np.mean(sorted_dists) + 1e-8
+
+    # Apply long-term memory evaporation towards the baseline across the distance matrix
+    updated_edge_distance = edge_distance + evaporation_factor * (updated_edge_distance - edge_distance)
+
+    # Identify tour edges
+    u_idx = np.array(local_opt_tour, dtype=np.intp)
+    v_idx = np.roll(u_idx, -1)
+    costs = edge_distance[u_idx, v_idx].astype(np.float64)
+    used = edge_n_used[u_idx, v_idx].astype(np.float64)
+
+    # Compute standardized utility scores
+    mean_cost = np.mean(costs)
+    std_cost = np.std(costs) + 1e-8
+    z_scores = (costs - mean_cost) / std_cost
+    weights = 1.0 / (1.0 + np.exp(-z_scores))
+    utilities = (costs * (1.0 + weights)) / (1.0 + used)
+
+    # Select top edges to penalize (above median utility)
+    threshold = np.median(utilities)
+    max_util = np.max(utilities) + 1e-8
+    penalize_mask = utilities >= threshold
+
+    p_u = u_idx[penalize_mask]
+    p_v = v_idx[penalize_mask]
+    p_costs = costs[penalize_mask]
+    p_used = used[penalize_mask]
+    p_utils = utilities[penalize_mask]
+
+    # Bounded penalty computation constrained by the global graph scale
+    raw_penalties = (p_costs / (1.0 + np.sqrt(p_used + 1.0))) * (1.0 + p_utils / max_util)
+    penalties = np.minimum(raw_penalties, 0.4 * global_scale)
+
+    updated_edge_distance[p_u, p_v] += penalties
+    updated_edge_distance[p_v, p_u] += penalties
+
+    # Reward/discount promising unvisited edges incident to perturbed nodes
+    penalized_nodes = np.unique(np.concatenate((p_u, p_v)))
+    discount_ratio = 0.03
+    max_discount = 0.15 * global_scale
+
+    for u in penalized_nodes:
+        unused_mask = (edge_n_used[u] == 0)
+        unused_mask[u] = False
+        if np.any(unused_mask):
+            discounts = np.minimum(updated_edge_distance[u, unused_mask] * discount_ratio, max_discount)
+            updated_edge_distance[u, unused_mask] -= discounts
+            updated_edge_distance[unused_mask, u] -= discounts
+
+    return updated_edge_distance
+# ===== Eval Output =====
+[*] Running ...
+[*] mode=val, data=/home/ducanh/projects/EAs_project/MoH/problems/tsp_gls/data/val/val_instance_data_sol_50.pkl, seed=0, n_instances=8
+[*] instance_indices=[6, 9, 0, 2, 4, 3, 5, 1]
+[*] instance 6: obj=5.7136, gap=0.5983
+[*] instance 9: obj=5.9639, gap=0.0000
+[*] instance 0: obj=5.7783, gap=0.0000
+[*] instance 2: obj=5.8071, gap=0.0000
+[*] instance 4: obj=5.5821, gap=3.4387
+[*] instance 3: obj=5.8224, gap=1.1392
+[*] instance 5: obj=5.6187, gap=0.0000
+[*] instance 1: obj=5.3071, gap=2.7501
+[*] ave_gap on size 50: 0.9907860582297201
+0.9907860582297201

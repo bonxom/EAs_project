@@ -1,0 +1,66 @@
+# ===== Heuristic Code =====
+#{Apply an exponential penalty evaporation to edge usage counts combined with centrality-aware decay, preventing saturation while focusing penalties on the highest-utility bottleneck edges in the local optimum.}#
+
+import numpy as np
+
+def update_edge_distance(edge_distance, local_opt_tour, edge_n_used):
+    """
+    Update the edge distance matrix using guided local search with penalty evaporation,
+    combining dynamic node centrality gating and memory decay to prevent landscape saturation.
+    """
+    updated_edge_distance = np.copy(edge_distance)
+    num_nodes = len(local_opt_tour)
+
+    # Apply penalty evaporation to retain mobility and prevent equalized over-penalization
+    evaporation_factor = 0.985
+    edge_n_used *= evaporation_factor
+
+    # Identify edges belonging to the local optimal tour
+    u_idx = np.array(local_opt_tour)
+    v_idx = np.roll(u_idx, -1)
+
+    # Calculate edge utilities based on edge length and accumulated usage
+    dist_vals = edge_distance[u_idx, v_idx]
+    used_vals = edge_n_used[u_idx, v_idx]
+    utilities = dist_vals / (1.0 + used_vals)
+
+    # Penalize the edge(s) with maximum utility in the current local optimum
+    max_util = np.max(utilities)
+    max_mask = np.isclose(utilities, max_util, atol=1e-8)
+
+    penalized_u = u_idx[max_mask]
+    penalized_v = v_idx[max_mask]
+
+    for u, v in zip(penalized_u, penalized_v):
+        edge_n_used[u, v] += 1.0
+        edge_n_used[v, u] += 1.0
+
+    # Calculate node centrality based on accumulated penalties
+    node_centrality = np.sum(edge_n_used, axis=1)
+    max_centrality = np.max(node_centrality) + 1e-12
+    norm_centrality = node_centrality / max_centrality
+    centrality_field = norm_centrality[:, None] + norm_centrality[None, :]
+
+    # Calculate tour length for scaling the penalty parameter lambda
+    tour_len = np.sum(dist_vals)
+    lambda_param = 0.3 * (tour_len / num_nodes)
+
+    # Modulate penalty matrix using the centrality field and apply to updated distances
+    penalty_matrix = lambda_param * edge_n_used * (1.0 + 0.5 * centrality_field)
+    updated_edge_distance += penalty_matrix
+
+    return updated_edge_distance
+# ===== Eval Output =====
+[*] Running ...
+[*] mode=val, data=/home/ducanh/projects/EAs_project/MoH/problems/tsp_gls/data/val/val_instance_data_sol_100.pkl, seed=0, n_instances=8
+[*] instance_indices=[6, 9, 0, 2, 4, 3, 5, 1]
+[*] instance 6: obj=7.8758, gap=1.4976
+[*] instance 9: obj=8.2575, gap=2.6631
+[*] instance 0: obj=8.2816, gap=3.5185
+[*] instance 2: obj=8.2621, gap=2.3308
+[*] instance 4: obj=7.8686, gap=0.7109
+[*] instance 3: obj=7.5669, gap=2.6533
+[*] instance 5: obj=7.7946, gap=2.0698
+[*] instance 1: obj=7.9193, gap=4.7936
+[*] ave_gap on size 100: 2.529709455561921
+2.529709455561921

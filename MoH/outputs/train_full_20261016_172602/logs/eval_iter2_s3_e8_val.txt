@@ -1,0 +1,67 @@
+# ===== Heuristic Code =====
+#{An adaptive tour edge penalization strategy that dynamically calibrates neighborhood density bounds via graph size and shifts penalty weights from relative-length exploration to frequency-guided tabu dampening as search stagnation deepens.}
+
+import numpy as np
+
+def update_edge_distance(edge_distance, local_opt_tour, edge_n_used):
+    updated_edge_distance = np.copy(edge_distance)
+    n = len(local_opt_tour)
+    if n < 4:
+        return updated_edge_distance
+
+    # Extract consecutive edge indices along the local optimum tour
+    u_idx = local_opt_tour
+    v_idx = np.roll(local_opt_tour, -1)
+
+    tour_lengths = edge_distance[u_idx, v_idx]
+    mean_len = np.mean(tour_lengths) + 1e-12
+    rel_length = tour_lengths / mean_len
+
+    # Dynamic neighborhood size based on instance scale
+    k = int(np.clip(np.round(np.log2(n) * 1.5), 3, min(12, n - 1)))
+    sorted_dists = np.partition(edge_distance, k, axis=1)[:, 1:k + 1]
+    k_nn_avg = np.mean(sorted_dists, axis=1) + 1e-12
+    node_density = 1.0 / k_nn_avg
+    node_density /= np.mean(node_density) + 1e-12
+    density_factor = 0.5 * (node_density[u_idx] + node_density[v_idx])
+
+    # Utilization profile and stagnation estimation along the tour
+    edge_usages = edge_n_used[u_idx, v_idx]
+    mean_usage = np.mean(edge_usages)
+    max_usage = np.max(edge_usages)
+    stagnation_ratio = mean_usage / (max_usage + 1.0)
+
+    # Adaptive transition from geometric/rank exploration to frequency-based tabu dampening
+    w_tabu = np.clip(stagnation_ratio * (1.0 - 1.0 / (1.0 + 0.15 * mean_usage)), 0.1, 0.85)
+    w_geom = 1.0 - w_tabu
+
+    # Long-edge sigmoid ranking penalty scaled by average tour length
+    rank_penalty = mean_len / (1.0 + np.exp(-4.5 * (rel_length - 1.0)))
+
+    # Density-aware frequency penalty acting as dynamic Tabu restriction
+    tabu_penalty = mean_len * (rel_length * density_factor) / (1.0 + 0.25 * edge_usages)
+
+    # Combined penalty with upper quartile intensification
+    combined_penalty = w_geom * rank_penalty + w_tabu * tabu_penalty
+    q75 = np.percentile(tour_lengths, 75)
+    combined_penalty[tour_lengths >= q75] *= 1.4
+
+    # Apply symmetric updates to distance matrix
+    np.add.at(updated_edge_distance, (u_idx, v_idx), combined_penalty)
+    np.add.at(updated_edge_distance, (v_idx, u_idx), combined_penalty)
+
+    return updated_edge_distance
+# ===== Eval Output =====
+[*] Running ...
+[*] mode=val, data=/home/ducanh/projects/EAs_project/MoH/problems/tsp_gls/data/val/val_instance_data_sol_200.pkl, seed=0, n_instances=8
+[*] instance_indices=[6, 9, 0, 2, 4, 3, 5, 1]
+[*] instance 6: obj=10.6191, gap=1.6590
+[*] instance 9: obj=10.8564, gap=1.8138
+[*] instance 0: obj=10.9618, gap=0.6986
+[*] instance 2: obj=11.1120, gap=1.5000
+[*] instance 4: obj=10.9493, gap=0.9414
+[*] instance 3: obj=10.6868, gap=0.8012
+[*] instance 5: obj=11.0536, gap=1.5625
+[*] instance 1: obj=11.2196, gap=1.7726
+[*] ave_gap on size 200: 1.343641244258631
+1.343641244258631

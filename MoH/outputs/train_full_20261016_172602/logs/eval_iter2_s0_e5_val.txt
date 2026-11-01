@@ -1,0 +1,75 @@
+# ===== Heuristic Code =====
+#{A subpath and star-neighborhood ruin-and-recreate heuristic that identifies bottleneck nodes incident to the highest-utility tour edges, penalizing both adjacent 2-edge subpaths and their topological star-neighborhoods via distance-decayed vectorized broadcasting to escape deep local basins.}#
+
+import numpy as np
+
+def update_edge_distance(edge_distance, local_opt_tour, edge_n_used):
+    updated_edge_distance = np.copy(edge_distance)
+    n = len(local_opt_tour)
+    if n < 4:
+        return updated_edge_distance
+
+    u_idx = local_opt_tour
+    v_idx = np.roll(local_opt_tour, -1)
+    prev_idx = np.roll(local_opt_tour, 1)
+
+    tour_lengths = edge_distance[u_idx, v_idx]
+    tour_counts = edge_n_used[u_idx, v_idx]
+    edge_utilities = tour_lengths / (1.0 + tour_counts)
+
+    avg_edge = np.mean(tour_lengths)
+    base_penalty = 0.35 * avg_edge
+
+    # Select top bottleneck edges and their incident nodes
+    k_edges = max(1, min(n // 8, 8))
+    top_edge_indices = np.argpartition(edge_utilities, -k_edges)[-k_edges:]
+    top_edge_indices = top_edge_indices[np.argsort(-edge_utilities[top_edge_indices])]
+
+    # 1. Subpath ruin: Penalize the adjacent 2-edge subpaths around bottleneck edges
+    for edge_i in top_edge_indices:
+        n1 = u_idx[edge_i]
+        n2 = v_idx[edge_i]
+        p_n1 = prev_idx[edge_i]
+        next_n2 = np.roll(local_opt_tour, -2)[edge_i]
+
+        # Penalize primary edge
+        updated_edge_distance[n1, n2] += base_penalty
+        updated_edge_distance[n2, n1] += base_penalty
+
+        # Penalize adjacent edges on the tour (ruining the 3-node/4-node chain)
+        adjacent_penalty = base_penalty * 0.6
+        updated_edge_distance[p_n1, n1] += adjacent_penalty
+        updated_edge_distance[n1, p_n1] += adjacent_penalty
+        updated_edge_distance[n2, next_n2] += adjacent_penalty
+        updated_edge_distance[next_n2, n2] += adjacent_penalty
+
+    # 2. Neighborhood ruin: Star-neighborhood broadcast on top bottleneck nodes
+    bottleneck_nodes = np.unique(np.concatenate([u_idx[top_edge_indices], v_idx[top_edge_indices]]))
+    dists_to_bottlenecks = edge_distance[bottleneck_nodes, :]
+
+    # Distance-decayed topological penalty around bottleneck nodes
+    decay_factor = np.exp(-dists_to_bottlenecks / (avg_edge + 1e-8))
+    star_penalties = 0.25 * base_penalty * decay_factor
+
+    # Vectorized accumulation across star-neighborhoods
+    for i, node in enumerate(bottleneck_nodes):
+        node_pen = star_penalties[i]
+        updated_edge_distance[node, :] += node_pen
+        updated_edge_distance[:, node] += node_pen
+
+    np.fill_diagonal(updated_edge_distance, 0.0)
+    return updated_edge_distance
+# ===== Eval Output =====
+[*] Running ...
+[*] mode=val, data=/home/ducanh/projects/EAs_project/MoH/problems/tsp_gls/data/val/val_instance_data_sol_20.pkl, seed=0, n_instances=8
+[*] instance_indices=[6, 9, 0, 2, 4, 3, 5, 1]
+[*] instance 6: obj=3.7045, gap=0.0000
+[*] instance 9: obj=4.1442, gap=0.0000
+[*] instance 0: obj=3.6827, gap=0.0000
+[*] instance 2: obj=3.8184, gap=0.0000
+[*] instance 4: obj=3.8385, gap=0.0000
+[*] instance 3: obj=3.6971, gap=0.0000
+[*] instance 5: obj=3.4281, gap=0.0000
+[*] instance 1: obj=3.6958, gap=0.0000
+[*] ave_gap on size 20: 1.2218318606871392e-06
+1.2218318606871392e-06

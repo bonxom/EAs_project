@@ -1,0 +1,110 @@
+# ===== Heuristic Code =====
+#{Approximate Held-Karp directional node potentials via iterative 1-tree subgradient updates to compute reduced costs and selectively penalize tour edges exhibiting high dual slack and low historical frequency.}#
+
+import numpy as np
+
+def update_edge_distance(edge_distance, local_opt_tour, edge_n_used):
+    updated_edge_distance = np.copy(edge_distance)
+    n = len(local_opt_tour)
+    if n <= 3:
+        return updated_edge_distance
+
+    # Held-Karp iterative node potential approximation using 1-tree relaxation
+    pi = np.zeros(n, dtype=np.float64)
+    # Perform a few deterministic subgradient steps on node potentials
+    # Using 1-tree: MST on nodes 1..n-1 plus two cheapest edges to node 0
+    t = 0.5 * np.mean(edge_distance) / n
+    for step in range(5):
+        # Reduced cost matrix with current node potentials
+        c_pi = edge_distance + pi[:, None] + pi[None, :]
+        np.fill_diagonal(c_pi, np.inf)
+
+        # 1-tree computation:
+        # 1. MST on nodes 1 to n-1 via Prim's algorithm
+        sub_nodes = np.arange(1, n)
+        n_sub = n - 1
+        sub_c = c_pi[1:, 1:]
+
+        in_tree = np.zeros(n_sub, dtype=bool)
+        min_cost = np.copy(sub_c[0, :])
+        tree_parent = np.zeros(n_sub, dtype=int)
+        in_tree[0] = True
+
+        degrees = np.zeros(n, dtype=int)
+        for _ in range(n_sub - 1):
+            valid_idx = np.where(~in_tree)[0]
+            best_idx = valid_idx[np.argmin(min_cost[valid_idx])]
+            in_tree[best_idx] = True
+            u_node = tree_parent[best_idx] + 1
+            v_node = best_idx + 1
+            degrees[u_node] += 1
+            degrees[v_node] += 1
+
+            closer = sub_c[best_idx, :] < min_cost
+            update_mask = closer & (~in_tree)
+            min_cost[update_mask] = sub_c[best_idx, update_mask]
+            tree_parent[update_mask] = best_idx
+
+        # 2. Add two cheapest edges from node 0 to sub_nodes
+        dists_to_0 = c_pi[0, 1:]
+        two_cheapest = np.argpartition(dists_to_0, 2)[:2] + 1
+        degrees[0] = 2
+        degrees[two_cheapest[0]] += 1
+        degrees[two_cheapest[1]] += 1
+
+        # Subgradient update: subgradient is (degrees - 2)
+        subgrad = degrees - 2
+        step_size = t / (step + 1.0)
+        pi += step_size * subgrad
+        pi -= np.mean(pi)
+
+    # Tour edges
+    u = local_opt_tour
+    v = np.roll(local_opt_tour, -1)
+
+    # Calculate reduced cost (dual slack) of tour edges
+    reduced_costs = edge_distance[u, v] + pi[u] + pi[v]
+
+    # Baseline distance characteristics
+    mean_tour_d = np.mean(edge_distance[u, v]) + 1e-8
+
+    # Normalized dual slack
+    min_rc = np.min(reduced_costs)
+    norm_slack = (reduced_costs - min_rc) / (np.ptp(reduced_costs) + 1e-8)
+
+    # Relative edge distance
+    rel_cost = edge_distance[u, v] / mean_tour_d
+
+    # Usage penalty dampening
+    usage = edge_n_used[u, v]
+    freq_factor = 1.0 / (1.0 + 0.5 * usage)
+
+    # Combined utility metric
+    edge_utility = (0.65 * norm_slack + 0.35 * rel_cost) * freq_factor
+
+    # Penalty magnitude calibrated to tour scale
+    penalty_base = 0.25 * mean_tour_d * edge_utility
+
+    # Selective top-tier boosting
+    threshold = np.percentile(edge_utility, 65.0)
+    boost = np.where(edge_utility >= threshold, 1.4, 0.7)
+    final_penalties = penalty_base * boost
+
+    np.add.at(updated_edge_distance, (u, v), final_penalties)
+    np.add.at(updated_edge_distance, (v, u), final_penalties)
+
+    return updated_edge_distance
+# ===== Eval Output =====
+[*] Running ...
+[*] mode=val, data=/home/ducanh/projects/EAs_project/MoH/problems/tsp_gls/data/val/val_instance_data_sol_200.pkl, seed=0, n_instances=8
+[*] instance_indices=[6, 9, 0, 2, 4, 3, 5, 1]
+[*] instance 6: obj=10.6573, gap=2.0244
+[*] instance 9: obj=10.9442, gap=2.6367
+[*] instance 0: obj=11.4240, gap=4.9448
+[*] instance 2: obj=11.2240, gap=2.5227
+[*] instance 4: obj=11.0969, gap=2.3028
+[*] instance 3: obj=10.8628, gap=2.4615
+[*] instance 5: obj=11.2230, gap=3.1189
+[*] instance 1: obj=11.3493, gap=2.9486
+[*] ave_gap on size 200: 2.8700418630368345
+2.8700418630368345

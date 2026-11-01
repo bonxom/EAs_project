@@ -1,0 +1,124 @@
+# ===== Heuristic Code =====
+#{A spectral resistance perturbation strategy that projects tour edges onto the Fiedler vector of the visit-weighted Laplacian graph to identify and heavily penalize structural bridge bottlenecks spanning distinct clusters while simultaneously discounting unvisited low-resistance shortcuts.}#
+
+import numpy as np
+
+def update_edge_distance(edge_distance, local_opt_tour, edge_n_used):
+    updated_edge_distance = np.copy(edge_distance)
+    num_nodes = len(local_opt_tour)
+    u_idx = np.asarray(local_opt_tour)
+    v_idx = np.roll(u_idx, -1)
+
+    # 1. Update historical edge usage with recency-preserving decay
+    edge_n_used *= 0.985
+    global_mean_dist = np.mean(edge_distance)
+
+    # 2. Approximate effective conductance graph from accumulated visits and inverse metric distance
+    # Add a small epsilon to avoid division by zero
+    adj = (edge_n_used + 0.05) / (edge_distance + 1e-4 * global_mean_dist)
+    np.fill_diagonal(adj, 0.0)
+
+    # Degree vector and unnormalized graph Laplacian
+    deg = np.sum(adj, axis=1)
+    # Inverse square-root degree for symmetric normalized Laplacian: L_sym = I - D^{-1/2} A D^{-1/2}
+    inv_sqrt_deg = 1.0 / np.sqrt(np.maximum(deg, 1e-12))
+
+    # 3. Fast power iteration to find the Fiedler vector (second smallest eigenvector of L_sym)
+    # The smallest eigenvector of L_sym is D^{1/2} * 1. The dominant eigenvector of M = I - 0.5 * L_sym
+    # corresponds to the trivial vector. We deflate it and iterate on M = 0.5 * (I + D^{-1/2} A D^{-1/2}).
+    v0 = np.sqrt(np.maximum(deg, 1e-12))
+    v0_norm = np.linalg.norm(v0)
+    if v0_norm > 1e-12:
+        v0 /= v0_norm
+    else:
+        v0 = np.ones(num_nodes) / np.sqrt(num_nodes)
+
+    # Deterministic non-trivial seed orthogonal to v0
+    indices = np.arange(num_nodes, dtype=np.float64)
+    v_fiedler = indices - np.mean(indices)
+    v_fiedler -= np.dot(v_fiedler, v0) * v0
+    norm_vf = np.linalg.norm(v_fiedler)
+    if norm_vf > 1e-12:
+        v_fiedler /= norm_vf
+
+    # Operator: T(x) = 0.5 * (x + inv_sqrt_deg * (adj @ (inv_sqrt_deg * x)))
+    # We perform a few targeted power iterations to extract dominant structural cut coordinates
+    for _ in range(6):
+        x = inv_sqrt_deg * v_fiedler
+        ax = adj @ x
+        v_fiedler = 0.5 * (v_fiedler + inv_sqrt_deg * ax)
+        # Deflate trivial component
+        v_fiedler -= np.dot(v_fiedler, v0) * v0
+        norm_val = np.linalg.norm(v_fiedler)
+        if norm_val > 1e-12:
+            v_fiedler /= norm_val
+
+    # Un-normalize embedding back to combinatorial domain: phi = D^{-1/2} * v_fiedler
+    phi = inv_sqrt_deg * v_fiedler
+
+    # 4. Compute spectral cut bridge metric along current tour edges: |phi_u - phi_v|^2
+    tour_dist = edge_distance[u_idx, v_idx]
+    tour_freq = edge_n_used[u_idx, v_idx]
+    spectral_diff = np.abs(phi[u_idx] - phi[v_idx])
+
+    # Bridge score combines spectral gradient (crossing structural clusters) and usage/cost utility
+    cut_significance = (spectral_diff ** 2) / (np.mean(spectral_diff ** 2) + 1e-12)
+    utilities = (tour_dist / (1.0 + tour_freq)) * (1.0 + 1.5 * np.tanh(cut_significance))
+
+    # Adaptive selection of penalized edges
+    k = max(1, int(np.ceil(0.12 * num_nodes)))
+    top_k_indices = np.argsort(utilities)[-k:]
+
+    # Register usage on selected bottleneck edges
+    for idx in top_k_indices:
+        u, v = u_idx[idx], v_idx[idx]
+        edge_n_used[u, v] += 1.0
+        edge_n_used[v, u] += 1.0
+
+    # 5. Penalize bottleneck edges traversing the graph cut
+    stagnation = np.mean(edge_n_used[u_idx, v_idx])
+    adaptive_lambda = (0.22 + 0.18 * np.tanh(0.5 * stagnation)) * global_mean_dist
+
+    for idx in top_k_indices:
+        u, v = u_idx[idx], v_idx[idx]
+        bridge_multiplier = 1.0 + 1.2 * np.tanh(cut_significance[idx])
+        penalty = adaptive_lambda * (1.0 + np.log1p(edge_n_used[u, v])) * bridge_multiplier
+        updated_edge_distance[u, v] += penalty
+        updated_edge_distance[v, u] += penalty
+
+    # 6. Actively discount promising intra-cluster shortcut edges connecting to penalized nodes
+    for idx in top_k_indices:
+        u, v = u_idx[idx], v_idx[idx]
+        for node in (u, v):
+            row_dist = edge_distance[node]
+            row_used = edge_n_used[node]
+            node_phi = phi[node]
+
+            # Prefer shortcuts that stay within the same spectral cluster (small |phi_node - phi_w|)
+            # and have low historical exploration
+            candidate_mask = (row_used < 0.25) & (row_dist > 0)
+            if np.any(candidate_mask):
+                cand_indices = np.where(candidate_mask)[0]
+                cluster_compat = np.abs(phi[cand_indices] - node_phi)
+                cand_scores = row_dist[cand_indices] * (1.0 + 2.0 * cluster_compat)
+                best_cand = cand_indices[np.argmin(cand_scores)]
+
+                discount = 0.06 * global_mean_dist * (1.0 / (1.0 + row_used[best_cand]))
+                updated_edge_distance[node, best_cand] = max(1e-6, updated_edge_distance[node, best_cand] - discount)
+                updated_edge_distance[best_cand, node] = updated_edge_distance[node, best_cand]
+
+    return updated_edge_distance
+# ===== Eval Output =====
+[*] Running ...
+[*] mode=val, data=/home/ducanh/projects/EAs_project/MoH/problems/tsp_gls/data/val/val_instance_data_sol_100.pkl, seed=0, n_instances=8
+[*] instance_indices=[6, 9, 0, 2, 4, 3, 5, 1]
+[*] instance 6: obj=7.7700, gap=0.1343
+[*] instance 9: obj=8.0433, gap=0.0000
+[*] instance 0: obj=8.0001, gap=0.0000
+[*] instance 2: obj=8.0893, gap=0.1908
+[*] instance 4: obj=7.8131, gap=0.0000
+[*] instance 3: obj=7.3713, gap=0.0000
+[*] instance 5: obj=7.6365, gap=0.0000
+[*] instance 1: obj=7.5570, gap=0.0000
+[*] ave_gap on size 100: 0.040640114694104335
+0.040640114694104335

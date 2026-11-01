@@ -1,0 +1,102 @@
+# ===== Heuristic Code =====
+#{Calculates mutual edge persistence and geometric detour entropy along the tour to identify and penalize cohesive, high-inefficiency sub-paths rather than disjoint edges while rewarding unvisited planar bypasses.}
+
+import numpy as np
+
+def update_edge_distance(edge_distance, local_opt_tour, edge_n_used):
+    updated_edge_distance = np.copy(edge_distance)
+    num_nodes = len(local_opt_tour)
+    tour = np.asarray(local_opt_tour, dtype=np.intp)
+
+    # Subtle decay of historical penalties to preserve search memory while preventing saturation
+    edge_n_used *= 0.95
+
+    # Segment definitions along tour
+    u_idx = tour
+    v_idx = np.roll(tour, -1)
+    w_idx = np.roll(tour, -2)
+
+    d_uv = edge_distance[u_idx, v_idx]
+    d_vw = edge_distance[v_idx, w_idx]
+    d_uw = edge_distance[u_idx, w_idx]
+
+    # 2-step triangle bypass ratio measuring geometric inefficiency
+    detour_ratio = (d_uv + d_vw) / (d_uw + 1e-8)
+    denom = 2.0 * d_uv * d_vw + 1e-8
+    cos_turn = np.clip((d_uv**2 + d_vw**2 - d_uw**2) / denom, -1.0, 1.0)
+    acute_deficit = 1.0 - cos_turn
+    geom_inefficiency = detour_ratio * (1.0 + 0.5 * acute_deficit)
+
+    # Historical persistence and usage frequency of the tour edges
+    freq = edge_n_used[u_idx, v_idx]
+
+    # Compute information-theoretic entropy score: persistently recurring long edges with high detour
+    # Edges that persist despite geometric inefficiency have high entropy / trap centrality
+    edge_scores = (d_uv / (1.0 + np.log1p(freq))) * geom_inefficiency
+
+    # Identify contiguous sub-paths of high inefficiency (ruin sub-paths rather than isolated edges)
+    # Window length of 3 to 4 nodes
+    subpath_len = max(2, min(5, num_nodes // 10))
+    window_scores = np.zeros(num_nodes, dtype=np.float64)
+    for shift in range(subpath_len):
+        window_scores += np.roll(edge_scores, -shift)
+
+    # Pick the top non-overlapping high-centrality, high-inefficiency sub-paths to penalize
+    num_subpaths = max(1, int(np.ceil(0.12 * num_nodes / subpath_len)))
+    ranked_starts = np.argsort(window_scores)[::-1]
+
+    marked = np.zeros(num_nodes, dtype=bool)
+    selected_edges = []
+
+    for start in ranked_starts:
+        # Check if the path overlaps with already selected paths
+        indices = [(start + s) % num_nodes for s in range(subpath_len)]
+        if not any(marked[idx] for idx in indices):
+            for idx in indices:
+                marked[idx] = True
+                selected_edges.append(idx)
+            if len(selected_edges) >= num_subpaths * subpath_len:
+                break
+
+    global_mean_dist = np.mean(edge_distance)
+    adaptive_lambda = 0.35 * global_mean_dist
+
+    # Penalize the ruined sub-paths proportionally to persistence and local inefficiency
+    for idx in selected_edges:
+        u, v = u_idx[idx], v_idx[idx]
+        edge_n_used[u, v] += 1.0
+        edge_n_used[v, u] += 1.0
+
+        freq_penalty = 1.0 + np.log1p(edge_n_used[u, v])
+        geom_weight = 1.0 + 0.4 * geom_inefficiency[idx]
+        penalty = adaptive_lambda * freq_penalty * geom_weight
+
+        updated_edge_distance[u, v] += penalty
+        updated_edge_distance[v, u] += penalty
+
+    # Recreate: Incentivize shortcuts across the ruined regions to break cyclic attractors
+    num_shortcuts = max(1, int(np.ceil(0.10 * num_nodes)))
+    best_shortcuts = np.argsort(detour_ratio)[-num_shortcuts:]
+    for idx in best_shortcuts:
+        u, w = u_idx[idx], w_idx[idx]
+        f_uw = edge_n_used[u, w]
+        if f_uw < 1.0:
+            discount = 0.12 * global_mean_dist * (1.0 / (1.0 + f_uw))
+            updated_edge_distance[u, w] = max(1e-6, updated_edge_distance[u, w] - discount)
+            updated_edge_distance[w, u] = updated_edge_distance[u, w]
+
+    return updated_edge_distance
+# ===== Eval Output =====
+[*] Running ...
+[*] mode=val, data=/home/ducanh/projects/EAs_project/MoH/problems/tsp_gls/data/val/val_instance_data_sol_100.pkl, seed=0, n_instances=8
+[*] instance_indices=[6, 9, 0, 2, 4, 3, 5, 1]
+[*] instance 6: obj=7.7596, gap=0.0000
+[*] instance 9: obj=8.0833, gap=0.4977
+[*] instance 0: obj=8.0001, gap=0.0000
+[*] instance 2: obj=8.0900, gap=0.1994
+[*] instance 4: obj=7.8131, gap=0.0000
+[*] instance 3: obj=7.3713, gap=0.0000
+[*] instance 5: obj=7.6365, gap=0.0000
+[*] instance 1: obj=7.5570, gap=0.0000
+[*] ave_gap on size 100: 0.08714411807987377
+0.08714411807987377

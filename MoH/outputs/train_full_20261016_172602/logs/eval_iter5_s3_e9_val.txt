@@ -1,0 +1,63 @@
+# ===== Heuristic Code =====
+#{Replace static percentile thresholding with continuous GLS utility scaling modulated by a soft sigmoid temperature that dynamically adapts to tour edge length variance and local density.}#
+
+import numpy as np
+
+def update_edge_distance(edge_distance, local_opt_tour, edge_n_used):
+    updated_edge_distance = np.copy(edge_distance)
+    n = len(local_opt_tour)
+
+    # Measure local topology density using k-nearest neighbors
+    sorted_dists = np.sort(edge_distance, axis=1)
+    k_nn_avg = np.mean(sorted_dists[:, 1:min(6, n)], axis=1)
+    node_density = 1.0 / (k_nn_avg + 1e-6)
+    node_density = node_density / np.mean(node_density)
+
+    # Identify edges belonging to the local optimal tour
+    u_idx = local_opt_tour
+    v_idx = np.roll(local_opt_tour, -1)
+    tour_edge_lengths = edge_distance[u_idx, v_idx]
+
+    # Classical Guided Local Search continuous utility formulation: c(e) / (1 + p(e))
+    # where c(e) is edge distance and p(e) is invocation count
+    gls_utility = tour_edge_lengths / (1.0 + edge_n_used[u_idx, v_idx])
+
+    # Dynamic temperature based on tour edge length standard deviation and scale
+    tour_mean = np.mean(tour_edge_lengths)
+    tour_std = np.std(tour_edge_lengths)
+    temperature = np.maximum(tour_std, 0.1 * tour_mean) + 1e-6
+
+    # Continuous utility-based Pareto activation using dynamic sigmoid modulation
+    # Shifts attention smoothly to edges with higher utility relative to the mean utility
+    utility_mean = np.mean(gls_utility)
+    normalized_utility_diff = (gls_utility - utility_mean) / temperature
+    continuous_multiplier = 1.0 + 1.0 / (1.0 + np.exp(-normalized_utility_diff))
+
+    # Integrate structural context: density-weighted relative edge length
+    avg_tour_length = tour_mean + 1e-6
+    relative_length = tour_edge_lengths / avg_tour_length
+    density_factor = 0.5 * (node_density[u_idx] + node_density[v_idx])
+
+    # Base penalty combination with continuous Pareto-modulated scale
+    base_penalty = (relative_length * density_factor) / (1.0 + 0.3 * edge_n_used[u_idx, v_idx])
+    penalty = base_penalty * continuous_multiplier * (avg_tour_length * 0.1)
+
+    # Symmetrically apply penalties to distance matrix
+    np.add.at(updated_edge_distance, (u_idx, v_idx), penalty)
+    np.add.at(updated_edge_distance, (v_idx, u_idx), penalty)
+
+    return updated_edge_distance
+# ===== Eval Output =====
+[*] Running ...
+[*] mode=val, data=/home/ducanh/projects/EAs_project/MoH/problems/tsp_gls/data/val/val_instance_data_sol_200.pkl, seed=0, n_instances=8
+[*] instance_indices=[6, 9, 0, 2, 4, 3, 5, 1]
+[*] instance 6: obj=10.6573, gap=2.0244
+[*] instance 9: obj=10.9442, gap=2.6367
+[*] instance 0: obj=11.4240, gap=4.9448
+[*] instance 2: obj=11.2189, gap=2.4770
+[*] instance 4: obj=11.1329, gap=2.6343
+[*] instance 3: obj=10.8628, gap=2.4615
+[*] instance 5: obj=11.2181, gap=3.0742
+[*] instance 1: obj=11.4393, gap=3.7651
+[*] ave_gap on size 200: 3.0022427793420405
+3.0022427793420405

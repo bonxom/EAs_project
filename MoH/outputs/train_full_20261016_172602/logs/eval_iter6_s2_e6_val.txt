@@ -1,0 +1,99 @@
+# ===== Heuristic Code =====
+#{An adaptive fine-grained Guided Local Search penalty strategy that modulates penalties proportionally to edge-specific detour contribution, adapts perturbation size and intensity to tour length variance, and applies bounded relative discounts strictly to high-gain 2-hop shortcuts.}#
+
+import numpy as np
+
+def update_edge_distance(edge_distance, local_opt_tour, edge_n_used):
+    updated_edge_distance = np.copy(edge_distance)
+    num_nodes = len(local_opt_tour)
+    tour = np.asarray(local_opt_tour)
+
+    # Track triplets (u, v, w) along the local optimal cycle
+    u_idx = tour
+    v_idx = np.roll(tour, -1)
+    w_idx = np.roll(tour, -2)
+
+    # Memory decay to prevent over-penalization across prolonged iterations
+    edge_n_used *= 0.96
+
+    d_uv = edge_distance[u_idx, v_idx]
+    d_vw = edge_distance[v_idx, w_idx]
+    d_uw = edge_distance[u_idx, w_idx]
+
+    # Detour ratio and turn angle geometry
+    detour_ratio = (d_uv + d_vw) / (d_uw + 1e-8)
+    denom = 2.0 * d_uv * d_vw + 1e-8
+    cos_turn = np.clip((d_uv**2 + d_vw**2 - d_uw**2) / denom, -1.0, 1.0)
+    acute_deficit = 1.0 - cos_turn
+    geom_inefficiency = detour_ratio * (1.0 + 0.5 * acute_deficit)
+
+    # Neighborhood geometric factor for each edge (u, v)
+    local_geom_factor = 0.5 * (geom_inefficiency + np.roll(geom_inefficiency, 1))
+
+    # Tour length statistics for adaptive intensification
+    mean_tour_edge = np.mean(d_uv)
+    std_tour_edge = np.std(d_uv)
+    cv_tour = std_tour_edge / (mean_tour_edge + 1e-8)
+
+    # Standardized edge lengths relative to local tour distribution
+    edge_excess_ratio = np.maximum(0.0, (d_uv - mean_tour_edge) / (std_tour_edge + 1e-8))
+
+    # Refined utility: prioritizes long, geometrically inefficient, low-frequency edges
+    base_freq = edge_n_used[u_idx, v_idx]
+    utilities = (d_uv / (1.0 + base_freq)) * (1.0 + 0.30 * local_geom_factor) * (1.0 + 0.20 * edge_excess_ratio)
+
+    # Dynamically scale perturbation cardinality k based on tour dispersion
+    k_fraction = np.clip(0.10 + 0.08 * np.tanh(cv_tour), 0.08, 0.20)
+    k = max(1, int(np.ceil(k_fraction * num_nodes)))
+    top_k_indices = np.argsort(utilities)[-k:]
+
+    # Instance-wide distance scaling
+    global_mean_dist = np.mean(edge_distance)
+    adaptive_lambda = (0.20 + 0.15 * np.tanh(cv_tour)) * global_mean_dist
+
+    # Apply asymmetric, fine-grained penalties on edges
+    for idx in top_k_indices:
+        u, v = u_idx[idx], v_idx[idx]
+        edge_n_used[u, v] += 1.0
+        edge_n_used[v, u] += 1.0
+
+        freq_penalty = 1.0 + np.log1p(edge_n_used[u, v])
+        geom_weight = 1.0 + 0.4 * local_geom_factor[idx]
+        length_share = d_uv[idx] / (mean_tour_edge + 1e-8)
+
+        penalty = adaptive_lambda * freq_penalty * geom_weight * np.clip(length_share, 0.5, 2.0)
+        updated_edge_distance[u, v] += penalty
+        updated_edge_distance[v, u] += penalty
+
+    # Target promising 2-hop shortcuts with bounded relative discounts
+    shortcut_savings = (d_uv + d_vw) - d_uw
+    high_saving_indices = np.argsort(shortcut_savings)[-k:]
+
+    for idx in high_saving_indices:
+        if shortcut_savings[idx] > 0:
+            u, w = u_idx[idx], w_idx[idx]
+            freq = edge_n_used[u, w]
+            if freq < 1.0:
+                # Relative discount bounded to original distance to protect metric geometry
+                base_chord = edge_distance[u, w]
+                max_discount = 0.25 * base_chord
+                discount = min(max_discount, 0.08 * shortcut_savings[idx] / (1.0 + freq))
+                new_dist = max(1e-6, updated_edge_distance[u, w] - discount)
+                updated_edge_distance[u, w] = new_dist
+                updated_edge_distance[w, u] = new_dist
+
+    return updated_edge_distance
+# ===== Eval Output =====
+[*] Running ...
+[*] mode=val, data=/home/ducanh/projects/EAs_project/MoH/problems/tsp_gls/data/val/val_instance_data_sol_100.pkl, seed=0, n_instances=8
+[*] instance_indices=[6, 9, 0, 2, 4, 3, 5, 1]
+[*] instance 6: obj=7.7599, gap=0.0039
+[*] instance 9: obj=8.0501, gap=0.0846
+[*] instance 0: obj=8.0001, gap=0.0000
+[*] instance 2: obj=8.0893, gap=0.1908
+[*] instance 4: obj=7.8131, gap=0.0000
+[*] instance 3: obj=7.3713, gap=0.0000
+[*] instance 5: obj=7.6365, gap=0.0000
+[*] instance 1: obj=7.5570, gap=0.0000
+[*] ave_gap on size 100: 0.03490615854757628
+0.03490615854757628

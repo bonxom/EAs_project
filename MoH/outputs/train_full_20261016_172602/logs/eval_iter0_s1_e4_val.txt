@@ -1,0 +1,128 @@
+# ===== Heuristic Code =====
+#{Penalize high-utility edges in the local optimal tour and systematically incentivize valid unvisited 2-opt shortcut candidates that cross penalized segments and preserve Gabriel-like empty diametric spheres to shatter local optima basins while honoring metric triangle inequality bounds.}#
+
+import numpy as np
+
+def update_edge_distance(edge_distance, local_opt_tour, edge_n_used):
+    updated_edge_distance = np.copy(edge_distance)
+    n = len(local_opt_tour)
+    if n < 4:
+        return updated_edge_distance
+
+    # Map each node to its position in the tour for constant-time index calculations
+    pos = np.empty(n, dtype=np.int32)
+    for idx, node in enumerate(local_opt_tour):
+        pos[node] = idx
+
+    # Identify tour edges and extract costs
+    tour_edges = [(int(local_opt_tour[i]), int(local_opt_tour[(i + 1) % n])) for i in range(n)]
+    costs = np.array([edge_distance[u, v] for u, v in tour_edges], dtype=np.float64)
+
+    mean_cost = np.mean(costs)
+    std_cost = np.std(costs) + 1e-8
+
+    # Compute Guided Local Search utilities with usage damping
+    utilities = np.zeros(n, dtype=np.float64)
+    for i in range(n):
+        u, v = tour_edges[i]
+        used = edge_n_used[u, v]
+        z_score = (costs[i] - mean_cost) / std_cost
+        sigmoid_weight = 1.0 / (1.0 + np.exp(-z_score))
+        utilities[i] = (costs[i] * (1.0 + sigmoid_weight)) / (1.0 + used)
+
+    threshold = np.median(utilities)
+    max_util = np.max(utilities) + 1e-8
+
+    penalized_edges = []
+    penalized_indices = []
+
+    # Apply penalties to edges that exceed median utility
+    for i in range(n):
+        if utilities[i] >= threshold:
+            u, v = tour_edges[i]
+            used = edge_n_used[u, v]
+            penalty = (costs[i] / (1.0 + np.sqrt(used + 1.0))) * (1.0 + utilities[i] / max_util)
+            updated_edge_distance[u, v] += penalty
+            updated_edge_distance[v, u] += penalty
+            penalized_edges.append((u, v))
+            penalized_indices.append(i)
+
+    if not penalized_indices:
+        return updated_edge_distance
+
+    # Identify topological crossing candidates (2-opt shortcuts across penalized tour edges)
+    # A shortcut (u, w) crosses the penalized edge (tour[i], tour[i+1]) if w is separated along the tour
+    candidate_rewards = {}
+    k_candidates_per_node = min(6, max(2, n // 20))
+
+    for idx in penalized_indices:
+        u = local_opt_tour[idx]
+        v = local_opt_tour[(idx + 1) % n]
+
+        for root in (u, v):
+            root_idx = pos[root]
+            # Search over non-adjacent tour nodes that form valid topological 2-opt reconnecting cuts
+            # Sort all distances from root deterministically
+            dists = edge_distance[root].copy()
+            dists[root] = np.inf
+            dists[local_opt_tour[(root_idx - 1) % n]] = np.inf
+            dists[local_opt_tour[(root_idx + 1) % n]] = np.inf
+
+            sorted_nodes = np.argsort(dists)
+            added = 0
+            for target in sorted_nodes:
+                target = int(target)
+                if dists[target] == np.inf:
+                    continue
+                # Gabriel property check using metric distances: diametral empty sphere condition
+                # d(root, target)^2 <= d(root, w)^2 + d(target, w)^2 for sample test points
+                d_sq = edge_distance[root, target] ** 2
+                mid_violators = 0
+                for probe in (u, v):
+                    if probe != root and probe != target:
+                        if edge_distance[root, probe] ** 2 + edge_distance[target, probe] ** 2 < d_sq * 0.95:
+                            mid_violators += 1
+                if mid_violators > 0:
+                    continue
+
+                # Ensure target connects across disjoint sub-tour segments
+                target_idx = pos[target]
+                tour_dist = abs(root_idx - target_idx)
+                if tour_dist < 2 or tour_dist > n - 2:
+                    continue
+
+                pair = (min(root, target), max(root, target))
+                if pair not in candidate_rewards:
+                    candidate_rewards[pair] = edge_distance[root, target]
+                    added += 1
+                    if added >= k_candidates_per_node:
+                        break
+
+    # Apply metric-preserving discount to valid structural shortcuts
+    base_reward_factor = 0.04
+    for (node_a, node_b), orig_dist in candidate_rewards.items():
+        used = edge_n_used[node_a, node_b]
+        reward = (orig_dist * base_reward_factor) / (1.0 + 0.5 * used)
+
+        # Guard to preserve triangle inequalities and non-negativity
+        max_allowable_discount = orig_dist * 0.25
+        discount = min(reward, max_allowable_discount)
+
+        updated_edge_distance[node_a, node_b] = max(1e-4, updated_edge_distance[node_a, node_b] - discount)
+        updated_edge_distance[node_b, node_a] = updated_edge_distance[node_a, node_b]
+
+    return updated_edge_distance
+# ===== Eval Output =====
+[*] Running ...
+[*] mode=val, data=/home/ducanh/projects/EAs_project/MoH/problems/tsp_gls/data/val/val_instance_data_sol_50.pkl, seed=0, n_instances=8
+[*] instance_indices=[6, 9, 0, 2, 4, 3, 5, 1]
+[*] instance 6: obj=5.7136, gap=0.5983
+[*] instance 9: obj=5.9639, gap=0.0000
+[*] instance 0: obj=5.7783, gap=0.0000
+[*] instance 2: obj=5.8071, gap=0.0000
+[*] instance 4: obj=5.3965, gap=0.0000
+[*] instance 3: obj=5.8123, gap=0.9633
+[*] instance 5: obj=5.6187, gap=0.0000
+[*] instance 1: obj=5.1651, gap=0.0000
+[*] ave_gap on size 50: 0.1952036921433975
+0.1952036921433975

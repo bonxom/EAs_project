@@ -1,0 +1,61 @@
+# ===== Heuristic Code =====
+#{Neighborhood-aware contextual utility evaluates each tour edge by coupling its length and historical usage with the geometric inefficiency of its preceding and succeeding adjacent edges to penalize structurally suboptimal subpaths.}
+
+import numpy as np
+
+def update_edge_distance(edge_distance, local_opt_tour, edge_n_used):
+    updated_edge_distance = np.copy(edge_distance)
+
+    u_idx = local_opt_tour
+    v_idx = np.roll(local_opt_tour, -1)
+
+    # Preceding and succeeding nodes along the tour
+    prev_u_idx = np.roll(local_opt_tour, 1)
+    next_v_idx = np.roll(local_opt_tour, -2)
+
+    # Edge lengths
+    curr_len = edge_distance[u_idx, v_idx]
+    prev_len = edge_distance[prev_u_idx, u_idx]
+    next_len = edge_distance[v_idx, next_v_idx]
+
+    # Shortcut distances spanning adjacent 2-edge neighborhoods
+    shortcut_prev = edge_distance[prev_u_idx, v_idx]
+    shortcut_next = edge_distance[u_idx, next_v_idx]
+
+    # Structural detour ratio: how much longer the tour path is compared to direct connections
+    contextual_detour = ((prev_len + curr_len) / np.maximum(shortcut_prev, 1e-9) +
+                         (curr_len + next_len) / np.maximum(shortcut_next, 1e-9)) * 0.5
+
+    # Neighborhood-aware contextual utility
+    counts = edge_n_used[u_idx, v_idx]
+    contextual_utilities = (curr_len * contextual_detour) / (1.0 + counts)
+
+    max_utility = np.max(contextual_utilities)
+    threshold = 0.95 * max_utility
+    selected_mask = contextual_utilities >= threshold
+
+    # Adaptive penalty scaled by contextual path distortion and mean edge length
+    avg_edge = np.mean(curr_len)
+    penalties = 0.35 * avg_edge * contextual_detour[selected_mask]
+
+    sel_u = u_idx[selected_mask]
+    sel_v = v_idx[selected_mask]
+
+    updated_edge_distance[sel_u, sel_v] += penalties
+    updated_edge_distance[sel_v, sel_u] += penalties
+
+    return updated_edge_distance
+# ===== Eval Output =====
+[*] Running ...
+[*] mode=val, data=/home/ducanh/projects/EAs_project/MoH/problems/tsp_gls/data/val/val_instance_data_sol_20.pkl, seed=0, n_instances=8
+[*] instance_indices=[6, 9, 0, 2, 4, 3, 5, 1]
+[*] instance 6: obj=3.7045, gap=0.0000
+[*] instance 9: obj=4.1442, gap=0.0000
+[*] instance 0: obj=3.6827, gap=0.0000
+[*] instance 2: obj=3.8184, gap=0.0000
+[*] instance 4: obj=3.8385, gap=0.0000
+[*] instance 3: obj=3.6971, gap=0.0000
+[*] instance 5: obj=3.4281, gap=0.0000
+[*] instance 1: obj=3.6958, gap=0.0000
+[*] ave_gap on size 20: 1.2218318606871392e-06
+1.2218318606871392e-06

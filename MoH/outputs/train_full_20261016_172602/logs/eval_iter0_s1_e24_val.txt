@@ -1,0 +1,92 @@
+# ===== Heuristic Code =====
+#{Estimate edge curvature/bridging stress along the tour using local neighborhood overlaps and cost disparities to penalize high-stress structural bottlenecks while rewarding promising shortcut edges connecting disparate clusters.}#
+
+import numpy as np
+
+def update_edge_distance(edge_distance, local_opt_tour, edge_n_used):
+    # Ensure original matrix is preserved
+    updated_edge_distance = np.copy(edge_distance)
+    n = len(local_opt_tour)
+    if n <= 3:
+        return updated_edge_distance
+
+    u_idx = np.array(local_opt_tour, dtype=np.intp)
+    v_idx = np.roll(u_idx, -1)
+
+    costs = edge_distance[u_idx, v_idx].astype(np.float64)
+    used = edge_n_used[u_idx, v_idx].astype(np.float64)
+
+    # Neighborhood size for local curvature / triangle-bridging estimation
+    k = min(8, max(3, n // 5))
+
+    # Find k-nearest neighbors in base metric for tour nodes
+    # Using argpartition for deterministic, efficient top-k retrieval
+    u_neighbors = np.argpartition(edge_distance[u_idx], kth=k, axis=1)[:, 1:k+1]
+    v_neighbors = np.argpartition(edge_distance[v_idx], kth=k, axis=1)[:, 1:k+1]
+
+    # Approximate Forman-Ricci / Ollivier-Ricci curvature via common neighbor overlap
+    # Low overlap implies bridge/bottleneck edge between distinct clusters
+    overlap_counts = np.zeros(n, dtype=np.float64)
+    for i in range(n):
+        nu = set(u_neighbors[i])
+        nv = set(v_neighbors[i])
+        overlap_counts[i] = len(nu.intersection(nv))
+
+    # Stress/bottleneck score: low curvature (low overlap) and high edge length relative to neighbors
+    mean_cost = np.mean(costs)
+    std_cost = np.std(costs) + 1e-8
+    norm_cost = (costs - mean_cost) / std_cost
+    cost_sigmoid = 1.0 / (1.0 + np.exp(-norm_cost))
+
+    # Bridge score: high when overlap is low
+    bridge_score = 1.0 / (1.0 + overlap_counts)
+
+    # Structural utility combining cost, bridge intensity, and past usage frequency
+    tour_utilities = (costs * (1.0 + cost_sigmoid) * (1.0 + bridge_score)) / (1.0 + np.sqrt(used + 1.0))
+
+    threshold = np.median(tour_utilities)
+    penalize_mask = tour_utilities >= threshold
+
+    p_u = u_idx[penalize_mask]
+    p_v = v_idx[penalize_mask]
+    p_costs = costs[penalize_mask]
+    p_used = used[penalize_mask]
+    p_bridge = bridge_score[penalize_mask]
+
+    # Adaptive penalty scaling based on curvature stress
+    penalty = (p_costs * 0.35 + (p_costs / (1.0 + p_used))) * (1.0 + p_bridge)
+    updated_edge_distance[p_u, p_v] += penalty
+    updated_edge_distance[p_v, p_u] += penalty
+
+    # Reward shortcuts connecting under-connected/penalized nodes to distant clusters
+    penalized_nodes = np.unique(np.concatenate((p_u, p_v)))
+    decay_ratio = 0.03
+    for u in penalized_nodes:
+        # Candidate shortcut edges: not used yet, non-self
+        unused_mask = (edge_n_used[u] == 0)
+        unused_mask[u] = False
+        if np.any(unused_mask):
+            cand_indices = np.where(unused_mask)[0]
+            cand_costs = updated_edge_distance[u, cand_indices]
+            # Prioritize candidates that provide competitive alternative transitions
+            median_cand = np.median(cand_costs)
+            favorable_mask = cand_indices[cand_costs <= median_cand]
+            if favorable_mask.size > 0:
+                updated_edge_distance[u, favorable_mask] *= (1.0 - decay_ratio)
+                updated_edge_distance[favorable_mask, u] = updated_edge_distance[u, favorable_mask]
+
+    return updated_edge_distance
+# ===== Eval Output =====
+[*] Running ...
+[*] mode=val, data=/home/ducanh/projects/EAs_project/MoH/problems/tsp_gls/data/val/val_instance_data_sol_50.pkl, seed=0, n_instances=8
+[*] instance_indices=[6, 9, 0, 2, 4, 3, 5, 1]
+[*] instance 6: obj=5.7136, gap=0.5983
+[*] instance 9: obj=5.9639, gap=0.0000
+[*] instance 0: obj=5.7783, gap=0.0000
+[*] instance 2: obj=5.8071, gap=0.0000
+[*] instance 4: obj=5.3965, gap=0.0000
+[*] instance 3: obj=5.8123, gap=0.9633
+[*] instance 5: obj=5.6492, gap=0.5441
+[*] instance 1: obj=5.1651, gap=0.0000
+[*] ave_gap on size 50: 0.26321031999863576
+0.26321031999863576

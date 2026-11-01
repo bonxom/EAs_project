@@ -1,0 +1,96 @@
+# ===== Heuristic Code =====
+#{We implement adaptive utility thresholding using the 75th percentile (upper quartile) and Pareto scaling to target only the most egregious structural bottleneck edges, selectively penalizing them while guiding local search through mutual nearest-neighbor reward decay.}#
+
+import numpy as np
+
+def update_edge_distance(edge_distance, local_opt_tour, edge_n_used):
+    updated_edge_distance = np.copy(edge_distance)
+    n = len(local_opt_tour)
+    tour_edges = [(local_opt_tour[i], local_opt_tour[(i + 1) % n]) for i in range(n)]
+    costs = np.array([edge_distance[u, v] for u, v in tour_edges], dtype=np.float64)
+
+    mean_cost = np.mean(costs)
+    std_cost = np.std(costs) + 1e-8
+    utilities = np.zeros(n, dtype=np.float64)
+    for i in range(n):
+        u, v = tour_edges[i]
+        used = edge_n_used[u, v]
+        z_score = (costs[i] - mean_cost) / std_cost
+        weight = 1.0 / (1.0 + np.exp(-z_score))
+        utilities[i] = (costs[i] * (1.0 + weight)) / (1.0 + used)
+
+    # Adaptive Pareto/quartile thresholding to penalize only the top ~25-30% bottleneck edges
+    q75 = np.percentile(utilities, 75.0)
+    iqr = q75 - np.percentile(utilities, 25.0)
+    threshold = max(q75, np.mean(utilities) + 0.5 * np.std(utilities))
+    max_util = np.max(utilities) + 1e-8
+
+    penalized_nodes = set()
+    for idx in range(n):
+        if utilities[idx] >= threshold:
+            u, v = tour_edges[idx]
+            used = edge_n_used[u, v]
+            relative_excess = (utilities[idx] - threshold) / (max_util - threshold + 1e-8)
+            penalty = (costs[idx] / (1.0 + np.sqrt(used + 1.0))) * (1.0 + relative_excess)
+            updated_edge_distance[u, v] += penalty
+            updated_edge_distance[v, u] += penalty
+            penalized_nodes.add(u)
+            penalized_nodes.add(v)
+
+    if not penalized_nodes:
+        # Fallback to absolute maximum utility edge if no edges exceeded threshold
+        max_idx = int(np.argmax(utilities))
+        u, v = tour_edges[max_idx]
+        used = edge_n_used[u, v]
+        penalty = costs[max_idx] / (1.0 + np.sqrt(used + 1.0))
+        updated_edge_distance[u, v] += penalty
+        updated_edge_distance[v, u] += penalty
+        penalized_nodes.add(u)
+        penalized_nodes.add(v)
+
+    k_neighbors = min(8, max(3, n // 15))
+    base_decay = 0.035
+    candidate_neighbors = {}
+    for u in penalized_nodes:
+        dists = edge_distance[u].copy()
+        dists[u] = np.inf
+        sorted_indices = np.argsort(dists)
+        valid_candidates = []
+        for v in sorted_indices:
+            if edge_n_used[u, v] <= 1:
+                valid_candidates.append(int(v))
+                if len(valid_candidates) >= k_neighbors:
+                    break
+        candidate_neighbors[u] = valid_candidates
+
+    visited_pairs = set()
+    for u in penalized_nodes:
+        u_cand = candidate_neighbors[u]
+        for rank_u, v in enumerate(u_cand):
+            pair = (min(u, v), max(u, v))
+            if pair in visited_pairs:
+                continue
+            if v in candidate_neighbors and u in candidate_neighbors[v]:
+                rank_v = candidate_neighbors[v].index(u)
+                avg_rank = 0.5 * (rank_u + rank_v)
+                rank_factor = 1.0 / (1.0 + avg_rank * 0.3)
+                decay = updated_edge_distance[u, v] * base_decay * rank_factor
+                updated_edge_distance[u, v] -= decay
+                updated_edge_distance[v, u] -= decay
+                visited_pairs.add(pair)
+
+    return updated_edge_distance
+# ===== Eval Output =====
+[*] Running ...
+[*] mode=val, data=/home/ducanh/projects/EAs_project/MoH/problems/tsp_gls/data/val/val_instance_data_sol_50.pkl, seed=0, n_instances=8
+[*] instance_indices=[6, 9, 0, 2, 4, 3, 5, 1]
+[*] instance 6: obj=5.7136, gap=0.5983
+[*] instance 9: obj=5.9639, gap=0.0000
+[*] instance 0: obj=5.7783, gap=0.0000
+[*] instance 2: obj=5.8071, gap=0.0000
+[*] instance 4: obj=5.3965, gap=0.0000
+[*] instance 3: obj=5.8224, gap=1.1392
+[*] instance 5: obj=5.6187, gap=0.0000
+[*] instance 1: obj=5.1651, gap=0.0000
+[*] ave_gap on size 50: 0.21718291265821477
+0.21718291265821477

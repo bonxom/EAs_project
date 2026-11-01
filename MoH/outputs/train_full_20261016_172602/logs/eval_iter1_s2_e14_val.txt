@@ -1,0 +1,119 @@
+# ===== Heuristic Code =====
+#{A structural ruin-and-recreate topological stress framework that penalizes multi-hop subpath detour bottlenecks and crossing interference rather than myopic single-edge triplets, combined with dual-tier frequency penalization and promising chordal shortcut incentivization.}#
+
+import numpy as np
+
+def update_edge_distance(edge_distance, local_opt_tour, edge_n_used):
+    updated_edge_distance = np.copy(edge_distance)
+    num_nodes = len(local_opt_tour)
+    tour = np.asarray(local_opt_tour, dtype=int)
+
+    # Smooth decay of historical usage memory
+    edge_n_used *= 0.95
+
+    # Tour indexing vectors
+    u_idx = tour
+    v_idx = np.roll(tour, -1)
+
+    # 1. Base edge distances along the tour
+    d_tour_edges = edge_distance[u_idx, v_idx]
+    mean_tour_edge = np.mean(d_tour_edges)
+    global_mean_dist = np.mean(edge_distance)
+
+    # 2. Multi-hop subpath detour stress (h = 2, 3, 4 hops)
+    # Evaluating macroscopic path stretching rather than isolated local triplets
+    hop2_idx = np.roll(tour, -2)
+    hop3_idx = np.roll(tour, -3)
+    hop4_idx = np.roll(tour, -4)
+
+    d_hop2 = edge_distance[u_idx, hop2_idx]
+    d_hop3 = edge_distance[u_idx, hop3_idx]
+    d_hop4 = edge_distance[u_idx, hop4_idx]
+
+    cum_path2 = d_tour_edges + np.roll(d_tour_edges, -1)
+    cum_path3 = cum_path2 + np.roll(d_tour_edges, -2)
+    cum_path4 = cum_path3 + np.roll(d_tour_edges, -3)
+
+    stress2 = cum_path2 / (d_hop2 + 1e-8)
+    stress3 = cum_path3 / (d_hop3 + 1e-8)
+    stress4 = cum_path4 / (d_hop4 + 1e-8)
+
+    # Subpath stress contribution back to each edge
+    # An edge participates in multiple forward and backward multi-hop windows
+    subpath_stress = (
+        0.50 * (stress2 + np.roll(stress2, 1)) +
+        0.30 * (stress3 + np.roll(stress3, 1) + np.roll(stress3, 2)) +
+        0.20 * (stress4 + np.roll(stress4, 1) + np.roll(stress4, 2) + np.roll(stress4, 3))
+    ) / 3.0
+
+    # 3. Structural bottleneck & length contribution
+    # Relative edge length compared to average tour edge
+    length_ratio = d_tour_edges / (mean_tour_edge + 1e-8)
+
+    # Frequency attenuation: penalize edges that repeatedly lock the search
+    freq_arr = edge_n_used[u_idx, v_idx]
+
+    # Composite Ruin Utility for each edge
+    # High utility implies the edge is long, geometrically stressed, and historically over-visited
+    utilities = (d_tour_edges / (1.0 + freq_arr)) * (1.0 + 0.4 * subpath_stress) * (1.0 + 0.2 * length_ratio)
+
+    # Select ruin budget: top k critical bottleneck edges to disrupt
+    k = max(1, int(np.ceil(0.15 * num_nodes)))
+    penalized_indices = np.argsort(utilities)[-k:]
+
+    adaptive_lambda = 0.35 * global_mean_dist
+    for idx in penalized_indices:
+        u, v = u_idx[idx], v_idx[idx]
+        edge_n_used[u, v] += 1.0
+        edge_n_used[v, u] += 1.0
+
+        freq_penalty = 1.0 + np.log1p(edge_n_used[u, v])
+        stress_factor = 1.0 + 0.25 * subpath_stress[idx]
+
+        penalty = adaptive_lambda * freq_penalty * stress_factor
+        updated_edge_distance[u, v] += penalty
+        updated_edge_distance[v, u] += penalty
+
+    # 4. Structural Recreate Incentive: incentivize high-gain shortcut chords
+    # Prioritize 2-hop and 3-hop shortcut chords that relieve the most severe subpath detours
+    detour_gain2 = cum_path2 - d_hop2
+    detour_gain3 = cum_path3 - d_hop3
+
+    # Pick top shortcuts with greatest absolute path reduction
+    k_recreate = max(1, int(np.ceil(0.08 * num_nodes)))
+    top_chord2 = np.argsort(detour_gain2)[-k_recreate:]
+    top_chord3 = np.argsort(detour_gain3)[-k_recreate:]
+
+    for idx in top_chord2:
+        u, w = u_idx[idx], hop2_idx[idx]
+        freq = edge_n_used[u, w]
+        if freq < 1.0:
+            discount = 0.12 * global_mean_dist / (1.0 + freq)
+            val = max(1e-6, updated_edge_distance[u, w] - discount)
+            updated_edge_distance[u, w] = val
+            updated_edge_distance[w, u] = val
+
+    for idx in top_chord3:
+        u, w = u_idx[idx], hop3_idx[idx]
+        freq = edge_n_used[u, w]
+        if freq < 0.5:
+            discount = 0.08 * global_mean_dist / (1.0 + freq)
+            val = max(1e-6, updated_edge_distance[u, w] - discount)
+            updated_edge_distance[u, w] = val
+            updated_edge_distance[w, u] = val
+
+    return updated_edge_distance
+# ===== Eval Output =====
+[*] Running ...
+[*] mode=val, data=/home/ducanh/projects/EAs_project/MoH/problems/tsp_gls/data/val/val_instance_data_sol_100.pkl, seed=0, n_instances=8
+[*] instance_indices=[6, 9, 0, 2, 4, 3, 5, 1]
+[*] instance 6: obj=7.7599, gap=0.0039
+[*] instance 9: obj=8.0474, gap=0.0512
+[*] instance 0: obj=8.0001, gap=0.0000
+[*] instance 2: obj=8.0739, gap=0.0000
+[*] instance 4: obj=7.8131, gap=0.0000
+[*] instance 3: obj=7.3713, gap=0.0000
+[*] instance 5: obj=7.6365, gap=0.0000
+[*] instance 1: obj=7.5570, gap=0.0000
+[*] ave_gap on size 100: 0.006889034353174672
+0.006889034353174672

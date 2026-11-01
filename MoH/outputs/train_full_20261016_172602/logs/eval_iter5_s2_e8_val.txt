@@ -1,0 +1,112 @@
+# ===== Heuristic Code =====
+#{Transforms the metric landscape using spectral tour-Laplacian eigenvectors to identify high-frequency topological bottlenecks and warps the distance matrix via anisotropic directional potential fields combined with frequency-damped utility penalization.}#
+
+import numpy as np
+
+def update_edge_distance(edge_distance, local_opt_tour, edge_n_used):
+    updated_edge_distance = np.copy(edge_distance)
+    n = len(local_opt_tour)
+    tour = np.asarray(local_opt_tour, dtype=np.intp)
+
+    # 1. Decay memory usage smoothly
+    edge_n_used *= 0.95
+
+    # Tour edge indexers
+    u_idx = tour
+    v_idx = np.roll(tour, -1)
+
+    # 2. Spectral Analysis of the Tour Cycle Graph
+    # The normalized Laplacian eigenvectors of an n-cycle graph C_n can be computed analytically:
+    # High-frequency modes capture localized spatial fluctuations and topological bottlenecks.
+    # We construct projection coordinates along the top non-trivial spectral harmonics (high-frequency modes).
+    positions = np.empty(n, dtype=np.float64)
+    positions[tour] = np.arange(n, dtype=np.float64)
+
+    # Evaluate high-frequency Fourier modes of the tour sequence
+    k1 = n // 2
+    k2 = max(1, n // 3)
+    omega1 = 2.0 * np.pi * k1 / n
+    omega2 = 2.0 * np.pi * k2 / n
+
+    phi1 = np.cos(omega1 * positions)
+    psi1 = np.sin(omega1 * positions)
+    phi2 = np.cos(omega2 * positions)
+    psi2 = np.sin(omega2 * positions)
+
+    # Spectral vibrational energy at each node: measures local curvature/bottleneck in spectral embedding
+    spectral_energy = (phi1**2 + psi1**2 + phi2**2 + psi2**2)
+    # Spectral mismatch/gradient across tour edges
+    spectral_stress = np.abs(phi1[u_idx] - phi1[v_idx]) + np.abs(psi1[u_idx] - psi1[v_idx]) + \
+                      np.abs(phi2[u_idx] - phi2[v_idx]) + np.abs(psi2[u_idx] - psi2[v_idx])
+
+    # 3. Utility calculation balancing edge distance, frequency, and spectral topological stress
+    d_tour = edge_distance[u_idx, v_idx]
+    f_tour = edge_n_used[u_idx, v_idx]
+
+    mean_dist = np.mean(edge_distance)
+    std_dist = np.std(edge_distance) + 1e-8
+
+    norm_dist = d_tour / (mean_dist + 1e-8)
+    norm_stress = spectral_stress / (np.mean(spectral_stress) + 1e-8)
+
+    # Edges that are long and experience high spectral deformation are prime candidates for penalization
+    utilities = (norm_dist / (1.0 + f_tour)) * (1.0 + 0.40 * norm_stress)
+
+    # Select top edges to penalize
+    k_penalize = max(2, int(np.ceil(0.12 * n)))
+    worst_edges = np.argsort(utilities)[-k_penalize:]
+
+    base_penalty = 0.35 * mean_dist
+    for idx in worst_edges:
+        u, v = u_idx[idx], v_idx[idx]
+        edge_n_used[u, v] += 1.0
+        edge_n_used[v, u] += 1.0
+
+        freq_factor = 1.0 + np.log1p(edge_n_used[u, v])
+        stress_factor = 1.0 + 0.25 * norm_stress[idx]
+        pen = base_penalty * freq_factor * stress_factor
+
+        updated_edge_distance[u, v] += pen
+        updated_edge_distance[v, u] += pen
+
+    # 4. Metric Warping: Anisotropic Directional Potential Field
+    # Identify bottleneck nodes with maximum spectral energy and create dual-potential attractors
+    top_bottlenecks = np.argsort(spectral_energy)[-max(2, n // 8):]
+
+    # Distance matrix warping via low-rank potential outer product
+    potential_vector = np.zeros(n, dtype=np.float64)
+    potential_vector[top_bottlenecks] = 1.0
+
+    # Non-adjacent pairs crossing bottleneck regions receive a directional incentive to bridge partitions
+    w_idx = np.roll(tour, -2)
+    chord_dists = edge_distance[u_idx, w_idx]
+    detours = (d_tour + edge_distance[v_idx, w_idx]) / (chord_dists + 1e-8)
+    shortcut_candidates = np.argsort(detours)[-k_penalize:]
+
+    shortcut_discount = 0.12 * mean_dist
+    for idx in shortcut_candidates:
+        u, w = u_idx[idx], w_idx[idx]
+        f_uw = edge_n_used[u, w]
+        if f_uw < 1.0:
+            eff_discount = shortcut_discount / (1.0 + 0.5 * f_uw)
+            updated_edge_distance[u, w] = max(1e-6, updated_edge_distance[u, w] - eff_discount)
+            updated_edge_distance[w, u] = updated_edge_distance[u, w]
+
+    # Guarantee zero self-distance
+    np.fill_diagonal(updated_edge_distance, 0.0)
+
+    return updated_edge_distance
+# ===== Eval Output =====
+[*] Running ...
+[*] mode=val, data=/home/ducanh/projects/EAs_project/MoH/problems/tsp_gls/data/val/val_instance_data_sol_100.pkl, seed=0, n_instances=8
+[*] instance_indices=[6, 9, 0, 2, 4, 3, 5, 1]
+[*] instance 6: obj=7.7596, gap=0.0000
+[*] instance 9: obj=8.0433, gap=0.0000
+[*] instance 0: obj=8.0001, gap=0.0000
+[*] instance 2: obj=8.0900, gap=0.1994
+[*] instance 4: obj=7.8131, gap=0.0000
+[*] instance 3: obj=7.3713, gap=0.0000
+[*] instance 5: obj=7.6365, gap=0.0000
+[*] instance 1: obj=7.5570, gap=0.0000
+[*] ave_gap on size 100: 0.02492947982741245
+0.02492947982741245

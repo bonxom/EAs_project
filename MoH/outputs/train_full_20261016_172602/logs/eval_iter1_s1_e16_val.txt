@@ -1,0 +1,69 @@
+# ===== Heuristic Code =====
+#{This strategy focuses Guided Local Search by selectively penalizing only elite bottleneck edges ranked in the top quintile of normalized utility and applying boundary-clamped relative penalties alongside targeted incentive boosts for low-frequency alternate incident edges.}
+
+import numpy as np
+
+def update_edge_distance(edge_distance, local_opt_tour, edge_n_used):
+    updated_edge_distance = np.copy(edge_distance)
+    n = len(local_opt_tour)
+    if n < 4:
+        return updated_edge_distance
+
+    u_idx = np.array(local_opt_tour, dtype=np.intp)
+    v_idx = np.roll(u_idx, -1)
+
+    costs = edge_distance[u_idx, v_idx].astype(np.float64)
+    used = edge_n_used[u_idx, v_idx].astype(np.float64)
+
+    mean_cost = np.mean(costs)
+    std_cost = np.std(costs) + 1e-12
+
+    # Standardized GLS utility: penalize long edges that have been used infrequently
+    utility = (costs / (mean_cost + 1e-12)) / (1.0 + used)
+
+    # Focus strictly on top bottleneck edges (top 15-20% highest utility, at least 1, at most n//4)
+    k_penalize = max(1, min(n // 4, int(np.ceil(0.15 * n))))
+    top_indices = np.argpartition(utility, -k_penalize)[-k_penalize:]
+
+    p_u = u_idx[top_indices]
+    p_v = v_idx[top_indices]
+    p_costs = costs[top_indices]
+    p_used = used[top_indices]
+
+    # Calculate proportional penalties guarded by standard deviation scaling
+    penalty_scale = 0.35 * std_cost
+    penalties = penalty_scale * (1.0 + (p_costs / (mean_cost + 1e-12))) / (1.0 + np.sqrt(p_used))
+
+    # Apply symmetric penalty updates
+    updated_edge_distance[p_u, p_v] += penalties
+    updated_edge_distance[p_v, p_u] += penalties
+
+    # Targeted elite repair: reward pristine, untried alternative edges adjacent to bottleneck vertices
+    critical_nodes = np.unique(np.concatenate((p_u, p_v)))
+    for node in critical_nodes:
+        node_usage = edge_n_used[node]
+        zero_used_mask = (node_usage == 0)
+        zero_used_mask[node] = False
+
+        if np.any(zero_used_mask):
+            current_vals = updated_edge_distance[node, zero_used_mask]
+            # Clamped reduction to prevent negative or distorted costs
+            reduction = np.minimum(current_vals * 0.015, 0.1 * std_cost)
+            updated_edge_distance[node, zero_used_mask] -= reduction
+            updated_edge_distance[zero_used_mask, node] = updated_edge_distance[node, zero_used_mask]
+
+    return updated_edge_distance
+# ===== Eval Output =====
+[*] Running ...
+[*] mode=val, data=/home/ducanh/projects/EAs_project/MoH/problems/tsp_gls/data/val/val_instance_data_sol_50.pkl, seed=0, n_instances=8
+[*] instance_indices=[6, 9, 0, 2, 4, 3, 5, 1]
+[*] instance 6: obj=5.7136, gap=0.5983
+[*] instance 9: obj=6.0217, gap=0.9695
+[*] instance 0: obj=5.8546, gap=1.3193
+[*] instance 2: obj=5.8274, gap=0.3500
+[*] instance 4: obj=5.5821, gap=3.4387
+[*] instance 3: obj=5.8806, gap=2.1487
+[*] instance 5: obj=5.6187, gap=0.0000
+[*] instance 1: obj=5.3071, gap=2.7501
+[*] ave_gap on size 50: 1.4468332571976243
+1.4468332571976243

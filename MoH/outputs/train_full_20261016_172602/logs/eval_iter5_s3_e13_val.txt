@@ -1,0 +1,74 @@
+# ===== Heuristic Code =====
+#{Replaces the rigid 75th percentile hard cutoff with an adaptive, continuous utility function scaling edges exponentially based on normalized GLS utility and local topological replacement slack.}#
+
+import numpy as np
+
+def update_edge_distance(edge_distance, local_opt_tour, edge_n_used):
+    updated_edge_distance = np.copy(edge_distance)
+    n = len(local_opt_tour)
+
+    # Characterize local topological density via k-NN
+    sorted_dists = np.sort(edge_distance, axis=1)
+    k_nn_avg = np.mean(sorted_dists[:, 1:min(6, n)], axis=1)
+    node_density = 1.0 / (k_nn_avg + 1e-6)
+    node_density = node_density / np.mean(node_density)
+
+    # Tour edge indexing
+    u_idx = local_opt_tour
+    v_idx = np.roll(local_opt_tour, -1)
+
+    tour_edge_lengths = edge_distance[u_idx, v_idx]
+    edge_counts = edge_n_used[u_idx, v_idx]
+
+    # Baseline relative edge length and smooth rank-based penalty
+    avg_tour_length = np.mean(tour_edge_lengths)
+    std_tour_length = np.std(tour_edge_lengths) + 1e-6
+    relative_length = tour_edge_lengths / (avg_tour_length + 1e-6)
+    rank_penalty = 1.0 / (1.0 + np.exp(-4.0 * (relative_length - 1.0)))
+
+    # Usage dampening and density factor
+    usage_factor = 1.0 / (1.0 + 0.3 * edge_counts)
+    density_factor = 0.5 * (node_density[u_idx] + node_density[v_idx])
+    local_penalty = relative_length * usage_factor * density_factor
+
+    # Dynamic blending between global rank and local context
+    freq_mean = np.mean(edge_counts)
+    w_global = 0.6 / (1.0 + 0.1 * freq_mean)
+    w_local = 1.0 - w_global
+    combined_penalty = w_global * rank_penalty + w_local * local_penalty
+
+    # Guided Guided Local Search (GLS) utility: u(e) = c_e / (1 + p_e)
+    gls_utility = tour_edge_lengths / (1.0 + edge_counts)
+    mean_gls = np.mean(gls_utility)
+    std_gls = np.std(gls_utility) + 1e-6
+    z_gls = (gls_utility - mean_gls) / std_gls
+
+    # Topological slack: potential improvement relative to nearest neighbor alternative connections
+    # Min edge length out of u and v (excluding each other) represents lower-bound alternative cost
+    min_alt_u = sorted_dists[u_idx, 1]
+    min_alt_v = sorted_dists[v_idx, 1]
+    slack = np.maximum(0.0, tour_edge_lengths - 0.5 * (min_alt_u + min_alt_v)) / (std_tour_length)
+
+    # Adaptive soft-clipping multiplier based on utility z-score and replacement slack
+    soft_boost = 1.0 + np.tanh(np.maximum(0.0, z_gls) * (1.0 + slack))
+    combined_penalty = combined_penalty * soft_boost
+
+    # Apply symmetric updates
+    np.add.at(updated_edge_distance, (u_idx, v_idx), combined_penalty)
+    np.add.at(updated_edge_distance, (v_idx, u_idx), combined_penalty)
+
+    return updated_edge_distance
+# ===== Eval Output =====
+[*] Running ...
+[*] mode=val, data=/home/ducanh/projects/EAs_project/MoH/problems/tsp_gls/data/val/val_instance_data_sol_200.pkl, seed=0, n_instances=8
+[*] instance_indices=[6, 9, 0, 2, 4, 3, 5, 1]
+[*] instance 6: obj=10.4509, gap=0.0489
+[*] instance 9: obj=10.6868, gap=0.2227
+[*] instance 0: obj=10.8879, gap=0.0201
+[*] instance 2: obj=10.9761, gap=0.2588
+[*] instance 4: obj=10.8671, gap=0.1835
+[*] instance 3: obj=10.6134, gap=0.1087
+[*] instance 5: obj=10.8907, gap=0.0654
+[*] instance 1: obj=11.0660, gap=0.3794
+[*] ave_gap on size 200: 0.16094355831082485
+0.16094355831082485

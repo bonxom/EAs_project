@@ -1,0 +1,22 @@
+__pycache__/
+*.pyc
+*.pyo
+.env
+*.ipynb_checkpoints
+.uv/
+.venv/
+.envrc
+
+# Experiment artifacts (logs, runs, checkpoints) are not committed
+outputs/
+logs/
+*.log
+*.jsonl
+*_retry*.log
+overnight_*.log
+stage2b_*.log
+stage3_*.log
+dualhifo_*.log
+inner44_retry*.log
+outer44_retry*.log
+lam_*.log

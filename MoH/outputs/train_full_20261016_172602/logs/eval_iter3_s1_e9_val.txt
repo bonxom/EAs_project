@@ -1,0 +1,74 @@
+# ===== Heuristic Code =====
+#{An intensification-focused Guided Local Search edge penalty heuristic that dynamically couples tour cost quartiles with sub-linear frequency dampening and vectorized multi-scale discount of high-potential unused incident edges.}#
+
+import numpy as np
+
+def update_edge_distance(edge_distance, local_opt_tour, edge_n_used):
+    updated_edge_distance = np.copy(edge_distance)
+
+    u_idx = np.array(local_opt_tour, dtype=np.intp)
+    v_idx = np.roll(u_idx, -1)
+
+    costs = edge_distance[u_idx, v_idx].astype(np.float64)
+    used = edge_n_used[u_idx, v_idx].astype(np.float64)
+
+    # Statistical normalization of current tour edges
+    mean_cost = np.mean(costs)
+    std_cost = np.std(costs) + 1e-8
+    z_scores = (costs - mean_cost) / std_cost
+
+    # Sigmoidal cost weight combined with sub-linear frequency damping
+    weights = 1.0 / (1.0 + np.exp(-z_scores))
+    utilities = (costs * (1.0 + weights)) / np.sqrt(1.0 + used)
+
+    # Select edges above 65th percentile utility for focused intensification
+    threshold = np.percentile(utilities, 65.0)
+    penalize_mask = utilities >= threshold
+
+    p_u = u_idx[penalize_mask]
+    p_v = v_idx[penalize_mask]
+    p_costs = costs[penalize_mask]
+    p_used = used[penalize_mask]
+    p_utils = utilities[penalize_mask]
+
+    max_util = np.max(utilities) + 1e-8
+
+    # Adaptive penalty scaling based on normalized utility saturation
+    penalty_scale = 1.0 + (p_utils / max_util)
+    penalties = (p_costs / (1.0 + np.sqrt(p_used + 1.0))) * penalty_scale
+
+    # Apply symmetric penalties to current tour's critical edges
+    updated_edge_distance[p_u, p_v] += penalties
+    updated_edge_distance[p_v, p_u] += penalties
+
+    # Intensify exploration of promising alternative connections incident to penalized nodes
+    penalized_nodes = np.unique(np.concatenate((p_u, p_v)))
+    decay_ratio = 0.025
+
+    for u in penalized_nodes:
+        unused_mask = (edge_n_used[u] == 0)
+        unused_mask[u] = False
+        if np.any(unused_mask):
+            cand_costs = updated_edge_distance[u, unused_mask]
+            # Prioritize discounting shorter alternative unused incident edges
+            cand_mean = np.mean(cand_costs)
+            favor_factor = np.clip(cand_mean / (cand_costs + 1e-8), 0.5, 2.0)
+            reduction = cand_costs * (decay_ratio * favor_factor)
+            updated_edge_distance[u, unused_mask] -= reduction
+            updated_edge_distance[unused_mask, u] = updated_edge_distance[u, unused_mask]
+
+    return updated_edge_distance
+# ===== Eval Output =====
+[*] Running ...
+[*] mode=val, data=/home/ducanh/projects/EAs_project/MoH/problems/tsp_gls/data/val/val_instance_data_sol_50.pkl, seed=0, n_instances=8
+[*] instance_indices=[6, 9, 0, 2, 4, 3, 5, 1]
+[*] instance 6: obj=5.7136, gap=0.5983
+[*] instance 9: obj=5.9639, gap=0.0000
+[*] instance 0: obj=5.7783, gap=0.0000
+[*] instance 2: obj=5.8071, gap=0.0000
+[*] instance 4: obj=5.3965, gap=0.0000
+[*] instance 3: obj=5.7965, gap=0.6889
+[*] instance 5: obj=5.6492, gap=0.5441
+[*] instance 1: obj=5.1651, gap=0.0000
+[*] ave_gap on size 50: 0.22891188343139857
+0.22891188343139857

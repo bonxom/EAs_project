@@ -1,0 +1,59 @@
+# ===== Heuristic Code =====
+#{Radical ruin-and-recreate Guided Local Search that identifies top-utility structural bottlenecks and cross-cluster bridges via k-NN graph connectivity to apply sharp, discrete penalty shocks while preserving intra-cluster foundations.}
+
+import numpy as np
+
+def update_edge_distance(edge_distance, local_opt_tour, edge_n_used):
+    updated_edge_distance = np.copy(edge_distance)
+    n = len(local_opt_tour)
+
+    u_idx = local_opt_tour
+    v_idx = np.roll(local_opt_tour, -1)
+
+    # Extract distances and historical usage frequencies along the tour
+    tour_dists = edge_distance[u_idx, v_idx]
+    tour_uses = edge_n_used[u_idx, v_idx]
+
+    # Determine the k-nearest neighbor distance horizon for each node (approximating spatial clusters)
+    k = min(8, max(3, n // 10))
+    sorted_dists = np.sort(edge_distance, axis=1)
+    knn_boundary = sorted_dists[:, k]
+
+    # Identify bridge/bottleneck edges: edges longer than the local k-NN boundaries of their endpoints
+    is_bridge = (tour_dists > knn_boundary[u_idx]) & (tour_dists > knn_boundary[v_idx])
+    bridge_factor = np.where(is_bridge, 1.8, 0.8)
+
+    # Guided Local Search utility calculation: penalize edges with high cost per unit of prior usage
+    # Normalized by the mean tour distance to maintain scale independence
+    mean_dist = np.mean(tour_dists) + 1e-8
+    norm_dist = tour_dists / mean_dist
+    gls_utility = (norm_dist * bridge_factor) / (1.0 + 0.5 * tour_uses)
+
+    # Structural Ruin: Target top percentile of high-utility bottleneck edges for strong discrete perturbation
+    # Deterministic thresholding to strictly target the most sub-optimal structural segments
+    ruin_cutoff = np.percentile(gls_utility, 70)
+    ruin_mask = gls_utility >= ruin_cutoff
+
+    # Apply scaled discrete penalty proportional to both utility and edge length
+    penalty = 0.35 * mean_dist * (1.0 + gls_utility)
+    penalty[ruin_mask] *= 2.2
+
+    # In-place symmetric edge distance augmentation
+    np.add.at(updated_edge_distance, (u_idx, v_idx), penalty)
+    np.add.at(updated_edge_distance, (v_idx, u_idx), penalty)
+
+    return updated_edge_distance
+# ===== Eval Output =====
+[*] Running ...
+[*] mode=val, data=/home/ducanh/projects/EAs_project/MoH/problems/tsp_gls/data/val/val_instance_data_sol_200.pkl, seed=0, n_instances=8
+[*] instance_indices=[6, 9, 0, 2, 4, 3, 5, 1]
+[*] instance 6: obj=10.5376, gap=0.8782
+[*] instance 9: obj=10.8618, gap=1.8645
+[*] instance 0: obj=10.9431, gap=0.5273
+[*] instance 2: obj=10.9692, gap=0.1961
+[*] instance 4: obj=10.9143, gap=0.6188
+[*] instance 3: obj=10.6607, gap=0.5548
+[*] instance 5: obj=11.0024, gap=1.0916
+[*] instance 1: obj=11.1323, gap=0.9804
+[*] ave_gap on size 200: 0.8389478916790594
+0.8389478916790594

@@ -1,0 +1,63 @@
+# ===== Heuristic Code =====
+#{Dynamically adapt edge penalty thresholds and multiplier intensities based on the tour length coefficient of variation, replacing rigid percentile cutoffs with distribution-aware guided local search penalties.}#
+
+import numpy as np
+
+def update_edge_distance(edge_distance, local_opt_tour, edge_n_used):
+    updated_edge_distance = np.copy(edge_distance)
+    n = len(local_opt_tour)
+
+    # Invariable Core: k-NN local distance normalization for neighborhood density
+    sorted_dists = np.sort(edge_distance, axis=1)
+    k_nn_avg = np.mean(sorted_dists[:, 1:min(6, n)], axis=1)
+    node_density = 1.0 / (k_nn_avg + 1e-6)
+    node_density = node_density / np.mean(node_density)
+
+    u_idx = local_opt_tour
+    v_idx = np.roll(local_opt_tour, -1)
+    tour_edge_lengths = edge_distance[u_idx, v_idx]
+
+    avg_tour_length = np.mean(tour_edge_lengths)
+    std_tour_length = np.std(tour_edge_lengths)
+    cv = std_tour_length / (avg_tour_length + 1e-6)
+
+    relative_length = tour_edge_lengths / (avg_tour_length + 1e-6)
+    rank_penalty = 1.0 / (1.0 + np.exp(-4.0 * (relative_length - 1.0)))
+
+    # Invariable Core: Hyperbolic/inverse-decay usage counter
+    usage_factor = 1.0 / (1.0 + 0.3 * edge_n_used[u_idx, v_idx])
+    density_factor = 0.5 * (node_density[u_idx] + node_density[v_idx])
+    local_penalty = relative_length * usage_factor * density_factor
+
+    freq_mean = np.mean(edge_n_used[u_idx, v_idx])
+    w_global = 0.6 / (1.0 + 0.1 * freq_mean)
+    w_local = 1.0 - w_global
+    combined_penalty = w_global * rank_penalty + w_local * local_penalty
+
+    # Differential Recreate: Dynamic percentile and multiplier adaptation using CV
+    adaptive_percentile = np.clip(75.0 - 15.0 * cv, 50.0, 85.0)
+    boost_multiplier = 1.25 + 0.25 * cv
+    threshold = np.percentile(tour_edge_lengths, adaptive_percentile)
+
+    high_penalty_mask = tour_edge_lengths >= threshold
+    combined_penalty[high_penalty_mask] *= boost_multiplier
+
+    # Invariable Core: Symmetric in-place distance penalty accumulation
+    np.add.at(updated_edge_distance, (u_idx, v_idx), combined_penalty)
+    np.add.at(updated_edge_distance, (v_idx, u_idx), combined_penalty)
+
+    return updated_edge_distance
+# ===== Eval Output =====
+[*] Running ...
+[*] mode=val, data=/home/ducanh/projects/EAs_project/MoH/problems/tsp_gls/data/val/val_instance_data_sol_200.pkl, seed=0, n_instances=8
+[*] instance_indices=[6, 9, 0, 2, 4, 3, 5, 1]
+[*] instance 6: obj=10.4508, gap=0.0477
+[*] instance 9: obj=10.6803, gap=0.1620
+[*] instance 0: obj=10.8991, gap=0.1232
+[*] instance 2: obj=10.9777, gap=0.2729
+[*] instance 4: obj=10.8619, gap=0.1359
+[*] instance 3: obj=10.6209, gap=0.1797
+[*] instance 5: obj=10.8976, gap=0.1286
+[*] instance 1: obj=11.0714, gap=0.4283
+[*] ave_gap on size 200: 0.18479556864826052
+0.18479556864826052

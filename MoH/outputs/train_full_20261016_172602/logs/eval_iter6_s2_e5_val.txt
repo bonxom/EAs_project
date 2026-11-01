@@ -1,0 +1,101 @@
+# ===== Heuristic Code =====
+#{A radical Pareto-rank guided penalty framework that deconstructs the tour into adaptive geometric triplets, allocating asymmetric stress-proportionate penalties to the longer, inefficient edges while applying non-distorting, baseline-bounded negative incentives to Pareto-efficient shortcut chords with localized density scaling.}#
+
+import numpy as np
+
+def update_edge_distance(edge_distance, local_opt_tour, edge_n_used):
+    updated_edge_distance = np.copy(edge_distance)
+    num_nodes = len(local_opt_tour)
+    tour = np.asarray(local_opt_tour)
+
+    # 1. Aging of edge usage memory
+    edge_n_used *= 0.96
+
+    # 2. Vectorized geometric triplet extraction: (u -> v -> w)
+    u_idx = tour
+    v_idx = np.roll(tour, -1)
+    w_idx = np.roll(tour, -2)
+
+    d_uv = edge_distance[u_idx, v_idx]
+    d_vw = edge_distance[v_idx, w_idx]
+    d_uw = edge_distance[u_idx, w_idx]
+
+    # Detour ratio and turn angle geometry
+    detour_ratio = (d_uv + d_vw) / (d_uw + 1e-8)
+    denom = 2.0 * d_uv * d_vw + 1e-8
+    cos_turn = np.clip((d_uv**2 + d_vw**2 - d_uw**2) / denom, -1.0, 1.0)
+    acute_deficit = 1.0 - cos_turn
+    triplet_inefficiency = detour_ratio * (1.0 + 0.45 * acute_deficit)
+
+    # 3. Dynamic instance density scaling (local node neighborhood dispersion)
+    local_scale = 0.5 * (np.mean(edge_distance[u_idx], axis=1) + np.mean(edge_distance[v_idx], axis=1))
+    global_mean_dist = np.mean(edge_distance)
+    density_scale = local_scale / (global_mean_dist + 1e-8)
+
+    # 4. Asymmetric Edge-Stress Utility Computation
+    # Decompose triplet inefficiency onto individual edges proportionally to length
+    stress_uv = triplet_inefficiency * (d_uv / (d_uv + d_vw + 1e-8))
+    stress_vw = triplet_inefficiency * (d_vw / (d_uv + d_vw + 1e-8))
+    edge_geom_stress = stress_uv + np.roll(stress_vw, 1)
+
+    f_uv = edge_n_used[u_idx, v_idx]
+    utilities = (d_uv / (1.0 + f_uv)) * (1.0 + 0.40 * edge_geom_stress) / (0.5 + 0.5 * density_scale)
+
+    # Dynamic cardinality selection based on variance of tour edge lengths
+    d_std_ratio = np.std(d_uv) / (np.mean(d_uv) + 1e-8)
+    dynamic_ratio = np.clip(0.10 + 0.08 * d_std_ratio, 0.08, 0.22)
+    k = max(2, int(np.ceil(dynamic_ratio * num_nodes)))
+
+    # 5. Targeted Asymmetric Penalization
+    top_k_edges = np.argsort(utilities)[-k:]
+    base_lambda = 0.32 * global_mean_dist
+
+    for idx in top_k_edges:
+        u, v = u_idx[idx], v_idx[idx]
+        edge_n_used[u, v] += 1.0
+        edge_n_used[v, u] += 1.0
+
+        freq_damping = 1.0 + np.log1p(edge_n_used[u, v])
+        geom_mod = 1.0 + 0.35 * edge_geom_stress[idx]
+        penalty = base_lambda * freq_damping * geom_mod * density_scale[idx]
+
+        updated_edge_distance[u, v] += penalty
+        updated_edge_distance[v, u] += penalty
+
+    # 6. Pareto-Efficient Chord Inversion (Safe, baseline-bounded chord incentives)
+    # Target promising chords (u, w) where shortcut is substantially shorter than perimeter (u-v-w)
+    shortcut_advantage = (d_uv + d_vw) - d_uw
+    valid_chord_mask = (shortcut_advantage > 0.0) & (edge_n_used[u_idx, w_idx] < 1.0)
+
+    chord_scores = np.where(valid_chord_mask, shortcut_advantage / (d_uw + 1e-8), -1.0)
+    top_chord_indices = np.argsort(chord_scores)[-k:]
+
+    for idx in top_chord_indices:
+        if chord_scores[idx] <= 0.0:
+            continue
+        u, w = u_idx[idx], w_idx[idx]
+        orig_dist = edge_distance[u, w]
+        # Strictly lower-bound discount so distance never drops below 85% of original metric distance
+        max_discount = 0.15 * orig_dist
+        candidate_discount = 0.08 * global_mean_dist / (1.0 + edge_n_used[u, w])
+        effective_discount = min(candidate_discount, max_discount)
+
+        new_val = max(orig_dist - effective_discount, 0.85 * orig_dist)
+        updated_edge_distance[u, w] = new_val
+        updated_edge_distance[w, u] = new_val
+
+    return updated_edge_distance
+# ===== Eval Output =====
+[*] Running ...
+[*] mode=val, data=/home/ducanh/projects/EAs_project/MoH/problems/tsp_gls/data/val/val_instance_data_sol_100.pkl, seed=0, n_instances=8
+[*] instance_indices=[6, 9, 0, 2, 4, 3, 5, 1]
+[*] instance 6: obj=7.7627, gap=0.0399
+[*] instance 9: obj=8.0474, gap=0.0512
+[*] instance 0: obj=8.0001, gap=0.0000
+[*] instance 2: obj=8.0843, gap=0.1290
+[*] instance 4: obj=7.8131, gap=0.0000
+[*] instance 3: obj=7.3713, gap=0.0000
+[*] instance 5: obj=7.6365, gap=0.0000
+[*] instance 1: obj=7.5570, gap=0.0000
+[*] ave_gap on size 100: 0.027526957611978542
+0.027526957611978542

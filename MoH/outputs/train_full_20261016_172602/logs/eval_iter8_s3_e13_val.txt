@@ -1,0 +1,71 @@
+# ===== Heuristic Code =====
+#{Adaptively penalizes tour edges using non-monotonic stagnation-depth scaling modulated by sinusoidal decay and Pareto-front rank scores balancing edge cost against 2-hop bridge potential.}#
+
+import numpy as np
+
+def update_edge_distance(edge_distance, local_opt_tour, edge_n_used):
+    updated_edge_distance = np.copy(edge_distance)
+    n = len(local_opt_tour)
+    if n < 4:
+        return updated_edge_distance
+
+    u_idx = local_opt_tour
+    v_idx = np.roll(local_opt_tour, -1)
+
+    tour_edge_lengths = edge_distance[u_idx, v_idx]
+    edge_counts = edge_n_used[u_idx, v_idx]
+
+    # Measure search stagnation depth from edge repetition intensity
+    mean_count = np.mean(edge_counts)
+    max_count = np.max(edge_counts)
+    stagnation_ratio = mean_count / (max_count + 1.0)
+
+    # Non-monotonic adaptive scaling: oscillates and scales with stagnation depth
+    # allowing periodic intensification and diversification cycles
+    cycle_phase = (mean_count * 0.75) % (2.0 * np.pi)
+    adaptive_scale = (0.5 + 0.5 * np.sin(cycle_phase)) * (1.0 + 2.0 * stagnation_ratio)
+
+    # Dynamic 2-hop bridge potential: evaluates whether bypassing edge (u, v) via an alternative
+    # vertex w offers high detour efficiency relative to edge length
+    u_prev = np.roll(local_opt_tour, 1)
+    v_next = np.roll(local_opt_tour, -2)
+    two_hop_alt = edge_distance[u_prev, v_idx] + edge_distance[u_idx, v_next]
+    bridge_potential = two_hop_alt / (2.0 * tour_edge_lengths + 1e-6)
+
+    # Pareto-front ranking: objective 1 = normalized edge cost; objective 2 = bridge potential
+    norm_cost = tour_edge_lengths / (np.max(tour_edge_lengths) + 1e-6)
+    norm_bridge = bridge_potential / (np.max(bridge_potential) + 1e-6)
+
+    # Pareto dominance count among tour edges
+    diff_cost = norm_cost[:, None] - norm_cost[None, :]
+    diff_bridge = norm_bridge[:, None] - norm_bridge[None, :]
+    dominated_matrix = (diff_cost < 0) & (diff_bridge <= 0) | ((diff_cost <= 0) & (diff_bridge < 0))
+    domination_count = np.sum(dominated_matrix, axis=1).astype(np.float64)
+    pareto_rank_score = 1.0 / (1.0 + domination_count)
+
+    # Standard GLS utility denominator discount
+    gls_utility = tour_edge_lengths / (1.0 + edge_counts)
+    norm_gls = gls_utility / (np.mean(gls_utility) + 1e-6)
+
+    # Compute combined non-monotonic step size
+    base_step = np.mean(tour_edge_lengths) * 0.15
+    penalty_magnitude = base_step * adaptive_scale * norm_gls * pareto_rank_score
+
+    np.add.at(updated_edge_distance, (u_idx, v_idx), penalty_magnitude)
+    np.add.at(updated_edge_distance, (v_idx, u_idx), penalty_magnitude)
+
+    return updated_edge_distance
+# ===== Eval Output =====
+[*] Running ...
+[*] mode=val, data=/home/ducanh/projects/EAs_project/MoH/problems/tsp_gls/data/val/val_instance_data_sol_200.pkl, seed=0, n_instances=8
+[*] instance_indices=[6, 9, 0, 2, 4, 3, 5, 1]
+[*] instance 6: obj=10.8470, gap=3.8409
+[*] instance 9: obj=11.0360, gap=3.4977
+[*] instance 0: obj=11.4340, gap=5.0367
+[*] instance 2: obj=11.2272, gap=2.5526
+[*] instance 4: obj=11.3402, gap=4.5454
+[*] instance 3: obj=10.8664, gap=2.4950
+[*] instance 5: obj=11.3787, gap=4.5497
+[*] instance 1: obj=11.4935, gap=4.2570
+[*] ave_gap on size 200: 3.8468834437989567
+3.8468834437989567

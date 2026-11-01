@@ -1,0 +1,70 @@
+# ===== Heuristic Code =====
+#{Preserve the dual global-local penalty framework with k-NN density and usage discounting, but sharply suppress penalty application on edges below the median length to concentrate perturbation pressure onto long, sub-optimal edges and force structural reconfiguration.}#
+
+import numpy as np
+
+def update_edge_distance(edge_distance, local_opt_tour, edge_n_used):
+    updated_edge_distance = np.copy(edge_distance)
+    n = len(local_opt_tour)
+
+    # Precompute k-NN node density
+    sorted_dists = np.sort(edge_distance, axis=1)
+    k_nn_avg = np.mean(sorted_dists[:, 1:min(6, n)], axis=1)
+    node_density = 1.0 / (k_nn_avg + 1e-6)
+    node_density = node_density / (np.mean(node_density) + 1e-6)
+
+    # Extract current tour edge endpoints and lengths
+    u_idx = local_opt_tour
+    v_idx = np.roll(local_opt_tour, -1)
+    tour_edge_lengths = edge_distance[u_idx, v_idx]
+
+    # Sparsified sharp-threshold activation: completely suppress edges below median
+    median_length = np.median(tour_edge_lengths)
+    active_mask = tour_edge_lengths >= median_length
+
+    if not np.any(active_mask):
+        return updated_edge_distance
+
+    avg_tour_length = np.mean(tour_edge_lengths)
+    relative_length = tour_edge_lengths / (avg_tour_length + 1e-6)
+
+    # Core invariant: logistic rank penalty
+    rank_penalty = 1.0 / (1.0 + np.exp(-4.0 * (relative_length - 1.0)))
+
+    # Frequency usage decay and endpoint density scaling
+    usage_factor = 1.0 / (1.0 + 0.3 * edge_n_used[u_idx, v_idx])
+    density_factor = 0.5 * (node_density[u_idx] + node_density[v_idx])
+    local_penalty = relative_length * usage_factor * density_factor
+
+    # Adaptive global-local blending based on average edge usage
+    freq_mean = np.mean(edge_n_used[u_idx, v_idx])
+    w_global = 0.6 / (1.0 + 0.1 * freq_mean)
+    w_local = 1.0 - w_global
+    combined_penalty = w_global * rank_penalty + w_local * local_penalty
+
+    # Selective top-quartile amplification
+    threshold_75 = np.percentile(tour_edge_lengths, 75)
+    combined_penalty[tour_edge_lengths >= threshold_75] *= 1.5
+
+    # Zero out penalties for sub-median edges to avoid diluting contrast
+    combined_penalty[~active_mask] = 0.0
+
+    # Symmetric distance update
+    np.add.at(updated_edge_distance, (u_idx, v_idx), combined_penalty)
+    np.add.at(updated_edge_distance, (v_idx, u_idx), combined_penalty)
+
+    return updated_edge_distance
+# ===== Eval Output =====
+[*] Running ...
+[*] mode=val, data=/home/ducanh/projects/EAs_project/MoH/problems/tsp_gls/data/val/val_instance_data_sol_200.pkl, seed=0, n_instances=8
+[*] instance_indices=[6, 9, 0, 2, 4, 3, 5, 1]
+[*] instance 6: obj=10.4648, gap=0.1817
+[*] instance 9: obj=10.6787, gap=0.1467
+[*] instance 0: obj=10.8879, gap=0.0201
+[*] instance 2: obj=10.9682, gap=0.1865
+[*] instance 4: obj=10.9051, gap=0.5345
+[*] instance 3: obj=10.6207, gap=0.1778
+[*] instance 5: obj=10.9219, gap=0.3523
+[*] instance 1: obj=11.0789, gap=0.4963
+[*] ave_gap on size 200: 0.2619828719245043
+0.2619828719245043

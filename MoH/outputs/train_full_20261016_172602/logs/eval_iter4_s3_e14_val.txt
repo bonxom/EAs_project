@@ -1,0 +1,82 @@
+# ===== Heuristic Code =====
+#{Penalizes local optimum tour edges using asymmetric bottleneck-aware density coupling via mutual reachability bridging, harmonic endpoint density, and usage dampening to break low-density cluster bridges.}
+
+import numpy as np
+
+def update_edge_distance(edge_distance, local_opt_tour, edge_n_used):
+    updated_edge_distance = np.copy(edge_distance)
+    n = len(local_opt_tour)
+
+    # Compute core distance for each node based on k-th nearest neighbor (k ~ min(6, n-1))
+    k = min(5, n - 1)
+    if k >= 1:
+        # Partition to find k-th smallest distance efficiently
+        k_dists = np.partition(edge_distance, k, axis=1)[:, k]
+    else:
+        k_dists = np.zeros(n)
+
+    u_idx = local_opt_tour
+    v_idx = np.roll(local_opt_tour, -1)
+
+    tour_edge_lengths = edge_distance[u_idx, v_idx]
+    core_u = k_dists[u_idx]
+    core_v = k_dists[v_idx]
+
+    # Mutual reachability distance: max(core_dist(u), core_dist(v), d(u, v))
+    mutual_reachability = np.maximum(np.maximum(core_u, core_v), tour_edge_lengths)
+
+    # Bottleneck bridge ratio: measures how much the edge acts as a sparse bridge between clusters
+    min_core = np.minimum(core_u, core_v) + 1e-6
+    max_core = np.maximum(core_u, core_v) + 1e-6
+    disparity_factor = max_core / min_core
+    bottleneck_score = (mutual_reachability / (min_core + 1e-6)) * np.log1p(disparity_factor)
+
+    # Harmonic mean of local densities (low density endpoints yield higher escape priority)
+    density_u = 1.0 / (core_u + 1e-6)
+    density_v = 1.0 / (core_v + 1e-6)
+    harmonic_density = 2.0 / (core_u + core_v + 1e-6)
+    avg_harmonic_density = np.mean(harmonic_density) + 1e-6
+    normalized_gap_penalty = avg_harmonic_density / (harmonic_density + 1e-6)
+
+    # Tour length scaling and rank penalty
+    avg_tour_length = np.mean(tour_edge_lengths) + 1e-6
+    relative_length = tour_edge_lengths / avg_tour_length
+    rank_penalty = 1.0 / (1.0 + np.exp(-4.0 * (relative_length - 1.0)))
+
+    # Frequency dampening
+    usage_factor = 1.0 / (1.0 + 0.3 * edge_n_used[u_idx, v_idx])
+
+    # Combined bridge-aware local penalty
+    bridge_factor = 1.0 + 0.5 * np.tanh(bottleneck_score)
+    local_penalty = relative_length * usage_factor * normalized_gap_penalty * bridge_factor
+
+    # Dynamic weighting between relative rank and bottleneck gap penalty
+    freq_mean = np.mean(edge_n_used[u_idx, v_idx])
+    w_global = 0.5 / (1.0 + 0.08 * freq_mean)
+    w_local = 1.0 - w_global
+
+    combined_penalty = w_global * rank_penalty + w_local * local_penalty
+
+    # Emphasize upper quartile edges with high bottleneck impact
+    threshold = np.percentile(tour_edge_lengths, 75)
+    combined_penalty[tour_edge_lengths >= threshold] *= 1.4
+
+    # Symmetric penalization
+    np.add.at(updated_edge_distance, (u_idx, v_idx), combined_penalty)
+    np.add.at(updated_edge_distance, (v_idx, u_idx), combined_penalty)
+
+    return updated_edge_distance
+# ===== Eval Output =====
+[*] Running ...
+[*] mode=val, data=/home/ducanh/projects/EAs_project/MoH/problems/tsp_gls/data/val/val_instance_data_sol_200.pkl, seed=0, n_instances=8
+[*] instance_indices=[6, 9, 0, 2, 4, 3, 5, 1]
+[*] instance 6: obj=10.4530, gap=0.0690
+[*] instance 9: obj=10.6877, gap=0.2311
+[*] instance 0: obj=10.8947, gap=0.0821
+[*] instance 2: obj=10.9985, gap=0.4633
+[*] instance 4: obj=10.8991, gap=0.4791
+[*] instance 3: obj=10.6134, gap=0.1087
+[*] instance 5: obj=10.9520, gap=0.6285
+[*] instance 1: obj=11.0847, gap=0.5489
+[*] ave_gap on size 200: 0.3263482340232049
+0.3263482340232049

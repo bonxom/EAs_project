@@ -1,0 +1,80 @@
+# ===== Heuristic Code =====
+#{We introduce a multi-scale memory evaporation mechanism that decays accumulated modifications toward baseline costs across non-active edges while adaptively penalizing dominant local tour edges with search-depth-scaled penalties and selectively promoting low-utilization incident alternatives.}#
+
+import numpy as np
+
+def update_edge_distance(edge_distance, local_opt_tour, edge_n_used):
+    # Step 1: Create an explicit copy to prevent modifying the original matrix
+    updated_edge_distance = np.copy(edge_distance).astype(np.float64)
+    n = len(local_opt_tour)
+    if n <= 1:
+        return updated_edge_distance
+
+    # Step 2: Global memory evaporation across edges that have accumulated excess distance
+    # Evaporates accumulated penalties back towards baseline to prevent runaway inflation
+    total_searched_steps = np.sum(edge_n_used) / 2.0
+    evaporation_rate = 0.05
+    diff = updated_edge_distance - edge_distance
+    pos_mask = diff > 0.0
+    if np.any(pos_mask):
+        updated_edge_distance[pos_mask] -= diff[pos_mask] * evaporation_rate
+
+    # Step 3: Extract tour edges and calculate dual Guided Local Search utilities
+    u_idx = np.array(local_opt_tour, dtype=np.intp)
+    v_idx = np.roll(u_idx, -1)
+
+    costs = edge_distance[u_idx, v_idx].astype(np.float64)
+    used = edge_n_used[u_idx, v_idx].astype(np.float64)
+
+    # Adaptive search-depth discount factor to moderate penalty intensity over time
+    depth_discount = 1.0 / np.sqrt(1.0 + total_searched_steps / float(n))
+
+    mean_cost = np.mean(costs)
+    std_cost = np.std(costs) + 1e-8
+    z_scores = (costs - mean_cost) / std_cost
+    weights = 1.0 / (1.0 + np.exp(-np.clip(z_scores, -10.0, 10.0)))
+
+    # Utility prioritizing high-cost edges with proportionally low historical exploration
+    utilities = (costs * (1.0 + weights)) / (1.0 + used)
+    threshold = np.median(utilities)
+    max_util = np.max(utilities) + 1e-8
+
+    # Step 4: Apply moderated penalties to top utility edges
+    penalize_mask = utilities >= threshold
+    p_u = u_idx[penalize_mask]
+    p_v = v_idx[penalize_mask]
+    p_costs = costs[penalize_mask]
+    p_used = used[penalize_mask]
+    p_utils = utilities[penalize_mask]
+
+    penalties = (p_costs / (1.0 + np.sqrt(p_used + 1.0))) * (1.0 + p_utils / max_util) * depth_discount
+    updated_edge_distance[p_u, p_v] += penalties
+    updated_edge_distance[p_v, p_u] += penalties
+
+    # Step 5: Symmetrically reward promising alternative/under-explored edges incident to penalized nodes
+    penalized_nodes = np.unique(np.concatenate((p_u, p_v)))
+    decay_ratio = 0.02 * depth_discount
+    for u in penalized_nodes:
+        unused_mask = (edge_n_used[u] == 0)
+        unused_mask[u] = False
+        if np.any(unused_mask):
+            current_vals = updated_edge_distance[u, unused_mask]
+            reward = current_vals * decay_ratio
+            updated_edge_distance[u, unused_mask] -= reward
+            updated_edge_distance[unused_mask, u] = updated_edge_distance[u, unused_mask]
+
+    return updated_edge_distance
+# ===== Eval Output =====
+[*] Running ...
+[*] mode=val, data=/home/ducanh/projects/EAs_project/MoH/problems/tsp_gls/data/val/val_instance_data_sol_50.pkl, seed=0, n_instances=8
+[*] instance_indices=[6, 9, 0, 2, 4, 3, 5, 1]
+[*] instance 6: obj=5.7136, gap=0.5983
+[*] instance 9: obj=5.9639, gap=0.0000
+[*] instance 0: obj=5.7783, gap=0.0000
+[*] instance 2: obj=5.8071, gap=0.0000
+[*] instance 4: obj=5.3965, gap=0.0000
+[*] instance 3: obj=5.8224, gap=1.1392
+[*] instance 5: obj=5.6187, gap=0.0000
+[*] instance 1: obj=5.1651, gap=0.0000
+[*] ave_gap on size 50: 0.21718291265821477
+0.21718291265821477

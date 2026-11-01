@@ -1,0 +1,87 @@
+# ===== Heuristic Code =====
+#{Incorporates guided local search with tabu frequency aspiration by penalizing maximum-utility tour edges, imposing short-term tenure boosts on recently penalized bottlenecks, and applying structural aspiration-discounting for edges that connect peripheral nodes to central backbones.}#
+
+import numpy as np
+
+def update_edge_distance(edge_distance, local_opt_tour, edge_n_used):
+    updated_edge_distance = np.copy(edge_distance)
+    num_nodes = len(local_opt_tour)
+
+    # Extract current tour edge endpoints
+    u_idx = np.asarray(local_opt_tour)
+    v_idx = np.roll(u_idx, -1)
+
+    tour_distances = edge_distance[u_idx, v_idx]
+    tour_counts = edge_n_used[u_idx, v_idx]
+
+    # GLS utility computation: prioritize longer edges with low penalty counts
+    utilities = tour_distances / (1.0 + tour_counts)
+    max_util = np.max(utilities)
+    max_mask = np.isclose(utilities, max_util)
+
+    # Track newly penalized edges for short-term tabu tenure
+    newly_penalized = np.zeros((num_nodes, num_nodes), dtype=bool)
+    for i in range(num_nodes):
+        if max_mask[i]:
+            u, v = u_idx[i], v_idx[i]
+            edge_n_used[u, v] += 1
+            edge_n_used[v, u] += 1
+            newly_penalized[u, v] = True
+            newly_penalized[v, u] = True
+
+    # Spatial centrality metrics
+    node_mean_dist = np.mean(edge_distance, axis=1)
+    global_mean_dist = np.mean(node_mean_dist)
+    spatial_centrality = global_mean_dist / (node_mean_dist + 1e-12)
+    norm_spatial = spatial_centrality / (np.max(spatial_centrality) + 1e-12)
+
+    # Usage rigidity & entropy
+    total_node_usage = np.sum(edge_n_used, axis=1, keepdims=True) + 1e-12
+    usage_probs = edge_n_used / total_node_usage
+    node_entropy = -np.sum(usage_probs * np.log(usage_probs + 1e-12), axis=1)
+    max_entropy = np.log(num_nodes) + 1e-12
+    entropy_rigidity = 1.0 - (node_entropy / max_entropy)
+
+    # Stagnation estimation based on tour overlap and rigidity
+    tour_usage_updated = edge_n_used[u_idx, v_idx]
+    overlap_ratio = np.mean(tour_usage_updated > 1.0)
+    mean_rigidity = np.mean(entropy_rigidity)
+    stagnation_factor = np.clip(overlap_ratio + mean_rigidity, 0.0, 2.0)
+
+    # Base adaptive penalty scale
+    lambda_base = (0.18 + 0.12 * stagnation_factor) * global_mean_dist
+
+    # Tabu tenure boost: newly penalized edges receive an extra penalty surge to prevent immediate re-entry
+    tabu_boost = 1.0 + 0.60 * newly_penalized.astype(float)
+
+    # Aspiration discount: edges connecting peripheral nodes with high-quality alternatives are discounted
+    # to encourage escape toward under-explored regions without completely breaking geometric viability
+    aspiration_potential = (norm_spatial[:, None] + norm_spatial[None, :]) / 2.0
+    relative_dist = edge_distance / (global_mean_dist + 1e-12)
+    # Shorter edges or edges connecting peripheral nodes get aspiration discounts
+    aspiration_factor = 1.0 / (1.0 + np.exp(-2.0 * (relative_dist - aspiration_potential)))
+
+    # Congestion and rigidity field modulation
+    spatial_field = norm_spatial[:, None] + norm_spatial[None, :]
+    rigidity_field = entropy_rigidity[:, None] + entropy_rigidity[None, :]
+    congestion_field = 1.0 + 0.30 * spatial_field + 0.35 * rigidity_field
+
+    # Combine guided penalties with tabu tenure and aspiration adjustment
+    effective_penalty = lambda_base * edge_n_used * congestion_field * tabu_boost * aspiration_factor
+    updated_edge_distance += effective_penalty
+
+    return updated_edge_distance
+# ===== Eval Output =====
+[*] Running ...
+[*] mode=val, data=/home/ducanh/projects/EAs_project/MoH/problems/tsp_gls/data/val/val_instance_data_sol_100.pkl, seed=0, n_instances=8
+[*] instance_indices=[6, 9, 0, 2, 4, 3, 5, 1]
+[*] instance 6: obj=7.7956, gap=0.4641
+[*] instance 9: obj=8.0474, gap=0.0512
+[*] instance 0: obj=8.0001, gap=0.0000
+[*] instance 2: obj=8.1191, gap=0.5604
+[*] instance 4: obj=7.8314, gap=0.2339
+[*] instance 3: obj=7.3713, gap=0.0000
+[*] instance 5: obj=7.6365, gap=0.0000
+[*] instance 1: obj=7.5598, gap=0.0364
+[*] ave_gap on size 100: 0.1682407469147551
+0.1682407469147551

@@ -1,0 +1,109 @@
+# ===== Heuristic Code =====
+#{A guided topological ruin-and-recreate strategy that penalizes high-slack, frequently traversed tour segments with geometric decay memory while dynamically rewarding sparse k-NN topological bridge edges connecting penalized nodes based on reduced-cost slack to channel local search into unexplored structural valleys.}#
+
+import numpy as np
+
+def update_edge_distance(edge_distance, local_opt_tour, edge_n_used):
+    updated_edge_distance = np.copy(edge_distance)
+    num_nodes = len(local_opt_tour)
+    tour = np.asarray(local_opt_tour)
+
+    # Decoupled frequency memory with geometric decay
+    edge_n_used *= 0.95
+
+    # Consecutive tour node indexing
+    u_idx = tour
+    v_idx = np.roll(tour, -1)
+
+    # Tour edge lengths and usage frequencies
+    tour_edge_dists = edge_distance[u_idx, v_idx]
+    tour_edge_freqs = edge_n_used[u_idx, v_idx]
+
+    # Global distance statistics for scale-invariance
+    global_mean_dist = np.mean(edge_distance)
+
+    # Multi-attribute utility: edge length weighted by frequency resistance
+    # Edges that are both long and frequently visited in local optima receive higher utility
+    utilities = tour_edge_dists / (1.0 + tour_edge_freqs)
+
+    # Adaptive budget proportional to instance size
+    k = max(2, int(np.ceil(0.12 * num_nodes)))
+    top_k_indices = np.argsort(utilities)[-k:]
+
+    adaptive_lambda = 0.35 * global_mean_dist
+    penalized_nodes = set()
+
+    # Dual-action Part 1: Apply scale-adaptive penalty to top-k poor tour edges
+    for idx in top_k_indices:
+        u, v = u_idx[idx], v_idx[idx]
+        edge_n_used[u, v] += 1.0
+        edge_n_used[v, u] += 1.0
+
+        freq_penalty = 1.0 + np.log1p(edge_n_used[u, v])
+        penalty = adaptive_lambda * freq_penalty
+
+        updated_edge_distance[u, v] += penalty
+        updated_edge_distance[v, u] += penalty
+
+        penalized_nodes.add(u)
+        penalized_nodes.add(v)
+
+    # Map tour nodes to position for fast neighborhood and adjacency queries
+    tour_pos = np.empty(num_nodes, dtype=np.int32)
+    tour_pos[tour] = np.arange(num_nodes)
+
+    # Dual-action Part 2: Directed k-NN topological bridge guidance
+    # Reconstruct guided shortcuts using candidate nearest-neighbors of penalized nodes
+    candidate_k = min(8, num_nodes - 1)
+    bridge_discount_scale = 0.20 * global_mean_dist
+
+    for u in penalized_nodes:
+        # Retrieve candidate nearest neighbors in original metric
+        u_dists = edge_distance[u]
+        knn_candidates = np.argpartition(u_dists, candidate_k)[:candidate_k + 1]
+
+        pos_u = tour_pos[u]
+        u_inc_edges_cost = edge_distance[tour[(pos_u - 1) % num_nodes], u] + edge_distance[u, tour[(pos_u + 1) % num_nodes]]
+
+        for w in knn_candidates:
+            if w == u:
+                continue
+
+            pos_w = tour_pos[w]
+            # Avoid direct tour incident neighbors
+            if pos_w == (pos_u - 1) % num_nodes or pos_w == (pos_u + 1) % num_nodes:
+                continue
+
+            w_inc_edges_cost = edge_distance[tour[(pos_w - 1) % num_nodes], w] + edge_distance[w, tour[(pos_w + 1) % num_nodes]]
+            d_uw = edge_distance[u, w]
+            freq_uw = edge_n_used[u, w]
+
+            # Topological slack: potential tour savings by bridging u and w
+            # Baseline surrogate 2-opt/reconnection gain
+            potential_gain = 0.5 * (u_inc_edges_cost + w_inc_edges_cost) - d_uw
+
+            if potential_gain > 0 and freq_uw < 2.0:
+                # Dynamic discount proportional to relative topological slack and unvisited bias
+                normalized_gain = np.clip(potential_gain / (global_mean_dist + 1e-8), 0.0, 2.0)
+                novelty_factor = 1.0 / (1.0 + freq_uw)
+                discount = bridge_discount_scale * normalized_gain * novelty_factor
+
+                new_dist = max(1e-6, updated_edge_distance[u, w] - discount)
+                updated_edge_distance[u, w] = new_dist
+                updated_edge_distance[w, u] = new_dist
+
+    return updated_edge_distance
+# ===== Eval Output =====
+[*] Running ...
+[*] mode=val, data=/home/ducanh/projects/EAs_project/MoH/problems/tsp_gls/data/val/val_instance_data_sol_100.pkl, seed=0, n_instances=8
+[*] instance_indices=[6, 9, 0, 2, 4, 3, 5, 1]
+[*] instance 6: obj=7.7596, gap=0.0000
+[*] instance 9: obj=8.0433, gap=0.0000
+[*] instance 0: obj=8.0001, gap=0.0000
+[*] instance 2: obj=8.1191, gap=0.5604
+[*] instance 4: obj=7.8131, gap=0.0000
+[*] instance 3: obj=7.3713, gap=0.0000
+[*] instance 5: obj=7.6365, gap=0.0000
+[*] instance 1: obj=7.5570, gap=0.0000
+[*] ave_gap on size 100: 0.0700557881822994
+0.0700557881822994

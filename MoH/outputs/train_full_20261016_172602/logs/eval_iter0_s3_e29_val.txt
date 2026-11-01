@@ -1,0 +1,93 @@
+# ===== Heuristic Code =====
+#{Advanced directional smoothness distortion combining triangle cosine turning angles, 2-hop shortcut savings, and guided local search utility to aggressively penalize jagged, non-convex, and inefficient tour segments.}
+
+import numpy as np
+
+def update_edge_distance(edge_distance, local_opt_tour, edge_n_used):
+    updated_edge_distance = np.copy(edge_distance)
+    n = len(local_opt_tour)
+    if n < 4:
+        return updated_edge_distance
+
+    # Extract cyclical node indices: p (prev), u (curr), v (next), w (after-next)
+    p_idx = np.roll(local_opt_tour, 1)
+    u_idx = local_opt_tour
+    v_idx = np.roll(local_opt_tour, -1)
+    w_idx = np.roll(local_opt_tour, -2)
+
+    # Edge distances along consecutive segments and shortcuts
+    d_uv = edge_distance[u_idx, v_idx]
+    d_pu = edge_distance[p_idx, u_idx]
+    d_pv = edge_distance[p_idx, v_idx]
+    d_vw = edge_distance[v_idx, w_idx]
+    d_uw = edge_distance[u_idx, w_idx]
+
+    # Cosine of interior angles at u (in p-u-v) and v (in u-v-w) via Law of Cosines
+    denom_u = 2.0 * np.maximum(d_pu * d_uv, 1e-8)
+    denom_v = 2.0 * np.maximum(d_uv * d_vw, 1e-8)
+    cos_u = np.clip((d_pu**2 + d_uv**2 - d_pv**2) / denom_u, -1.0, 1.0)
+    cos_v = np.clip((d_uv**2 + d_vw**2 - d_uw**2) / denom_v, -1.0, 1.0)
+
+    # Acute turning penalty: acute angles (cos > 0) indicate hairpin/jagged zig-zags
+    sharpness_u = np.maximum(0.0, cos_u)
+    sharpness_v = np.maximum(0.0, cos_v)
+    sharpness = sharpness_u + sharpness_v
+
+    # Shortcut savings: when bypassing the intermediate vertex yields large savings
+    # (p->v vs p->u + u->v) and (u->w vs u->v + v->w)
+    shortcut_u = (d_pu + d_uv - d_pv) / (d_pu + d_uv + 1e-8)
+    shortcut_v = (d_uv + d_vw - d_uw) / (d_uv + d_vw + 1e-8)
+    shortcut_factor = 1.0 + 1.2 * np.maximum(0.0, shortcut_u + shortcut_v)
+
+    # Angularity penalty modulated by directional sharpness
+    angular_penalty = 1.0 + 1.8 * sharpness + 0.8 * (sharpness ** 2)
+
+    # Relative edge length compared to average tour step
+    mean_tour_d = np.mean(d_uv)
+    rel_length = d_uv / (mean_tour_d + 1e-8)
+
+    # Guided Local Search (GLS) utility-based frequency damping: c_ij / (1 + count)
+    usage = edge_n_used[u_idx, v_idx]
+    gls_factor = 1.0 / (1.0 + 0.35 * usage)
+
+    # Density context: compute local scale via 5-nearest neighbors efficiently
+    k_nn = min(6, n)
+    # Use partition instead of full sort for O(n * k) efficiency
+    nn_dists = np.partition(edge_distance, k_nn, axis=1)[:, 1:k_nn]
+    local_scale = np.mean(nn_dists, axis=1) + 1e-8
+    edge_scale = 0.5 * (local_scale[u_idx] + local_scale[v_idx])
+    density_norm = np.clip(d_uv / edge_scale, 0.5, 4.0)
+
+    # Compute total penalty increment
+    total_penalty = (
+        mean_tour_d * 0.25
+        * rel_length
+        * angular_penalty
+        * shortcut_factor
+        * gls_factor
+        * (0.6 + 0.4 * density_norm)
+    )
+
+    # Extra reinforcement for the top quartile longest edges
+    q75 = np.percentile(d_uv, 75)
+    total_penalty[d_uv >= q75] *= 1.35
+
+    # Symmetric penalty update
+    np.add.at(updated_edge_distance, (u_idx, v_idx), total_penalty)
+    np.add.at(updated_edge_distance, (v_idx, u_idx), total_penalty)
+
+    return updated_edge_distance
+# ===== Eval Output =====
+[*] Running ...
+[*] mode=val, data=/home/ducanh/projects/EAs_project/MoH/problems/tsp_gls/data/val/val_instance_data_sol_200.pkl, seed=0, n_instances=8
+[*] instance_indices=[6, 9, 0, 2, 4, 3, 5, 1]
+[*] instance 6: obj=10.6658, gap=2.1057
+[*] instance 9: obj=10.9447, gap=2.6420
+[*] instance 0: obj=11.1006, gap=1.9736
+[*] instance 2: obj=11.1447, gap=1.7990
+[*] instance 4: obj=10.9153, gap=0.6279
+[*] instance 3: obj=10.6960, gap=0.8874
+[*] instance 5: obj=11.1584, gap=2.5257
+[*] instance 1: obj=11.2819, gap=2.3371
+[*] ave_gap on size 200: 1.8623016987685896
+1.8623016987685896

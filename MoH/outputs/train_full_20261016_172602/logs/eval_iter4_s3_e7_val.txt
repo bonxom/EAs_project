@@ -1,0 +1,70 @@
+# ===== Heuristic Code =====
+#{We introduce an asymmetric usage-recency memory kernel scaling edge penalties by exponential saturation decay exp(-eta * usage) and apply a stagnation-triggered global evaporation to non-tour edges to balance intensification and escape from local optima.}#
+
+import numpy as np
+
+def update_edge_distance(edge_distance, local_opt_tour, edge_n_used):
+    updated_edge_distance = np.copy(edge_distance)
+    n = len(local_opt_tour)
+    if n == 0:
+        return updated_edge_distance
+
+    # Measure local density via k-nearest neighbors
+    k = min(6, n)
+    if k > 1:
+        sorted_dists = np.sort(edge_distance, axis=1)
+        k_nn_avg = np.mean(sorted_dists[:, 1:k], axis=1)
+    else:
+        k_nn_avg = np.ones(n)
+    node_density = 1.0 / (k_nn_avg + 1e-6)
+    node_density = node_density / (np.mean(node_density) + 1e-6)
+
+    # Tour edge extraction
+    u_idx = local_opt_tour
+    v_idx = np.roll(local_opt_tour, -1)
+    tour_edge_lengths = edge_distance[u_idx, v_idx]
+    avg_tour_length = np.mean(tour_edge_lengths)
+    relative_length = tour_edge_lengths / (avg_tour_length + 1e-6)
+
+    # Edge usage frequencies on tour
+    usage_vals = edge_n_used[u_idx, v_idx]
+    eta = 0.15
+    # Asymmetric exponential saturation decay
+    usage_factor = np.exp(-eta * usage_vals)
+
+    # Density-aware priority score
+    density_factor = 0.5 * (node_density[u_idx] + node_density[v_idx])
+    length_priority = 1.0 / (1.0 + np.exp(-3.5 * (relative_length - 1.0)))
+
+    # Base penalty modulated by exponential decay and local density
+    penalties = avg_tour_length * 0.12 * length_priority * usage_factor * density_factor
+
+    # Amplification on the longest edges in tour
+    threshold = np.percentile(tour_edge_lengths, 70)
+    penalties[tour_edge_lengths >= threshold] *= 1.4
+
+    # Stagnation-triggered global evaporation on non-penalized edge weights
+    mean_usage = np.mean(usage_vals)
+    if mean_usage > 1.0:
+        evaporation_rate = 0.005 * min(1.0, mean_usage / 10.0)
+        updated_edge_distance = (1.0 - evaporation_rate) * updated_edge_distance
+
+    # Apply symmetric penalties to current tour edges
+    np.add.at(updated_edge_distance, (u_idx, v_idx), penalties)
+    np.add.at(updated_edge_distance, (v_idx, u_idx), penalties)
+
+    return updated_edge_distance
+# ===== Eval Output =====
+[*] Running ...
+[*] mode=val, data=/home/ducanh/projects/EAs_project/MoH/problems/tsp_gls/data/val/val_instance_data_sol_200.pkl, seed=0, n_instances=8
+[*] instance_indices=[6, 9, 0, 2, 4, 3, 5, 1]
+[*] instance 6: obj=10.8258, gap=3.6371
+[*] instance 9: obj=11.0306, gap=3.4474
+[*] instance 0: obj=11.4320, gap=5.0183
+[*] instance 2: obj=11.2240, gap=2.5227
+[*] instance 4: obj=11.2936, gap=4.1159
+[*] instance 3: obj=10.8628, gap=2.4615
+[*] instance 5: obj=11.2508, gap=3.3741
+[*] instance 1: obj=11.4922, gap=4.2453
+[*] ave_gap on size 200: 3.6027932601693013
+3.6027932601693013

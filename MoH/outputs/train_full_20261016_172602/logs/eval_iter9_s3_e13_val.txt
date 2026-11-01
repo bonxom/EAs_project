@@ -1,0 +1,77 @@
+# ===== Heuristic Code =====
+#{We replace the static percentile cutoff with an adaptive Pareto-dominance score balancing relative edge length, endpoint neighborhood density, and usage attenuation, amplified via a variance-scaled continuous softmax temperature.}
+
+import numpy as np
+
+def update_edge_distance(edge_distance, local_opt_tour, edge_n_used):
+    updated_edge_distance = np.copy(edge_distance)
+    n = len(local_opt_tour)
+
+    # Measure local density via k-nearest neighbor average distance
+    sorted_dists = np.sort(edge_distance, axis=1)
+    k = min(6, n)
+    k_nn_avg = np.mean(sorted_dists[:, 1:k], axis=1)
+    node_density = 1.0 / (k_nn_avg + 1e-6)
+    node_density = node_density / (np.mean(node_density) + 1e-6)
+
+    u_idx = local_opt_tour
+    v_idx = np.roll(local_opt_tour, -1)
+
+    # Core multi-faceted dimensions
+    tour_edge_lengths = edge_distance[u_idx, v_idx]
+    avg_tour_length = np.mean(tour_edge_lengths)
+    relative_length = tour_edge_lengths / (avg_tour_length + 1e-6)
+
+    usage_factor = 1.0 / (1.0 + 0.3 * edge_n_used[u_idx, v_idx])
+    density_factor = 0.5 * (node_density[u_idx] + node_density[v_idx])
+
+    # Criterion vectors for Pareto ranking / joint dominance
+    # Normalize features to [0, 1] range along tour edges
+    c1 = (relative_length - np.min(relative_length)) / (np.ptp(relative_length) + 1e-6)
+    c2 = (density_factor - np.min(density_factor)) / (np.ptp(density_factor) + 1e-6)
+    c3 = (usage_factor - np.min(usage_factor)) / (np.ptp(usage_factor) + 1e-6)
+
+    # Pareto dominance score: continuous convex aggregation reflecting joint dominance
+    pareto_score = np.cbrt(np.clip(c1 * c2 * c3, 0.0, None))
+
+    # Dynamic continuous temperature derived from variance of tour edge lengths
+    std_length = np.std(tour_edge_lengths)
+    cv = std_length / (avg_tour_length + 1e-6)
+    temperature = np.clip(cv, 0.1, 2.0)
+
+    # Softmax-style continuous amplification based on Pareto dominance
+    scaled_scores = pareto_score / temperature
+    max_s = np.max(scaled_scores)
+    exp_scores = np.exp(scaled_scores - max_s)
+    adaptive_boost = 1.0 + (exp_scores / (np.mean(exp_scores) + 1e-6))
+
+    # Base GLS penalty combining global ranking and local structural utility
+    rank_penalty = 1.0 / (1.0 + np.exp(-4.0 * (relative_length - 1.0)))
+    local_penalty = relative_length * usage_factor * density_factor
+    freq_mean = np.mean(edge_n_used[u_idx, v_idx])
+    w_global = 0.6 / (1.0 + 0.1 * freq_mean)
+    w_local = 1.0 - w_global
+    base_penalty = w_global * rank_penalty + w_local * local_penalty
+
+    # Combine base penalty with continuous Pareto amplification
+    final_penalty = base_penalty * adaptive_boost
+
+    # Symmetric edge update
+    np.add.at(updated_edge_distance, (u_idx, v_idx), final_penalty)
+    np.add.at(updated_edge_distance, (v_idx, u_idx), final_penalty)
+
+    return updated_edge_distance
+# ===== Eval Output =====
+[*] Running ...
+[*] mode=val, data=/home/ducanh/projects/EAs_project/MoH/problems/tsp_gls/data/val/val_instance_data_sol_200.pkl, seed=0, n_instances=8
+[*] instance_indices=[6, 9, 0, 2, 4, 3, 5, 1]
+[*] instance 6: obj=10.4458, gap=0.0000
+[*] instance 9: obj=10.7294, gap=0.6224
+[*] instance 0: obj=10.8879, gap=0.0201
+[*] instance 2: obj=10.9882, gap=0.3691
+[*] instance 4: obj=10.8787, gap=0.2911
+[*] instance 3: obj=10.6134, gap=0.1087
+[*] instance 5: obj=10.8976, gap=0.1286
+[*] instance 1: obj=11.0773, gap=0.4814
+[*] ave_gap on size 200: 0.25267987538026837
+0.25267987538026837

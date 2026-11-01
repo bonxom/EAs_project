@@ -1,0 +1,83 @@
+# ===== Heuristic Code =====
+#{This strategy identifies the maximum utility bottleneck edges on the tour, extracts a cohesive spatial-topological cluster of neighboring vertices around them, and applies a coordinated quadratic metric expansion over internal and boundary cluster edges to systematically divert the local search out of the current basin.}
+
+import numpy as np
+
+def update_edge_distance(edge_distance, local_opt_tour, edge_n_used):
+    updated_edge_distance = np.copy(edge_distance)
+    n = len(local_opt_tour)
+    if n <= 3:
+        return updated_edge_distance
+
+    u_idx = local_opt_tour
+    v_idx = np.roll(local_opt_tour, -1)
+
+    tour_lengths = edge_distance[u_idx, v_idx]
+    tour_counts = edge_n_used[u_idx, v_idx]
+    utilities = tour_lengths / (1.0 + tour_counts)
+
+    # Identify top bottleneck edges above 90% of maximum utility
+    max_utility = np.max(utilities)
+    threshold = 0.90 * max_utility
+    hot_indices = np.where(utilities >= threshold)[0]
+
+    # Form a contiguous topological subpath and k-nearest neighborhood around the primary bottleneck
+    primary_idx = np.argmax(utilities)
+    cluster_radius = max(2, min(n // 6, 15))
+
+    # Extract subpath indices along the tour contour centered at primary bottleneck
+    subpath_offsets = np.arange(-cluster_radius, cluster_radius + 1)
+    subpath_nodes = local_opt_tour[(primary_idx + subpath_offsets) % n]
+
+    # Aggregate cluster seeds from all hot edges
+    seed_nodes = np.unique(np.concatenate([
+        local_opt_tour[hot_indices],
+        local_opt_tour[(hot_indices + 1) % n],
+        subpath_nodes
+    ]))
+
+    # Expand cluster by nearest topological neighbors in metric space
+    k_nn = min(cluster_radius, n - 1)
+    cluster_affinity = np.min(edge_distance[seed_nodes, :], axis=0)
+    top_cluster_nodes = np.argsort(cluster_affinity)[:(len(seed_nodes) + k_nn)]
+    cluster_nodes = np.unique(np.concatenate([seed_nodes, top_cluster_nodes]))
+
+    # Determine characteristic scale for penalty
+    avg_tour_edge = np.mean(tour_lengths)
+
+    # 1. Standard utility-guided edge penalization on hot tour edges
+    penalty_base = 0.4 * avg_tour_edge
+    sel_u = u_idx[hot_indices]
+    sel_v = v_idx[hot_indices]
+    updated_edge_distance[sel_u, sel_v] += penalty_base
+    updated_edge_distance[sel_v, sel_u] += penalty_base
+
+    # 2. Coordinated quadratic metric expansion over internal cluster edges
+    grid_u, grid_v = np.meshgrid(cluster_nodes, cluster_nodes, indexing='ij')
+    internal_mask = grid_u != grid_v
+    u_int = grid_u[internal_mask]
+    v_int = grid_v[internal_mask]
+
+    cluster_edges = edge_distance[u_int, v_int]
+    max_c_edge = np.max(cluster_edges) if cluster_edges.size > 0 else 1.0
+    if max_c_edge > 0:
+        # Normalized quadratic expansion scaling inversely with proximity to center
+        quad_factor = (1.0 - (cluster_edges / (max_c_edge + 1e-8))) ** 2
+        cluster_penalty = 0.25 * avg_tour_edge * (1.0 + quad_factor)
+        updated_edge_distance[u_int, v_int] += cluster_penalty
+
+    return updated_edge_distance
+# ===== Eval Output =====
+[*] Running ...
+[*] mode=val, data=/home/ducanh/projects/EAs_project/MoH/problems/tsp_gls/data/val/val_instance_data_sol_20.pkl, seed=0, n_instances=8
+[*] instance_indices=[6, 9, 0, 2, 4, 3, 5, 1]
+[*] instance 6: obj=3.7045, gap=0.0000
+[*] instance 9: obj=4.1442, gap=0.0000
+[*] instance 0: obj=3.6827, gap=0.0000
+[*] instance 2: obj=3.8184, gap=0.0000
+[*] instance 4: obj=3.8385, gap=0.0000
+[*] instance 3: obj=3.6971, gap=0.0000
+[*] instance 5: obj=3.4281, gap=0.0000
+[*] instance 1: obj=3.6958, gap=0.0000
+[*] ave_gap on size 20: 1.2218318606871392e-06
+1.2218318606871392e-06

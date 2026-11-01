@@ -1,0 +1,70 @@
+# ===== Heuristic Code =====
+#{Candidate-Set Multi-Peak Penalization: identify high-utility tour edges within a relative threshold of the maximum utility to penalize multiple candidate bottlenecks simultaneously, coupled with stagnation-aware spatial congestion fields to escape local minima efficiently.}
+
+import numpy as np
+
+def update_edge_distance(edge_distance, local_opt_tour, edge_n_used):
+    updated_edge_distance = np.copy(edge_distance)
+    num_nodes = len(local_opt_tour)
+
+    u_idx = np.asarray(local_opt_tour)
+    v_idx = np.roll(u_idx, -1)
+
+    tour_distances = edge_distance[u_idx, v_idx]
+    tour_counts = edge_n_used[u_idx, v_idx]
+    utilities = tour_distances / (1.0 + tour_counts)
+
+    max_util = np.max(utilities)
+    threshold = 0.88 * max_util
+    high_util_mask = utilities >= threshold
+
+    for i in range(num_nodes):
+        if high_util_mask[i]:
+            u, v = u_idx[i], v_idx[i]
+            edge_n_used[u, v] += 1
+            edge_n_used[v, u] += 1
+
+    node_mean_dist = np.mean(edge_distance, axis=1)
+    global_mean_dist = np.mean(node_mean_dist)
+    spatial_centrality = global_mean_dist / (node_mean_dist + 1e-12)
+    norm_spatial = spatial_centrality / (np.max(spatial_centrality) + 1e-12)
+
+    total_node_usage = np.sum(edge_n_used, axis=1, keepdims=True) + 1e-12
+    usage_probs = edge_n_used / total_node_usage
+    node_entropy = -np.sum(usage_probs * np.log(usage_probs + 1e-12), axis=1)
+    max_entropy = np.log(num_nodes) + 1e-12
+    entropy_rigidity = 1.0 - (node_entropy / max_entropy)
+
+    node_usage_centrality = np.sum(edge_n_used, axis=1)
+    norm_usage_centrality = node_usage_centrality / (np.max(node_usage_centrality) + 1e-12)
+
+    tour_usage_updated = edge_n_used[u_idx, v_idx]
+    overlap_ratio = np.mean(tour_usage_updated > 1.0)
+    mean_rigidity = np.mean(entropy_rigidity)
+    stagnation_factor = np.clip(overlap_ratio + mean_rigidity, 0.0, 2.0)
+
+    adaptive_lambda = (0.20 + 0.10 * stagnation_factor) * global_mean_dist
+
+    spatial_field = norm_spatial[:, None] + norm_spatial[None, :]
+    rigidity_field = entropy_rigidity[:, None] + entropy_rigidity[None, :]
+    cluster_dispersion = norm_usage_centrality[:, None] * norm_usage_centrality[None, :]
+    congestion_field = 1.0 + 0.35 * spatial_field + 0.35 * rigidity_field + 0.30 * cluster_dispersion
+
+    penalty_matrix = adaptive_lambda * edge_n_used * congestion_field
+    updated_edge_distance += penalty_matrix
+
+    return updated_edge_distance
+# ===== Eval Output =====
+[*] Running ...
+[*] mode=val, data=/home/ducanh/projects/EAs_project/MoH/problems/tsp_gls/data/val/val_instance_data_sol_100.pkl, seed=0, n_instances=8
+[*] instance_indices=[6, 9, 0, 2, 4, 3, 5, 1]
+[*] instance 6: obj=7.7666, gap=0.0905
+[*] instance 9: obj=8.0512, gap=0.0975
+[*] instance 0: obj=8.0001, gap=0.0000
+[*] instance 2: obj=8.0999, gap=0.3228
+[*] instance 4: obj=7.8426, gap=0.3776
+[*] instance 3: obj=7.3713, gap=0.0000
+[*] instance 5: obj=7.6365, gap=0.0000
+[*] instance 1: obj=7.5570, gap=0.0000
+[*] ave_gap on size 100: 0.11104601877685027
+0.11104601877685027

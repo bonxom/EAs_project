@@ -1,0 +1,112 @@
+# ===== Heuristic Code =====
+#{A multi-attribute Guided Local Search strategy incorporating Minimum Spanning Tree edge criticality and incident 1-tree connectivity to shield structural bridge edges from penalization while selectively penalizing redundant high-cost edges and discounting promising unvisited alternatives.}#
+
+import numpy as np
+
+def update_edge_distance(edge_distance, local_opt_tour, edge_n_used):
+    updated_edge_distance = np.copy(edge_distance)
+    n = len(local_opt_tour)
+    if n <= 3:
+        return updated_edge_distance
+
+    u_idx = np.array(local_opt_tour, dtype=np.intp)
+    v_idx = np.roll(u_idx, -1)
+
+    # 1. Compute Minimum Spanning Tree (MST) using Prim's algorithm to identify structural bridge edges
+    in_mst = np.zeros(n, dtype=bool)
+    min_edge = np.full(n, np.inf, dtype=np.float64)
+    parent = np.full(n, -1, dtype=np.intp)
+
+    min_edge[0] = 0.0
+    for _ in range(n):
+        u_star = -1
+        min_val = np.inf
+        # Find minimum non-MST vertex
+        for i in range(n):
+            if not in_mst[i] and min_edge[i] < min_val:
+                min_val = min_edge[i]
+                u_star = i
+        if u_star == -1:
+            break
+        in_mst[u_star] = True
+
+        # Relax incident edges
+        row = edge_distance[u_star]
+        for v in range(n):
+            if not in_mst[v] and row[v] < min_edge[v]:
+                min_edge[v] = row[v]
+                parent[v] = u_star
+
+    mst_degree = np.zeros(n, dtype=np.float64)
+    mst_edges = set()
+    for v in range(1, n):
+        p = parent[v]
+        if p != -1:
+            mst_degree[v] += 1.0
+            mst_degree[p] += 1.0
+            mst_edges.add((min(p, v), max(p, v)))
+
+    # 2. Multi-attribute utility breakdown for tour edges
+    costs = edge_distance[u_idx, v_idx].astype(np.float64)
+    used = edge_n_used[u_idx, v_idx].astype(np.float64)
+
+    is_mst_edge = np.array([(min(u, v), max(u, v)) in mst_edges for u, v in zip(u_idx, v_idx)], dtype=bool)
+
+    # Structural criticality: high MST node degrees or MST membership indicates vital topological bridges
+    mst_end_degrees = mst_degree[u_idx] + mst_degree[v_idx]
+    # Criticality discount: edges critical to structural connectivity should be penalized significantly less
+    criticality = np.where(is_mst_edge, 0.35, 1.0) / (1.0 + 0.15 * mst_end_degrees)
+
+    # Relative cost compared to incident alternative edges (local neighborhood centrality)
+    incident_min_costs = np.minimum(
+        np.partition(edge_distance[u_idx], 2, axis=1)[:, 1],
+        np.partition(edge_distance[v_idx], 2, axis=1)[:, 1]
+    )
+    cost_inefficiency = np.maximum(costs - incident_min_costs, 0.0) / (costs + 1e-8)
+
+    # Multi-attribute utility: balances cost inefficiency, exploration frequency, and topological preservation
+    utilities = (costs * cost_inefficiency * criticality) / (1.0 + used)
+
+    # 3. Penalize top-utility edges
+    threshold = np.median(utilities)
+    penalize_mask = utilities >= threshold
+    if not np.any(penalize_mask):
+        penalize_mask = utilities == np.max(utilities)
+
+    p_u = u_idx[penalize_mask]
+    p_v = v_idx[penalize_mask]
+    p_costs = costs[penalize_mask]
+    p_used = used[penalize_mask]
+    p_utils = utilities[penalize_mask]
+    max_util = np.max(utilities) + 1e-8
+
+    penalties = (p_costs / (1.0 + np.sqrt(p_used + 1.0))) * (1.0 + p_utils / max_util)
+    updated_edge_distance[p_u, p_v] += penalties
+    updated_edge_distance[p_v, p_u] += penalties
+
+    # 4. Complementary incentive discounting on incident unvisited alternative edges
+    penalized_nodes = np.unique(np.concatenate((p_u, p_v)))
+    decay_ratio = 0.02
+    for u in penalized_nodes:
+        unused_mask = (edge_n_used[u] == 0)
+        unused_mask[u] = False
+        if np.any(unused_mask):
+            current_vals = updated_edge_distance[u, unused_mask]
+            updated_edge_distance[u, unused_mask] -= current_vals * decay_ratio
+            updated_edge_distance[unused_mask, u] = updated_edge_distance[u, unused_mask]
+
+    return updated_edge_distance
+# ===== Eval Output =====
+[*] Running ...
+[*] mode=val, data=/home/ducanh/projects/EAs_project/MoH/problems/tsp_gls/data/val/val_instance_data_sol_50.pkl, seed=0, n_instances=8
+[*] instance_indices=[6, 9, 0, 2, 4, 3, 5, 1]
+[*] instance 6: obj=5.7136, gap=0.5983
+[*] instance 9: obj=5.9639, gap=0.0000
+[*] instance 0: obj=5.7783, gap=0.0000
+[*] instance 2: obj=5.8071, gap=0.0000
+[*] instance 4: obj=5.5821, gap=3.4387
+[*] instance 3: obj=5.8123, gap=0.9633
+[*] instance 5: obj=5.6187, gap=0.0000
+[*] instance 1: obj=5.1651, gap=0.0000
+[*] ave_gap on size 50: 0.6250460055538254
+0.6250460055538254

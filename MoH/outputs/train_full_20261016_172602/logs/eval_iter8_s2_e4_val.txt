@@ -1,0 +1,99 @@
+# ===== Heuristic Code =====
+#{An adaptive guided local search operator combining memory decay, boundary-normalized geometric detour inefficiency, and stagnation-scaled entropy-damped penalization to eliminate structural lock-in.}#
+
+import numpy as np
+
+def update_edge_distance(edge_distance, local_opt_tour, edge_n_used):
+    updated_edge_distance = np.copy(edge_distance)
+    num_nodes = len(local_opt_tour)
+    tour = np.asarray(local_opt_tour, dtype=int)
+
+    # Memory decay
+    edge_n_used *= 0.955
+
+    u_idx = tour
+    v_idx = np.roll(tour, -1)
+    w_idx = np.roll(tour, -2)
+
+    d_uv = edge_distance[u_idx, v_idx]
+    d_vw = edge_distance[v_idx, w_idx]
+    d_uw = edge_distance[u_idx, w_idx]
+
+    # Detour and turn geometry
+    detour_ratio = (d_uv + d_vw) / (d_uw + 1e-8)
+    denom = 2.0 * d_uv * d_vw + 1e-8
+    cos_turn = (d_uv**2 + d_vw**2 - d_uw**2) / denom
+    cos_turn = np.clip(cos_turn, -1.0, 1.0)
+    acute_deficit = 1.0 - cos_turn
+    geom_inefficiency = detour_ratio * (1.0 + 0.5 * acute_deficit)
+
+    # Peripheral sparsity adjustment based on local k-NN neighborhood scale
+    # Boundary vertices naturally have larger k-NN radii and should not be over-penalized
+    k_nn = min(5, max(2, num_nodes // 10))
+    sorted_dists = np.partition(edge_distance, k_nn, axis=1)[:, :k_nn + 1]
+    local_scale = np.mean(sorted_dists[:, 1:], axis=1) + 1e-8
+    edge_scale = 0.5 * (local_scale[u_idx] + local_scale[v_idx])
+    mean_scale = np.mean(local_scale)
+    sparsity_factor = edge_scale / mean_scale
+
+    local_geom_factor = 0.5 * (geom_inefficiency + np.roll(geom_inefficiency, 1))
+
+    # Modulate edge utility inversely by peripheral sparsity
+    base_dist = d_uv
+    base_freq = edge_n_used[u_idx, v_idx]
+    utilities = (base_dist / (1.0 + base_freq)) * (1.0 + 0.35 * (local_geom_factor / np.sqrt(sparsity_factor)))
+
+    # Estimate stagnation and entropy rigidity across tour edges
+    freq_values = edge_n_used[u_idx, v_idx]
+    max_freq = np.max(freq_values)
+    mean_freq = np.mean(freq_values)
+    stagnation_factor = 1.0 + np.log1p(mean_freq)
+
+    # Frequency entropy rigidity (normalized Shannon entropy of edge usage)
+    p = (freq_values + 1e-6) / (np.sum(freq_values) + 1e-6 * num_nodes)
+    entropy = -np.sum(p * np.log(p)) / np.log(num_nodes + 1e-8)
+    entropy_rigidity = 1.0 - np.clip(entropy, 0.0, 1.0)
+
+    # Dynamic adaptive penalty scale
+    global_mean_dist = np.mean(edge_distance)
+    adaptive_lambda = (0.28 * global_mean_dist * stagnation_factor) / (1.0 + 0.5 * entropy_rigidity)
+
+    k = max(1, int(np.ceil(0.14 * num_nodes)))
+    top_k_indices = np.argsort(utilities)[-k:]
+
+    for idx in top_k_indices:
+        u, v = u_idx[idx], v_idx[idx]
+        edge_n_used[u, v] += 1.0
+        edge_n_used[v, u] += 1.0
+        freq_penalty = 1.0 + np.log1p(edge_n_used[u, v])
+        geom_weight = 1.0 + 0.4 * local_geom_factor[idx]
+        penalty = adaptive_lambda * freq_penalty * geom_weight
+        updated_edge_distance[u, v] += penalty
+        updated_edge_distance[v, u] += penalty
+
+    # Incentive shortcuts for high detour vertices
+    high_detour_indices = np.argsort(detour_ratio)[-k:]
+    for idx in high_detour_indices:
+        u, w = u_idx[idx], w_idx[idx]
+        freq = edge_n_used[u, w]
+        if freq < 1.0:
+            discount = 0.10 * global_mean_dist * (1.0 / (1.0 + freq))
+            new_val = max(1e-6, updated_edge_distance[u, w] - discount)
+            updated_edge_distance[u, w] = new_val
+            updated_edge_distance[w, u] = new_val
+
+    return updated_edge_distance
+# ===== Eval Output =====
+[*] Running ...
+[*] mode=val, data=/home/ducanh/projects/EAs_project/MoH/problems/tsp_gls/data/val/val_instance_data_sol_100.pkl, seed=0, n_instances=8
+[*] instance_indices=[6, 9, 0, 2, 4, 3, 5, 1]
+[*] instance 6: obj=7.7596, gap=0.0000
+[*] instance 9: obj=8.0501, gap=0.0846
+[*] instance 0: obj=8.0001, gap=0.0000
+[*] instance 2: obj=8.0843, gap=0.1290
+[*] instance 4: obj=7.8131, gap=0.0000
+[*] instance 3: obj=7.3713, gap=0.0000
+[*] instance 5: obj=7.6365, gap=0.0000
+[*] instance 1: obj=7.5570, gap=0.0000
+[*] ave_gap on size 100: 0.02670446510258384
+0.02670446510258384

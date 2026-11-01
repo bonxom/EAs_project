@@ -1,0 +1,81 @@
+# ===== Heuristic Code =====
+#{This algorithm dynamically penalizes high-utility tour edges scaled by local endpoint neighborhood distances and a rigidity factor to achieve scale-invariant perturbations, while discounting promising under-explored incident edges to diversify search trajectories.}
+
+import numpy as np
+
+def update_edge_distance(edge_distance, local_opt_tour, edge_n_used):
+    updated_edge_distance = np.copy(edge_distance)
+    n = len(local_opt_tour)
+    if n < 4:
+        return updated_edge_distance
+
+    u_idx = np.array(local_opt_tour, dtype=np.intp)
+    v_idx = np.roll(u_idx, -1)
+
+    costs = edge_distance[u_idx, v_idx].astype(np.float64)
+    used = edge_n_used[u_idx, v_idx].astype(np.float64)
+
+    # Guided local search utility computation with robust normalization
+    mean_cost = np.mean(costs)
+    std_cost = np.std(costs) + 1e-8
+    z_scores = (costs - mean_cost) / std_cost
+    weights = 1.0 / (1.0 + np.exp(-z_scores))
+    utilities = (costs * (1.0 + weights)) / (1.0 + used)
+
+    threshold = np.median(utilities)
+    penalize_mask = utilities >= threshold
+    if not np.any(penalize_mask):
+        penalize_mask = utilities == np.max(utilities)
+
+    p_u = u_idx[penalize_mask]
+    p_v = v_idx[penalize_mask]
+    p_costs = costs[penalize_mask]
+    p_used = used[penalize_mask]
+    p_utils = utilities[penalize_mask]
+
+    # Compute k-nearest neighbor reference scales for scale-invariance across clusters
+    k = min(max(3, int(np.sqrt(n))), n - 1)
+    # Using partition on rows to extract local scale without full sorting
+    part_u = np.partition(edge_distance[p_u], k, axis=1)[:, 1:k+1]
+    part_v = np.partition(edge_distance[p_v], k, axis=1)[:, 1:k+1]
+    local_scale_u = np.median(part_u, axis=1)
+    local_scale_v = np.median(part_v, axis=1)
+    local_scale = 0.5 * (local_scale_u + local_scale_v) + 1e-8
+
+    # Rigidity factor: ratio of edge cost to local reference neighborhood density
+    rigidity = np.clip(p_costs / local_scale, 0.5, 4.0)
+
+    # Normalized differential penalty using rigidity and utility ratio
+    max_util = np.max(utilities) + 1e-8
+    dynamic_scale = (mean_cost / (1.0 + np.log1p(p_used))) * (p_utils / max_util)
+    penalties = dynamic_scale * rigidity
+
+    updated_edge_distance[p_u, p_v] += penalties
+    updated_edge_distance[p_v, p_u] += penalties
+
+    # Discount incident under-explored edges to break metric symmetry and open escape paths
+    penalized_nodes = np.unique(np.concatenate((p_u, p_v)))
+    decay_ratio = 0.025
+    for u in penalized_nodes:
+        unused_mask = (edge_n_used[u] == 0)
+        unused_mask[u] = False
+        if np.any(unused_mask):
+            discount = updated_edge_distance[u, unused_mask] * decay_ratio
+            updated_edge_distance[u, unused_mask] -= discount
+            updated_edge_distance[unused_mask, u] = updated_edge_distance[u, unused_mask]
+
+    return updated_edge_distance
+# ===== Eval Output =====
+[*] Running ...
+[*] mode=val, data=/home/ducanh/projects/EAs_project/MoH/problems/tsp_gls/data/val/val_instance_data_sol_50.pkl, seed=0, n_instances=8
+[*] instance_indices=[6, 9, 0, 2, 4, 3, 5, 1]
+[*] instance 6: obj=5.7136, gap=0.5983
+[*] instance 9: obj=5.9639, gap=0.0000
+[*] instance 0: obj=5.7783, gap=0.0000
+[*] instance 2: obj=5.8071, gap=0.0000
+[*] instance 4: obj=5.5821, gap=3.4387
+[*] instance 3: obj=5.8224, gap=1.1392
+[*] instance 5: obj=5.6187, gap=0.0000
+[*] instance 1: obj=5.3071, gap=2.7501
+[*] ave_gap on size 50: 0.9907860582297201
+0.9907860582297201

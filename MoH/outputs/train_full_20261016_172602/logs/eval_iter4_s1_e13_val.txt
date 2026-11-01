@@ -1,0 +1,84 @@
+# ===== Heuristic Code =====
+#{Adaptive Pareto and dynamic quantile filtering based on k-nearest neighbor slack and local vertex density to selectively penalize high-regret tour edges while symmetrically rewarding unexplored incident connections.}#
+
+import numpy as np
+
+def update_edge_distance(edge_distance, local_opt_tour, edge_n_used):
+    updated_edge_distance = np.copy(edge_distance)
+    n = len(local_opt_tour)
+    if n < 4:
+        return updated_edge_distance
+
+    u_idx = np.array(local_opt_tour, dtype=np.intp)
+    v_idx = np.roll(u_idx, -1)
+
+    costs = edge_distance[u_idx, v_idx].astype(np.float64)
+    used = edge_n_used[u_idx, v_idx].astype(np.float64)
+
+    # Compute k-nearest neighbor baseline distances for relative slack evaluation
+    k = min(8, n - 1)
+    # Exclude self-distance by masking diagonal temporarily
+    diag_indices = np.arange(n)
+    orig_diag = edge_distance[diag_indices, diag_indices].copy()
+    edge_distance[diag_indices, diag_indices] = np.inf
+
+    k_smallest = np.partition(edge_distance, k, axis=1)[:, :k]
+    knn_mean = np.mean(k_smallest, axis=1)
+    edge_distance[diag_indices, diag_indices] = orig_diag
+
+    # Relative slack: how long the tour edge is compared to endpoints' local neighborhood
+    local_baseline = 0.5 * (knn_mean[u_idx] + knn_mean[v_idx]) + 1e-8
+    rel_slack = costs / local_baseline
+
+    # Global search stagnation measure derived deterministically from total usage depth
+    mean_used_tour = np.mean(used)
+    stagnation_factor = np.clip(mean_used_tour / (np.max(edge_n_used) + 1.0), 0.0, 1.0)
+
+    # Adaptive quantile cutoff: selective early (e.g. 75th percentile), broader under stagnation (down to 50th)
+    cutoff_quantile = 75.0 - 25.0 * stagnation_factor
+
+    # Guided local search utility combining cost, usage penalty resistance, and relative slack
+    utilities = (costs * (1.0 + rel_slack)) / (1.0 + used)
+    thresh = np.percentile(utilities, cutoff_quantile)
+
+    penalize_mask = utilities >= thresh
+    if not np.any(penalize_mask):
+        penalize_mask = utilities >= np.median(utilities)
+
+    p_u = u_idx[penalize_mask]
+    p_v = v_idx[penalize_mask]
+    p_costs = costs[penalize_mask]
+    p_used = used[penalize_mask]
+    p_utils = utilities[penalize_mask]
+    max_util = np.max(utilities) + 1e-8
+
+    penalties = (p_costs / (1.0 + np.sqrt(p_used + 1.0))) * (1.0 + p_utils / max_util)
+    updated_edge_distance[p_u, p_v] += penalties
+    updated_edge_distance[p_v, p_u] += penalties
+
+    # Symmetrically discount promising unexplored incident edges to diversify
+    penalized_nodes = np.unique(np.concatenate((p_u, p_v)))
+    decay_ratio = 0.02 + 0.03 * stagnation_factor
+    for u in penalized_nodes:
+        unused_mask = (edge_n_used[u] == 0)
+        unused_mask[u] = False
+        if np.any(unused_mask):
+            current_vals = updated_edge_distance[u, unused_mask]
+            updated_edge_distance[u, unused_mask] -= current_vals * decay_ratio
+            updated_edge_distance[unused_mask, u] = updated_edge_distance[u, unused_mask]
+
+    return updated_edge_distance
+# ===== Eval Output =====
+[*] Running ...
+[*] mode=val, data=/home/ducanh/projects/EAs_project/MoH/problems/tsp_gls/data/val/val_instance_data_sol_50.pkl, seed=0, n_instances=8
+[*] instance_indices=[6, 9, 0, 2, 4, 3, 5, 1]
+[*] instance 6: obj=5.7136, gap=0.5983
+[*] instance 9: obj=5.9639, gap=0.0000
+[*] instance 0: obj=5.7783, gap=0.0000
+[*] instance 2: obj=5.8071, gap=0.0000
+[*] instance 4: obj=5.3965, gap=0.0000
+[*] instance 3: obj=5.8128, gap=0.9724
+[*] instance 5: obj=5.6187, gap=0.0000
+[*] instance 1: obj=5.1651, gap=0.0000
+[*] ave_gap on size 50: 0.19634417581708696
+0.19634417581708696

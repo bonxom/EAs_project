@@ -1,0 +1,56 @@
+# ===== Heuristic Code =====
+# {This heuristic integrates vectorized edge selection and average tour length scaling with a continuous relative-utility power-law penalty, penalizing candidate edges smoothly in proportion to their relative utility above an activation threshold to avoid rigid cutoffs while focusing penalties on near-maximal utility edges.}
+
+import numpy as np
+
+def update_edge_distance(edge_distance, local_opt_tour, edge_n_used):
+    updated_edge_distance = np.copy(edge_distance)
+
+    u_idx = local_opt_tour
+    v_idx = np.roll(local_opt_tour, -1)
+
+    tour_lengths = edge_distance[u_idx, v_idx]
+    tour_counts = edge_n_used[u_idx, v_idx]
+
+    # Calculate edge utilities: longer edges with lower usage yield higher utility for penalization
+    utilities = tour_lengths / (1.0 + tour_counts)
+    max_utility = np.max(utilities)
+
+    if max_utility > 0:
+        avg_edge = np.mean(tour_lengths)
+        base_penalty = 0.3 * avg_edge
+
+        # Continuous relative-utility scaling for edges meeting a flexible activation baseline
+        activation_threshold = 0.85
+        relative_utility = utilities / max_utility
+        active_mask = relative_utility >= activation_threshold
+
+        if np.any(active_mask):
+            sel_u = u_idx[active_mask]
+            sel_v = v_idx[active_mask]
+            sel_rel_util = relative_utility[active_mask]
+            sel_counts = tour_counts[active_mask]
+
+            # Smooth power-law weighting focused on near-maximal edges, attenuated by historical frequency
+            weights = ((sel_rel_util - activation_threshold) / (1.0 - activation_threshold)) ** 2
+            penalties = (base_penalty / (1.0 + sel_counts)) * weights
+
+            # Apply symmetric penalty updates
+            np.add.at(updated_edge_distance, (sel_u, sel_v), penalties)
+            np.add.at(updated_edge_distance, (sel_v, sel_u), penalties)
+
+    return updated_edge_distance
+# ===== Eval Output =====
+[*] Running ...
+[*] mode=val, data=/home/ducanh/projects/EAs_project/MoH/problems/tsp_gls/data/val/val_instance_data_sol_20.pkl, seed=0, n_instances=8
+[*] instance_indices=[6, 9, 0, 2, 4, 3, 5, 1]
+[*] instance 6: obj=3.7045, gap=0.0000
+[*] instance 9: obj=4.1442, gap=0.0000
+[*] instance 0: obj=3.6827, gap=0.0000
+[*] instance 2: obj=3.8184, gap=0.0000
+[*] instance 4: obj=3.8385, gap=0.0000
+[*] instance 3: obj=3.6971, gap=0.0000
+[*] instance 5: obj=3.4281, gap=0.0000
+[*] instance 1: obj=3.6958, gap=0.0000
+[*] ave_gap on size 20: 1.2218318606871392e-06
+1.2218318606871392e-06

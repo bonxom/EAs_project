@@ -3,6 +3,7 @@ import logging
 import math
 import os
 import subprocess
+import sys
 import traceback
 from pathlib import Path
 
@@ -102,12 +103,16 @@ class MoH:
     # =========================================================================
 
     def _run_code(self, algorithm_str: str, problem_type: str, mode: str, stdout_path: str) -> subprocess.Popen:
-        # Step 1: write generated code to gpt.py
-        gpt_path = os.path.join(self.root_dir, "problems", self.problem_name, "gpt.py")
-        with open(gpt_path, 'w', encoding="utf-8") as f:
+        # Run-local heuristic file; never overwrite shared problems/<name>/gpt.py.
+        safe_task = problem_type.replace("-", "_")
+        heuristic_path = os.path.join(
+            self.run_logger.dirs["logs"],
+            f"heuristic_iter{getattr(self, '_cur_iter', -1)}_{safe_task}_{mode}.py",
+        )
+        with open(heuristic_path, 'w', encoding="utf-8") as f:
             f.write(algorithm_str + '\n')
 
-        # Step 2: launch eval.py as subprocess
+        # launch eval.py as subprocess
         eval_path = os.path.join(self.root_dir, "problems", self.problem_name, "eval.py")
         problem_size = int(problem_type.split("-")[-1])
         with open(stdout_path, 'w', encoding="utf-8") as f:
@@ -116,8 +121,9 @@ class MoH:
             f.write("\n# ===== Eval Output =====\n")
             f.flush()
             process = subprocess.Popen(
-                ['python', '-u', eval_path, str(problem_size), self.root_dir, mode,
-                 str(self.cfg.timeout), str(getattr(self.cfg, "seed", 0))],
+                [sys.executable, '-u', eval_path, str(problem_size), self.root_dir, mode,
+                 str(self.cfg.timeout), str(getattr(self.cfg, "seed", 0)),
+                 '--heuristic-path', heuristic_path],
                 stdout=f, stderr=f
             )
         return process
@@ -134,6 +140,9 @@ class MoH:
             logger.info("algorithm_str is too short")
             return 1e6
 
+        if self.max_eval_calls is not None and self._total_eval_calls >= self.max_eval_calls:
+            logger.info(f"Eval budget exhausted ({self.max_eval_calls}); returning sentinel without subprocess")
+            return 1e6
         self._total_eval_calls += 1
         if self.max_eval_calls:
             logger.info(f"Eval call: {self._total_eval_calls}/{self.max_eval_calls}")
@@ -159,6 +168,7 @@ class MoH:
         except subprocess.TimeoutExpired:
             logger.warning(f"Evaluation timed out for {problem_type} mode={mode}")
             process.kill()
+            process.communicate()
             return 1e6
 
         try:
@@ -208,19 +218,27 @@ class MoH:
 
         expertise = "You are an expert in the domain of optimization heuristics and combinatorial optimization problems. Your task is to design heuristics that can effectively solve optimization problems."
         new_directions = self.heu_llm.prompt(expertise, message, 0.7)
-        json_file = extract_code(new_directions)
-        try:
-            data = json.loads(json_file)
-        except Exception as e:
-            logger.warning(f"Failed to parse JSON: {e}, retrying...")
-            new_message = f"There is an exception {e} while parsing the json file {json_file}, please check the json file and return a correct one."
-            expert = "You are an expert in finding coding errors and debugging."
-            new_directions = self.heu_llm.prompt(expert, new_message, 0.7)
-            json_file = extract_code(new_directions)
-            data = json.loads(json_file)
+        json_file = extract_code(new_directions) if new_directions else None
+        data = None
+        if json_file:
+            try:
+                data = json.loads(json_file)
+            except (json.JSONDecodeError, UnicodeDecodeError, ValueError, TypeError) as e:
+                logger.warning(f"Failed to parse JSON: {e}, retrying...")
+                new_message = f"There is an exception {e} while parsing the json file {json_file}, please check the json file and return a correct one."
+                expert = "You are an expert in finding coding errors and debugging."
+                new_directions = self.heu_llm.prompt(expert, new_message, 0.7)
+                json_file = extract_code(new_directions) if new_directions else None
+                if json_file:
+                    try:
+                        data = json.loads(json_file)
+                    except (json.JSONDecodeError, UnicodeDecodeError, ValueError, TypeError) as err:
+                        logger.warning(f"Failed to parse retried JSON: {err}")
 
-        for i in range(len(data['direction'])):
-            directions.append(data['direction'][i]["content"])
+        if data and isinstance(data, dict) and "direction" in data and isinstance(data["direction"], list):
+            for item in data["direction"]:
+                if isinstance(item, dict) and "content" in item:
+                    directions.append(item["content"])
         return directions
 
     def generate_seed_algorithm(self, formula_str, prob_type, threshold, t=0.7):
@@ -228,10 +246,25 @@ class MoH:
         size = prob_type.split("-")[1]
         cur_direction = []
         cur_pop_size = 0
+        max_rounds = int(getattr(self.cfg, "seed_max_attempts", 15))
+        directions_per_round = 5
 
+        rounds = 0
         while cur_pop_size < 5:
+            if rounds >= max_rounds:
+                if cur_pop_size == 0:
+                    raise RuntimeError(
+                        f"generate_seed_algorithm produced no valid seeds for {prob_type} "
+                        f"after {max_rounds} rounds"
+                    )
+                logger.warning(
+                    "Seed generation for %s stopped at %d/5 valid seeds after %d rounds",
+                    prob_type, cur_pop_size, max_rounds,
+                )
+                break
+            rounds += 1
             directions = self.generate_directions(problem, size, cur_direction, seed=True)
-            for idx in range(len(directions)):
+            for idx in range(min(len(directions), directions_per_round)):
                 role = "You are an expert in the domain of optimization heuristics and combinatorial optimization problems. Your task is to design heuristics that can effectively solve optimization problems."
                 message = f"""Write a function that will implement a Python algorithm to solve a problem as well as possible.
             The optimization problem is {problem} and the size you should focus on is {size}.
@@ -256,7 +289,7 @@ class MoH:
                 except Exception as e:
                     logger.warning(f"Utility failed: {e}")
                     logger.debug(traceback.format_exc())
-            cur_direction += directions
+            cur_direction += directions[:directions_per_round]
             cur_pop_size = self.subtask_pop.get_subtask_size(prob_type)
 
         return self.subtask_pop.get_random_solution(prob_type)
@@ -268,10 +301,26 @@ class MoH:
             size_key, self.cfg.problem.threshold.get(str(size_key), 6)
         )
 
+    def _solution_path(self, subtask):
+        filename = f"solution_{subtask}.json"
+        if getattr(self.cfg, "isolate_base_solutions", False):
+            base_dir = os.path.join(self.run_logger.output_dir, "base_solutions")
+            os.makedirs(base_dir, exist_ok=True)
+            return os.path.join(base_dir, filename)
+        return os.path.join(self.root_dir, "problems", self.problem_name, filename)
+
     def read_base_algorithm(self, subtask):
-        solution_path = os.path.join(self.root_dir, "problems", self.problem_name, f"solution_{subtask}.json")
+        solution_path = self._solution_path(subtask)
 
         if os.path.exists(solution_path):
+            try:
+                st = os.stat(solution_path)
+                logger.info(
+                    "read_base_algorithm %s from %s (size=%d bytes, mtime=%s)",
+                    subtask, solution_path, st.st_size, st.st_mtime,
+                )
+            except OSError:
+                pass
             self.subtask_pop.load_subtask_from_file(subtask, solution_path)
             base_algorithm = self.subtask_pop.get_random_solution(subtask)
         else:
@@ -368,12 +417,9 @@ class MoH:
             utility_vals.append(new_utility_val)
             idea_list.append(idea_r)
 
-        # Save subtask populations to problem dir
+        # Save subtask populations to solution path (isolated or shared)
         for i in range(n_tests):
-            solution_path = os.path.join(
-                self.root_dir, "problems", self.problem_name,
-                f"solution_{self.subtask_list[i]}.json"
-            )
+            solution_path = self._solution_path(self.subtask_list[i])
             self.subtask_pop.save_subtask_to_file(self.subtask_list[i], solution_path)
 
         if not (len(improved_algorithm_strs) == len(utility_vals) == len(self.size_weights) == len(idea_list) == n_tests):
@@ -464,6 +510,19 @@ class MoH:
 
         return improvement_successful, new_algorithm_str, improve_algorithm_func
 
+    def _provider_budget_exhausted(self) -> str | None:
+        for name in ("heu_llm", "meta_llm"):
+            client = getattr(self, name, None)
+            if client is None:
+                continue
+            budget = getattr(client, "budget", None)
+            if budget is None:
+                base = getattr(client, "base", None)
+                budget = getattr(base, "budget", None) if base is not None else None
+            if budget is not None and budget.exhausted_reason:
+                return budget.exhausted_reason
+        return None
+
     def run_meta_optimizer(self):
         self.get_seed()
 
@@ -473,6 +532,7 @@ class MoH:
         improver = first_improver
         previous_algorithm = improver
 
+        stop_reason = None
         for cur_iter in range(self.iteration):
             self._cur_iter = cur_iter
             logger.info(f"Start iteration {cur_iter}")
@@ -503,10 +563,17 @@ class MoH:
             logger.info(f"Finish iteration {cur_iter}")
 
             if self.max_eval_calls and self._total_eval_calls >= self.max_eval_calls:
-                logger.info(f"Reached max utility calls ({self.max_eval_calls}), stopping.")
+                stop_reason = f"max_eval_calls={self.max_eval_calls}"
+                logger.info("Reached max utility calls (%s), stopping.", self.max_eval_calls)
                 break
 
-        logger.info("Finish all iterations")
+            provider_stop = self._provider_budget_exhausted()
+            if provider_stop:
+                stop_reason = f"provider_budget:{provider_stop}"
+                logger.warning("Provider budget exhausted (%s), stopping without restart.", provider_stop)
+                break
+
+        logger.info("Finish all iterations (stop_reason=%s)", stop_reason)
         export_checkpoint(
             Path(self.run_logger.output_dir) / "checkpoint",
             self.improver_str,
@@ -517,5 +584,7 @@ class MoH:
                 "source_run": self.run_logger.output_dir,
                 "training_meta_utility": self.meta_utility_val,
                 "config": redacted_config(self.cfg),
+                "stop_reason": stop_reason,
+                "eval_calls": self._total_eval_calls,
             },
         )

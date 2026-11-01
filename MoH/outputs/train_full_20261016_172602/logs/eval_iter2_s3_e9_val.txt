@@ -1,0 +1,77 @@
+# ===== Heuristic Code =====
+#{Adaptive search-phase controller dynamically scales guided local search penalties by measuring tour edge utilization variance and stagnation state to shift smoothly between density-aware intensification and frequency-driven diversification.}
+
+import numpy as np
+
+def update_edge_distance(edge_distance, local_opt_tour, edge_n_used):
+    # Step 1: Copy initial edge distance matrix to ensure determinism and avoid side-effects
+    updated_edge_distance = np.copy(edge_distance)
+    n = len(local_opt_tour)
+
+    # Step 2: Vectorized structural node density estimation using k-nearest neighbors
+    k = min(6, n)
+    sorted_dists = np.sort(edge_distance, axis=1)
+    k_nn_avg = np.mean(sorted_dists[:, 1:k], axis=1)
+    node_density = 1.0 / (k_nn_avg + 1e-8)
+    node_density = node_density / (np.mean(node_density) + 1e-8)
+
+    # Step 3: Extract tour edges and edge properties
+    u_idx = local_opt_tour
+    v_idx = np.roll(local_opt_tour, -1)
+    tour_edge_lengths = edge_distance[u_idx, v_idx]
+    tour_edge_uses = edge_n_used[u_idx, v_idx]
+
+    # Step 4: Adaptive search-phase controller based on edge utilization variance and frequency distribution
+    mean_uses = np.mean(tour_edge_uses)
+    std_uses = np.std(tour_edge_uses)
+    cv_uses = std_uses / (mean_uses + 1e-6)  # Coefficient of variation of edge usage
+
+    # Transition parameter: high repetition / low relative variance indicates deep stagnation
+    stagnation_index = np.tanh(mean_uses / (5.0 + 10.0 * cv_uses))
+
+    # Adapt frequency decay rate and balance between global diversification and local exploitation
+    gamma = 0.15 + 0.50 * stagnation_index
+    w_global = 0.30 + 0.55 * stagnation_index
+    w_local = 1.0 - w_global
+
+    # Step 5: Guided Local Search utility calculation
+    avg_tour_length = np.mean(tour_edge_lengths)
+    relative_length = tour_edge_lengths / (avg_tour_length + 1e-8)
+
+    # Sigmoidal edge utility penalization
+    rank_penalty = 1.0 / (1.0 + np.exp(-4.0 * (relative_length - 1.0)))
+
+    # Adaptive usage discount and density coupling
+    usage_factor = 1.0 / (1.0 + gamma * tour_edge_uses)
+    edge_density = 0.5 * (node_density[u_idx] + node_density[v_idx])
+    local_penalty = relative_length * usage_factor * edge_density
+
+    # Step 6: Dynamic weighted blending and high-cost edge amplification
+    combined_penalty = w_global * rank_penalty + w_local * local_penalty
+
+    # Step 7: Apply scaling relative to edge length to preserve scale invariance
+    scaled_penalty = combined_penalty * (0.05 + 0.10 * stagnation_index) * avg_tour_length
+
+    # Top quartile critical edge amplification
+    upper_threshold = np.percentile(tour_edge_lengths, 75)
+    scaled_penalty[tour_edge_lengths >= upper_threshold] *= (1.25 + 0.5 * stagnation_index)
+
+    # Step 8: Apply symmetric distance updates
+    np.add.at(updated_edge_distance, (u_idx, v_idx), scaled_penalty)
+    np.add.at(updated_edge_distance, (v_idx, u_idx), scaled_penalty)
+
+    return updated_edge_distance
+# ===== Eval Output =====
+[*] Running ...
+[*] mode=val, data=/home/ducanh/projects/EAs_project/MoH/problems/tsp_gls/data/val/val_instance_data_sol_200.pkl, seed=0, n_instances=8
+[*] instance_indices=[6, 9, 0, 2, 4, 3, 5, 1]
+[*] instance 6: obj=10.8257, gap=3.6365
+[*] instance 9: obj=11.0360, gap=3.4977
+[*] instance 0: obj=11.4320, gap=5.0183
+[*] instance 2: obj=11.2240, gap=2.5227
+[*] instance 4: obj=11.2949, gap=4.1274
+[*] instance 3: obj=10.8664, gap=2.4950
+[*] instance 5: obj=11.2511, gap=3.3774
+[*] instance 1: obj=11.4922, gap=4.2453
+[*] ave_gap on size 200: 3.6150394925124036
+3.6150394925124036

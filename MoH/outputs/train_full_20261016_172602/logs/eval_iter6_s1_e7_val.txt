@@ -1,0 +1,92 @@
+# ===== Heuristic Code =====
+#{A mathematical hybridization of Guided Local Search using adaptive Pareto-rank thresholding, dynamic Lagrangian-like scaling calibrated to the tour length and search depth, and targeted k-nearest candidate incentive discounts for under-explored alternative connections.}
+
+import numpy as np
+
+def update_edge_distance(edge_distance, local_opt_tour, edge_n_used):
+    updated_edge_distance = np.copy(edge_distance)
+    n = len(local_opt_tour)
+    if n < 4:
+        return updated_edge_distance
+
+    u_idx = np.array(local_opt_tour, dtype=np.intp)
+    v_idx = np.roll(u_idx, -1)
+
+    costs = edge_distance[u_idx, v_idx].astype(np.float64)
+    used = edge_n_used[u_idx, v_idx].astype(np.float64)
+
+    # Tour statistics and analytical penalty parameter lambda_gls
+    tour_length = np.sum(costs)
+    lambda_gls = tour_length / float(n)
+
+    # Normalized cost and frequency features
+    mean_cost = np.mean(costs)
+    std_cost = np.std(costs) + 1e-8
+    z_costs = (costs - mean_cost) / std_cost
+    cost_weights = 1.0 / (1.0 + np.exp(-z_costs))
+
+    # Utility formulation: balance original edge cost, relative deviation, and usage count
+    utilities = (costs * (1.0 + 0.5 * cost_weights)) / (1.0 + used)
+
+    # Selective top-quantile thresholding to protect good substructures (penalize top ~25-30% edges)
+    threshold = np.quantile(utilities, 0.70)
+    penalize_mask = utilities >= threshold
+    if not np.any(penalize_mask):
+        penalize_mask = utilities == np.max(utilities)
+
+    p_u = u_idx[penalize_mask]
+    p_v = v_idx[penalize_mask]
+    p_costs = costs[penalize_mask]
+    p_used = used[penalize_mask]
+    p_utils = utilities[penalize_mask]
+    max_util = np.max(utilities) + 1e-8
+
+    # Adaptive penalty scaling: scales with lambda_gls, utility prominence, and sub-linear memory dampening
+    penalties = (lambda_gls * 0.35) * (1.0 + p_utils / max_util) / np.sqrt(1.0 + p_used)
+    updated_edge_distance[p_u, p_v] += penalties
+    updated_edge_distance[p_v, p_u] += penalties
+
+    # Targeted discount for high-potential candidate edges incident to penalized nodes
+    penalized_nodes = np.unique(np.concatenate((p_u, p_v)))
+    k_candidates = min(5, n - 2)
+
+    for node in penalized_nodes:
+        # Evaluate candidate neighbors: prioritize unvisited/low-used edges with small original distances
+        row_used = edge_n_used[node].astype(np.float64)
+        row_cost = edge_distance[node].astype(np.float64)
+
+        mask = np.ones(n, dtype=bool)
+        mask[node] = False
+        mask[p_v[p_u == node]] = False
+        mask[p_u[p_v == node]] = False
+
+        cand_indices = np.where(mask)[0]
+        if len(cand_indices) == 0:
+            continue
+
+        # Score candidate edges: lower cost and lower usage receive higher priority
+        cand_scores = row_cost[cand_indices] * (1.0 + 0.5 * row_used[cand_indices])
+        best_cand_pos = np.argpartition(cand_scores, min(k_candidates, len(cand_scores) - 1))[:k_candidates]
+        selected_cands = cand_indices[best_cand_pos]
+
+        # Apply proportional discount calibrated to avoid negative distances
+        discount_rate = 0.03 / (1.0 + np.mean(row_used[selected_cands]))
+        discounts = updated_edge_distance[node, selected_cands] * discount_rate
+        updated_edge_distance[node, selected_cands] -= discounts
+        updated_edge_distance[selected_cands, node] = updated_edge_distance[node, selected_cands]
+
+    return updated_edge_distance
+# ===== Eval Output =====
+[*] Running ...
+[*] mode=val, data=/home/ducanh/projects/EAs_project/MoH/problems/tsp_gls/data/val/val_instance_data_sol_50.pkl, seed=0, n_instances=8
+[*] instance_indices=[6, 9, 0, 2, 4, 3, 5, 1]
+[*] instance 6: obj=5.7136, gap=0.5983
+[*] instance 9: obj=6.0217, gap=0.9695
+[*] instance 0: obj=5.8546, gap=1.3193
+[*] instance 2: obj=5.8071, gap=0.0000
+[*] instance 4: obj=5.5821, gap=3.4387
+[*] instance 3: obj=5.8230, gap=1.1483
+[*] instance 5: obj=5.6187, gap=0.0000
+[*] instance 1: obj=5.3071, gap=2.7501
+[*] ave_gap on size 50: 1.2780309002193264
+1.2780309002193264

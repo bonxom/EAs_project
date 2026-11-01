@@ -1,0 +1,65 @@
+# ===== Heuristic Code =====
+#{Replaces linear blending with a multiplicative multi-attribute utility decomposition that scales edge penalties via power-law relative lengths, density-aware topological context, and power-law frequency dampening calibrated against 1-tree lower bound gap.}
+
+import numpy as np
+
+def update_edge_distance(edge_distance, local_opt_tour, edge_n_used):
+    updated_edge_distance = np.copy(edge_distance)
+    n = len(local_opt_tour)
+
+    # Calculate local topological density using k-nearest neighbors
+    sorted_dists = np.sort(edge_distance, axis=1)
+    k_nn_avg = np.mean(sorted_dists[:, 1:min(6, n)], axis=1)
+    node_density = 1.0 / (k_nn_avg + 1e-6)
+    node_density = node_density / np.mean(node_density)
+
+    # Extract current tour edge characteristics
+    u_idx = local_opt_tour
+    v_idx = np.roll(local_opt_tour, -1)
+    tour_edge_lengths = edge_distance[u_idx, v_idx]
+    current_tour_cost = np.sum(tour_edge_lengths)
+    avg_tour_length = current_tour_cost / n
+
+    # Simple Held-Karp / 2-nearest-neighbor lower bound proxy
+    approx_lb = 0.5 * np.sum(sorted_dists[:, 1] + sorted_dists[:, 2])
+    optimality_gap = max(0.01, (current_tour_cost - approx_lb) / (approx_lb + 1e-6))
+
+    # Multiplicative utility decomposition parameters
+    # As gap closes or stagnation sets in (measured via average penalties), adjust intensity
+    relative_length = tour_edge_lengths / (avg_tour_length + 1e-6)
+    density_factor = 0.5 * (node_density[u_idx] + node_density[v_idx])
+
+    # Base penalty proportional to edge scale and relative quality gap
+    base_penalty = avg_tour_length * np.sqrt(optimality_gap) * 0.15
+
+    alpha = 1.5  # Exponent prioritizing longer edges super-linearly
+    beta = 0.8   # Exponent for historical penalization dampening
+
+    # Multiplicative penalty calculation
+    used_counts = edge_n_used[u_idx, v_idx]
+    penalties = (
+        base_penalty
+        * np.power(np.maximum(relative_length, 0.1), alpha)
+        * np.power(density_factor, 0.5)
+        * np.power(1.0 + used_counts, -beta)
+    )
+
+    # Apply symmetric updates to the distance matrix
+    np.add.at(updated_edge_distance, (u_idx, v_idx), penalties)
+    np.add.at(updated_edge_distance, (v_idx, u_idx), penalties)
+
+    return updated_edge_distance
+# ===== Eval Output =====
+[*] Running ...
+[*] mode=val, data=/home/ducanh/projects/EAs_project/MoH/problems/tsp_gls/data/val/val_instance_data_sol_200.pkl, seed=0, n_instances=8
+[*] instance_indices=[6, 9, 0, 2, 4, 3, 5, 1]
+[*] instance 6: obj=10.6658, gap=2.1055
+[*] instance 9: obj=11.0360, gap=3.4977
+[*] instance 0: obj=11.4240, gap=4.9448
+[*] instance 2: obj=11.2240, gap=2.5227
+[*] instance 4: obj=11.1610, gap=2.8935
+[*] instance 3: obj=10.8664, gap=2.4950
+[*] instance 5: obj=11.1977, gap=2.8863
+[*] instance 1: obj=11.4922, gap=4.2453
+[*] ave_gap on size 200: 3.198851022961116
+3.198851022961116

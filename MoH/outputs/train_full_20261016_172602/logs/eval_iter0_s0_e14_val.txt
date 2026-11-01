@@ -1,0 +1,66 @@
+# ===== Heuristic Code =====
+# {Scale Guided Local Search edge utilities by a vertex connectivity pressure factor that favors edges incident to nodes with closely competing alternative neighbors, directing penalties toward edges that can be replaced with minimal cost increase.}
+
+import numpy as np
+
+def update_edge_distance(edge_distance, local_opt_tour, edge_n_used):
+    updated_edge_distance = np.copy(edge_distance)
+    n = edge_distance.shape[0]
+
+    tour_edges = [(local_opt_tour[i], local_opt_tour[(i + 1) % n]) for i in range(n)]
+    tour_lengths = [edge_distance[u, v] for u, v in tour_edges]
+    tour_length = sum(tour_lengths)
+    avg_edge = tour_length / float(n) if n > 0 else 1.0
+
+    # Compute node connectivity pressure: nodes whose 2nd and 3rd nearest neighbors
+    # are very close to their nearest neighbor have high replacement flexibility.
+    # We measure this by the ratio of (k-th nearest distance - nearest distance) relative to nearest distance.
+    flexibility = np.zeros(n)
+    for i in range(n):
+        dists = np.sort(edge_distance[i])
+        # dists[0] is self-loop (0.0), dists[1] is nearest, dists[2] is 2nd nearest
+        d1 = dists[1] if n > 1 else 1.0
+        d2 = dists[2] if n > 2 else d1
+        # Smaller gap (d2 - d1) means an easy near-equidistant swap exists
+        gap = max(d2 - d1, 0.0)
+        # Higher flexibility score when gap is small relative to d1
+        flexibility[i] = 1.0 / (1.0 + gap / (d1 + 1e-8))
+
+    # Weight edge utility with the connectivity pressure of its endpoints
+    utilities = []
+    for u, v in tour_edges:
+        base_util = edge_distance[u, v] / (1.0 + edge_n_used[u, v])
+        # Geometric mean or average flexibility of the incident vertices
+        alt_factor = 0.5 * (flexibility[u] + flexibility[v])
+        utilities.append(base_util * (1.0 + 0.5 * alt_factor))
+
+    max_utility = max(utilities) if utilities else 0.0
+    if max_utility <= 0.0:
+        return updated_edge_distance
+
+    mean_used = np.mean([edge_n_used[u, v] for u, v in tour_edges])
+    threshold_ratio = max(0.92, 0.99 - 0.02 * min(mean_used, 3.0))
+
+    penalty_lambda = 0.30 * avg_edge
+
+    for (u, v), util in zip(tour_edges, utilities):
+        if util >= threshold_ratio * max_utility:
+            penalty = penalty_lambda
+            updated_edge_distance[u, v] += penalty
+            updated_edge_distance[v, u] += penalty
+
+    return updated_edge_distance
+# ===== Eval Output =====
+[*] Running ...
+[*] mode=val, data=/home/ducanh/projects/EAs_project/MoH/problems/tsp_gls/data/val/val_instance_data_sol_20.pkl, seed=0, n_instances=8
+[*] instance_indices=[6, 9, 0, 2, 4, 3, 5, 1]
+[*] instance 6: obj=3.7045, gap=0.0000
+[*] instance 9: obj=4.1442, gap=0.0000
+[*] instance 0: obj=3.6827, gap=0.0000
+[*] instance 2: obj=3.8184, gap=0.0000
+[*] instance 4: obj=3.8385, gap=0.0000
+[*] instance 3: obj=3.6971, gap=0.0000
+[*] instance 5: obj=3.4281, gap=0.0000
+[*] instance 1: obj=3.6958, gap=0.0000
+[*] ave_gap on size 20: 1.2218318606871392e-06
+1.2218318606871392e-06

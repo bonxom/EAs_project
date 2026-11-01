@@ -1,0 +1,80 @@
+# ===== Heuristic Code =====
+#{This strategy decouples penalties into a graph-topological bridge factor via minimum spanning tree backbone isolation and a geometric stretch factor normalized by local cluster dispersion, balanced dynamically by tour edge variance and penalized inversely to historical usage.}#
+
+import numpy as np
+
+def update_edge_distance(edge_distance, local_opt_tour, edge_n_used):
+    updated_edge_distance = np.copy(edge_distance)
+    n = len(local_opt_tour)
+
+    u_idx = local_opt_tour
+    v_idx = np.roll(local_opt_tour, -1)
+
+    tour_lengths = edge_distance[u_idx, v_idx]
+    mean_len = np.mean(tour_lengths) + 1e-12
+    var_len = np.var(tour_lengths)
+    cv_len = np.sqrt(var_len) / mean_len
+
+    # 1. Topological bridge metric using Prim's MST connectivity on the tour-induced subgraph / k-nearest backbone
+    # Construct an approximate minimum spanning tree over the tour vertices to identify structural inter-cluster bridges
+    in_mst = np.zeros(n, dtype=bool)
+    min_cost = np.full(n, np.inf)
+    parent = np.full(n, -1, dtype=int)
+
+    min_cost[0] = 0.0
+    for _ in range(n):
+        unvisited = np.where(~in_mst)[0]
+        cur = unvisited[np.argmin(min_cost[unvisited])]
+        in_mst[cur] = True
+
+        c_node = local_opt_tour[cur]
+        rem_nodes = local_opt_tour[~in_mst]
+        dists_to_rem = edge_distance[c_node, rem_nodes]
+
+        update_mask = dists_to_rem < min_cost[~in_mst]
+        indices_to_update = np.where(~in_mst)[0][update_mask]
+        min_cost[indices_to_update] = dists_to_rem[update_mask]
+        parent[indices_to_update] = cur
+
+    mst_edge_lengths = min_cost[1:]
+    mst_scale = np.median(mst_edge_lengths) + 1e-12
+    # Edges in the tour that greatly exceed the MST local connection threshold act as cluster bridges
+    bridge_penalty = np.maximum(0.0, (tour_lengths - mst_scale) / mst_scale)
+
+    # 2. Geometric stretch factor: Tour edge cost relative to bounding cluster dispersion
+    # Measure local radius around both endpoints using the 3-nearest tour-neighbors
+    k_local = min(4, n)
+    sorted_tour_edges = np.sort(edge_distance[u_idx][:, local_opt_tour], axis=1)
+    local_dispersion = np.mean(sorted_tour_edges[:, 1:k_local], axis=1) + 1e-12
+    stretch_factor = tour_lengths / local_dispersion
+
+    # Dynamic balance using tour length variance / coefficient of variation
+    # High variance indicates clustered topologies with long bridges; low variance indicates uniform spatial spread
+    w_bridge = np.clip(cv_len / (cv_len + 1.0), 0.15, 0.85)
+    w_stretch = 1.0 - w_bridge
+
+    # Composite penalty modulated inversely by historical edge usage frequency
+    usage = edge_n_used[u_idx, v_idx]
+    usage_attenuation = 1.0 / np.sqrt(1.0 + usage)
+
+    combined_penalty = (w_bridge * bridge_penalty + w_stretch * stretch_factor) * usage_attenuation
+    combined_penalty *= (mean_len * 0.25)
+
+    np.add.at(updated_edge_distance, (u_idx, v_idx), combined_penalty)
+    np.add.at(updated_edge_distance, (v_idx, u_idx), combined_penalty)
+
+    return updated_edge_distance
+# ===== Eval Output =====
+[*] Running ...
+[*] mode=val, data=/home/ducanh/projects/EAs_project/MoH/problems/tsp_gls/data/val/val_instance_data_sol_200.pkl, seed=0, n_instances=8
+[*] instance_indices=[6, 9, 0, 2, 4, 3, 5, 1]
+[*] instance 6: obj=10.6573, gap=2.0244
+[*] instance 9: obj=10.9597, gap=2.7825
+[*] instance 0: obj=11.4240, gap=4.9448
+[*] instance 2: obj=11.2182, gap=2.4702
+[*] instance 4: obj=11.0123, gap=1.5223
+[*] instance 3: obj=10.7784, gap=1.6649
+[*] instance 5: obj=11.2178, gap=3.0709
+[*] instance 1: obj=11.3493, gap=2.9486
+[*] ave_gap on size 200: 2.6785635725643075
+2.6785635725643075

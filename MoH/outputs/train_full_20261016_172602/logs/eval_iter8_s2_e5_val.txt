@@ -1,0 +1,86 @@
+# ===== Heuristic Code =====
+#{An adaptive Guided Local Search heuristic that dynamically cools edge frequencies via tour stagnation estimation and scales penalties using local tour variance and geometric detour inefficiencies.}#
+
+import numpy as np
+
+def update_edge_distance(edge_distance, local_opt_tour, edge_n_used):
+    updated_edge_distance = np.copy(edge_distance)
+    num_nodes = len(local_opt_tour)
+    if num_nodes < 4:
+        return updated_edge_distance
+
+    tour = np.asarray(local_opt_tour)
+    u_idx = tour
+    v_idx = np.roll(tour, -1)
+    w_idx = np.roll(tour, -2)
+
+    # Edge distances along the local optimal tour
+    d_uv = edge_distance[u_idx, v_idx]
+    d_vw = edge_distance[v_idx, w_idx]
+    d_uw = edge_distance[u_idx, w_idx]
+
+    # Stagnation estimation based on average historical edge usage of the current tour
+    current_tour_freqs = edge_n_used[u_idx, v_idx]
+    mean_tour_freq = np.mean(current_tour_freqs)
+
+    # Adaptive temperature-cooled attenuation schedule: accelerate decay under stagnation
+    cooling_factor = np.clip(0.98 - 0.05 * (mean_tour_freq / (1.0 + mean_tour_freq)), 0.85, 0.98)
+    edge_n_used *= cooling_factor
+
+    # Geometric detour calculation and acute angle detection
+    detour_ratio = (d_uv + d_vw) / (d_uw + 1e-8)
+    denom = 2.0 * d_uv * d_vw + 1e-8
+    cos_turn = np.clip((d_uv**2 + d_vw**2 - d_uw**2) / denom, -1.0, 1.0)
+    acute_deficit = 1.0 - cos_turn
+    geom_inefficiency = detour_ratio * (1.0 + 0.5 * acute_deficit)
+    local_geom_factor = 0.5 * (geom_inefficiency + np.roll(geom_inefficiency, 1))
+
+    # Variance-based normalization instead of dense global matrix mean
+    mean_tour_edge = np.mean(d_uv)
+    std_tour_edge = np.std(d_uv)
+    adaptive_lambda = mean_tour_edge + 0.5 * std_tour_edge
+
+    # Edge utility computation for Guided Local Search
+    base_freq = edge_n_used[u_idx, v_idx]
+    utilities = (d_uv / (1.0 + base_freq)) * (1.0 + 0.35 * local_geom_factor)
+
+    k = max(1, int(np.ceil(0.14 * num_nodes)))
+    top_k_indices = np.argsort(utilities)[-k:]
+
+    # Penalize inefficient / frequently trapped edges
+    for idx in top_k_indices:
+        u, v = u_idx[idx], v_idx[idx]
+        edge_n_used[u, v] += 1.0
+        edge_n_used[v, u] += 1.0
+        freq_penalty = 1.0 + np.log1p(edge_n_used[u, v])
+        geom_weight = 1.0 + 0.5 * local_geom_factor[idx]
+        penalty = 0.30 * adaptive_lambda * freq_penalty * geom_weight
+        updated_edge_distance[u, v] += penalty
+        updated_edge_distance[v, u] += penalty
+
+    # Incentivize promising shortcuts for sharp detours
+    high_detour_indices = np.argsort(detour_ratio)[-k:]
+    for idx in high_detour_indices:
+        u, w = u_idx[idx], w_idx[idx]
+        freq = edge_n_used[u, w]
+        if freq < 1.0:
+            discount = 0.12 * adaptive_lambda * (1.0 / (1.0 + freq))
+            new_cost = max(1e-6, updated_edge_distance[u, w] - discount)
+            updated_edge_distance[u, w] = new_cost
+            updated_edge_distance[w, u] = new_cost
+
+    return updated_edge_distance
+# ===== Eval Output =====
+[*] Running ...
+[*] mode=val, data=/home/ducanh/projects/EAs_project/MoH/problems/tsp_gls/data/val/val_instance_data_sol_100.pkl, seed=0, n_instances=8
+[*] instance_indices=[6, 9, 0, 2, 4, 3, 5, 1]
+[*] instance 6: obj=7.8248, gap=0.8404
+[*] instance 9: obj=8.1052, gap=0.7697
+[*] instance 0: obj=8.0001, gap=0.0000
+[*] instance 2: obj=8.1372, gap=0.7843
+[*] instance 4: obj=7.8131, gap=0.0000
+[*] instance 3: obj=7.3713, gap=0.0000
+[*] instance 5: obj=7.6670, gap=0.3984
+[*] instance 1: obj=7.5570, gap=0.0000
+[*] ave_gap on size 100: 0.349100993710863
+0.349100993710863

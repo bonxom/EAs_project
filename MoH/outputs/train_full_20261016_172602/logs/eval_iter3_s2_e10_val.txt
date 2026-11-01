@@ -1,0 +1,97 @@
+# ===== Heuristic Code =====
+#{An orthogonal multi-neighborhood ruin-and-recreate guided local search that perturbs high-utility tour edges, penalizes cross-cluster bridge connections, and promotes deterministic geometric 2-opt and 3-opt shortcuts using dynamic frequency-scaled incentives.}
+
+import numpy as np
+
+def update_edge_distance(edge_distance, local_opt_tour, edge_n_used):
+    updated_edge_distance = np.copy(edge_distance)
+    num_nodes = len(local_opt_tour)
+    if num_nodes < 4:
+        return updated_edge_distance
+
+    tour = np.asarray(local_opt_tour, dtype=int)
+    u_idx = tour
+    v_idx = np.roll(tour, -1)
+    w_idx = np.roll(tour, -2)
+    z_idx = np.roll(tour, -3)
+
+    # Coordinated decay of edge frequency matrix to allow cyclic reuse
+    edge_n_used *= 0.95
+
+    # Multi-hop metric evaluations
+    d_uv = edge_distance[u_idx, v_idx]
+    d_vw = edge_distance[v_idx, w_idx]
+    d_uw = edge_distance[u_idx, w_idx]
+    d_wz = edge_distance[w_idx, z_idx]
+    d_uz = edge_distance[u_idx, z_idx]
+
+    # Geometric turning angle and acute deficit
+    denom_uvw = 2.0 * d_uv * d_vw + 1e-8
+    cos_turn = np.clip((d_uv**2 + d_vw**2 - d_uw**2) / denom_uvw, -1.0, 1.0)
+    acute_deficit = 1.0 - cos_turn
+    detour_2hop = (d_uv + d_vw) / (d_uw + 1e-8)
+    geom_inefficiency_2hop = detour_2hop * (1.0 + 0.45 * acute_deficit)
+
+    # Triplet-neighborhood utility metric
+    freq_uv = edge_n_used[u_idx, v_idx]
+    local_geom = 0.5 * (geom_inefficiency_2hop + np.roll(geom_inefficiency_2hop, 1))
+    utilities = (d_uv / (1.0 + freq_uv)) * (1.0 + 0.35 * local_geom)
+
+    # Dynamic temperature / scale derived from global tour and matrix statistics
+    global_mean_dist = np.mean(edge_distance)
+    tour_len = np.sum(d_uv)
+    mean_tour_edge = tour_len / max(1, num_nodes)
+    scale_factor = 0.5 * (global_mean_dist + mean_tour_edge)
+
+    # Multi-neighborhood Ruin Phase: select top-k inefficient edges and orthogonal dispersive edges
+    k = max(2, int(np.ceil(0.15 * num_nodes)))
+    top_k_indices = np.argsort(utilities)[-k:]
+
+    for idx in top_k_indices:
+        u, v = u_idx[idx], v_idx[idx]
+        edge_n_used[u, v] += 1.0
+        edge_n_used[v, u] += 1.0
+
+        freq_weight = 1.0 + np.log1p(edge_n_used[u, v])
+        penalty = 0.32 * scale_factor * freq_weight * (1.0 + 0.4 * local_geom[idx])
+        updated_edge_distance[u, v] += penalty
+        updated_edge_distance[v, u] += penalty
+
+    # Deterministic Recreate Phase 1: 2-hop shortcut incentivization
+    top_shortcuts_2hop = np.argsort(detour_2hop)[-k:]
+    for idx in top_shortcuts_2hop:
+        u, w = u_idx[idx], w_idx[idx]
+        freq = edge_n_used[u, w]
+        if freq < 1.5:
+            incentive = 0.12 * scale_factor / (1.0 + freq)
+            new_val = max(1e-6, updated_edge_distance[u, w] - incentive)
+            updated_edge_distance[u, w] = new_val
+            updated_edge_distance[w, u] = new_val
+
+    # Deterministic Recreate Phase 2: 3-hop long-range reconnection incentives
+    detour_3hop = (d_uv + d_vw + d_wz) / (d_uz + 1e-8)
+    top_shortcuts_3hop = np.argsort(detour_3hop)[-(k // 2):]
+    for idx in top_shortcuts_3hop:
+        u, z = u_idx[idx], z_idx[idx]
+        freq = edge_n_used[u, z]
+        if freq < 1.0:
+            incentive = 0.08 * scale_factor / (1.0 + freq)
+            new_val = max(1e-6, updated_edge_distance[u, z] - incentive)
+            updated_edge_distance[u, z] = new_val
+            updated_edge_distance[z, u] = new_val
+
+    return updated_edge_distance
+# ===== Eval Output =====
+[*] Running ...
+[*] mode=val, data=/home/ducanh/projects/EAs_project/MoH/problems/tsp_gls/data/val/val_instance_data_sol_100.pkl, seed=0, n_instances=8
+[*] instance_indices=[6, 9, 0, 2, 4, 3, 5, 1]
+[*] instance 6: obj=7.7627, gap=0.0399
+[*] instance 9: obj=8.0501, gap=0.0846
+[*] instance 0: obj=8.0001, gap=0.0000
+[*] instance 2: obj=8.1097, gap=0.4432
+[*] instance 4: obj=7.8131, gap=0.0000
+[*] instance 3: obj=7.3713, gap=0.0000
+[*] instance 5: obj=7.6365, gap=0.0000
+[*] instance 1: obj=7.5570, gap=0.0000
+[*] ave_gap on size 100: 0.07096450710117608
+0.07096450710117608

@@ -1,0 +1,83 @@
+# ===== Heuristic Code =====
+#{This algorithm penalizes high-utility tour edges using an entropy-based rigidity factor while applying rank-attenuated discount incentives to incident unexplored shortcuts to escape local optima.}#
+
+import numpy as np
+
+def update_edge_distance(edge_distance, local_opt_tour, edge_n_used):
+    updated_edge_distance = np.copy(edge_distance)
+    n = len(local_opt_tour)
+    if n < 4:
+        return updated_edge_distance
+
+    u_idx = np.array(local_opt_tour, dtype=np.intp)
+    v_idx = np.roll(u_idx, -1)
+
+    costs = edge_distance[u_idx, v_idx].astype(np.float64)
+    used = edge_n_used[u_idx, v_idx].astype(np.float64)
+
+    # Compute node usage entropy and motif rigidity for local tour edges
+    total_node_usage = np.sum(edge_n_used, axis=1, dtype=np.float64)
+    u_total = total_node_usage[u_idx] + 1e-9
+    v_total = total_node_usage[v_idx] + 1e-9
+
+    p_u = edge_n_used[u_idx] / u_total[:, None]
+    p_v = edge_n_used[v_idx] / v_total[:, None]
+
+    entropy_u = -np.sum(p_u * np.log(p_u + 1e-12), axis=1)
+    entropy_v = -np.sum(p_v * np.log(p_v + 1e-12), axis=1)
+    max_entropy = np.log(max(n - 1.0, 1.0))
+
+    motif_rigidity = 1.0 - (0.5 * (entropy_u + entropy_v) / (max_entropy + 1e-9))
+    motif_rigidity = np.clip(motif_rigidity, 0.0, 1.0)
+
+    # Cost z-score gating combined with rigidity-augmented utility
+    mean_cost = np.mean(costs)
+    std_cost = np.std(costs) + 1e-8
+    z_scores = (costs - mean_cost) / std_cost
+    z_weights = 1.0 / (1.0 + np.exp(-z_scores))
+
+    utilities = (costs * (1.0 + z_weights) * (1.0 + 1.5 * motif_rigidity)) / (1.0 + used)
+    threshold = np.median(utilities)
+    penalize_mask = utilities >= threshold
+
+    p_u = u_idx[penalize_mask]
+    p_v = v_idx[penalize_mask]
+    p_costs = costs[penalize_mask]
+    p_rigidity = motif_rigidity[penalize_mask]
+
+    # Proportional cost penalty modulated by rigidity
+    penalties = p_costs * (0.35 + 0.65 * p_rigidity)
+    updated_edge_distance[p_u, p_v] += penalties
+    updated_edge_distance[p_v, p_u] += penalties
+
+    # Rank-attenuated incentive discount for unexplored alternatives incident to penalized nodes
+    penalized_nodes = np.unique(np.concatenate((p_u, p_v)))
+    base_decay = 0.05
+    for u in penalized_nodes:
+        unused_mask = (edge_n_used[u] == 0)
+        unused_mask[u] = False
+        candidates = np.where(unused_mask)[0]
+        if len(candidates) > 0:
+            cand_costs = edge_distance[u, candidates]
+            ranks = np.argsort(np.argsort(cand_costs))
+            decay_factors = base_decay / (1.0 + 0.3 * ranks)
+
+            discounts = updated_edge_distance[u, candidates] * decay_factors
+            updated_edge_distance[u, candidates] -= discounts
+            updated_edge_distance[candidates, u] = updated_edge_distance[u, candidates]
+
+    return updated_edge_distance
+# ===== Eval Output =====
+[*] Running ...
+[*] mode=val, data=/home/ducanh/projects/EAs_project/MoH/problems/tsp_gls/data/val/val_instance_data_sol_50.pkl, seed=0, n_instances=8
+[*] instance_indices=[6, 9, 0, 2, 4, 3, 5, 1]
+[*] instance 6: obj=5.7136, gap=0.5983
+[*] instance 9: obj=5.9639, gap=0.0000
+[*] instance 0: obj=5.7783, gap=0.0000
+[*] instance 2: obj=5.8071, gap=0.0000
+[*] instance 4: obj=5.3965, gap=0.0000
+[*] instance 3: obj=5.7569, gap=0.0000
+[*] instance 5: obj=5.6187, gap=0.0000
+[*] instance 1: obj=5.1651, gap=0.0000
+[*] ave_gap on size 50: 0.07478878681544121
+0.07478878681544121

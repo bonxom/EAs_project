@@ -1,0 +1,135 @@
+# ===== Heuristic Code =====
+#{Contiguous multi-scale sub-tour persistence fragmentation uses harmonic n-gram rigidity scores to super-linearly penalize stubborn chain motifs while simultaneously applying targeted multi-chord bypass deflation and orthogonal k-nearest unvisited edge discounts at persistent segment endpoints.}#
+
+import numpy as np
+
+def update_edge_distance(edge_distance, local_opt_tour, edge_n_used):
+    # Step 1: Create a clean copy of the edge distance matrix
+    updated_edge_distance = np.copy(edge_distance)
+    n = len(local_opt_tour)
+    if n < 8:
+        return updated_edge_distance
+
+    tour = np.array(local_opt_tour, dtype=np.intp)
+    u_idx = tour
+    v_idx = np.roll(tour, -1)
+    w_idx = np.roll(tour, -2)
+    x_idx = np.roll(tour, -3)
+    y_idx = np.roll(tour, -4)
+
+    # Step 2: Edge costs and historical usage frequencies along the tour
+    e_costs = edge_distance[u_idx, v_idx].astype(np.float64)
+    e_used = edge_n_used[u_idx, v_idx].astype(np.float64)
+
+    # Step 3: Harmonic multi-scale chain persistence (2-edge, 3-edge, 4-edge contiguous chains)
+    e_used_m1 = np.roll(e_used, 1)
+    e_used_p1 = np.roll(e_used, -1)
+    e_used_p2 = np.roll(e_used, -2)
+    e_used_p3 = np.roll(e_used, -3)
+
+    # Minimum-based chain co-occurrence n-grams
+    chain_2 = np.minimum(e_used, e_used_p1)
+    chain_3 = np.minimum(chain_2, e_used_p2)
+    chain_4 = np.minimum(chain_3, e_used_p3)
+
+    # Balanced chain persistence with local neighborhood context
+    avg_chain2 = np.mean(chain_2) + 1e-6
+    avg_chain3 = np.mean(chain_3) + 1e-6
+    avg_chain4 = np.mean(chain_4) + 1e-6
+
+    harmonic_persistence = (
+        0.45 * (chain_2 / avg_chain2) +
+        0.35 * (chain_3 / avg_chain3) +
+        0.20 * (chain_4 / avg_chain4)
+    )
+
+    # Super-linear rigidity factor
+    rigidity = 1.0 + np.power(harmonic_persistence, 1.75)
+
+    # Edge-level cost prominence relative to tour average
+    mean_cost = np.mean(e_costs)
+    std_cost = np.std(e_costs) + 1e-8
+    z_cost = (e_costs - mean_cost) / std_cost
+    cost_sig = 1.0 / (1.0 + np.exp(-z_cost))
+
+    # Utility combines cost prominence, rigidity, and inverse search frequency
+    utilities = (e_costs * (1.0 + 1.5 * cost_sig) * rigidity) / (1.0 + np.sqrt(e_used + 1.0))
+
+    # Step 4: Penalize top utility edges with super-linear persistence penalty
+    penalize_threshold = np.quantile(utilities, 0.40)
+    penalize_mask = utilities >= penalize_threshold
+
+    p_u = u_idx[penalize_mask]
+    p_v = v_idx[penalize_mask]
+    p_costs = e_costs[penalize_mask]
+    p_used = e_used[penalize_mask]
+    p_rigidity = rigidity[penalize_mask]
+
+    penalties = (p_costs / (1.0 + np.sqrt(p_used + 1.0))) * p_rigidity * 1.25
+    updated_edge_distance[p_u, p_v] += penalties
+    updated_edge_distance[p_v, p_u] += penalties
+
+    # Step 5: Guided bypasses via 2-chord (u->w) and 3-chord (u->x) deflation on rigid segments
+    chord2_mask = chain_2 >= np.median(chain_2)
+    c2_u = u_idx[chord2_mask]
+    c2_w = w_idx[chord2_mask]
+    c2_used = edge_n_used[c2_u, c2_w]
+    c2_rare = c2_used <= np.median(c2_used)
+    sel_c2_u = c2_u[c2_rare]
+    sel_c2_w = c2_w[c2_rare]
+
+    discount2 = 0.09 * updated_edge_distance[sel_c2_u, sel_c2_w] / (1.0 + np.sqrt(c2_used[c2_rare] + 1.0))
+    updated_edge_distance[sel_c2_u, sel_c2_w] -= discount2
+    updated_edge_distance[sel_c2_w, sel_c2_u] -= discount2
+
+    chord3_mask = chain_3 >= np.quantile(chain_3, 0.65)
+    c3_u = u_idx[chord3_mask]
+    c3_x = x_idx[chord3_mask]
+    c3_used = edge_n_used[c3_u, c3_x]
+    c3_rare = c3_used <= np.median(c3_used)
+    sel_c3_u = c3_u[c3_rare]
+    sel_c3_x = c3_x[c3_rare]
+
+    discount3 = 0.05 * updated_edge_distance[sel_c3_u, sel_c3_x] / (1.0 + np.sqrt(c3_used[c3_rare] + 1.0))
+    updated_edge_distance[sel_c3_u, sel_c3_x] -= discount3
+    updated_edge_distance[sel_c3_x, sel_c3_u] -= discount3
+
+    # Step 6: Orthogonal alternative path deflation on persistent sub-tour segment endpoints
+    severe_mask = utilities >= np.quantile(utilities, 0.70)
+    endpoints = np.unique(np.concatenate((u_idx[severe_mask], v_idx[severe_mask])))
+
+    decay_factor = 0.045
+    for node in endpoints:
+        row_used = edge_n_used[node]
+        unvisited_mask = (row_used == 0)
+        unvisited_mask[node] = False
+        if np.any(unvisited_mask):
+            unvisited_indices = np.where(unvisited_mask)[0]
+            if len(unvisited_indices) > 5:
+                # Prioritize discounting the closest unvisited neighbors to provide attractive alternative routes
+                costs = updated_edge_distance[node, unvisited_indices]
+                k = min(len(costs), 8)
+                top_k_local = np.argpartition(costs, k - 1)[:k]
+                target_nodes = unvisited_indices[top_k_local]
+            else:
+                target_nodes = unvisited_indices
+
+            delta = updated_edge_distance[node, target_nodes] * decay_factor
+            updated_edge_distance[node, target_nodes] -= delta
+            updated_edge_distance[target_nodes, node] -= delta
+
+    return updated_edge_distance
+# ===== Eval Output =====
+[*] Running ...
+[*] mode=val, data=/home/ducanh/projects/EAs_project/MoH/problems/tsp_gls/data/val/val_instance_data_sol_50.pkl, seed=0, n_instances=8
+[*] instance_indices=[6, 9, 0, 2, 4, 3, 5, 1]
+[*] instance 6: obj=5.6796, gap=0.0000
+[*] instance 9: obj=5.9639, gap=0.0000
+[*] instance 0: obj=5.7783, gap=0.0000
+[*] instance 2: obj=5.8071, gap=0.0000
+[*] instance 4: obj=5.3965, gap=0.0000
+[*] instance 3: obj=5.7569, gap=0.0000
+[*] instance 5: obj=5.6187, gap=0.0000
+[*] instance 1: obj=5.1651, gap=0.0000
+[*] ave_gap on size 50: 2.528279113844789e-06
+2.528279113844789e-06

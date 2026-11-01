@@ -1,0 +1,74 @@
+# ===== Heuristic Code =====
+#{A smooth slack-bridging modulated penalty scheme that scales relative edge lengths using local adjacent slack and geometric cluster density before sigmoid ranking, balanced with frequency-dependent local-global weights.}#
+
+import numpy as np
+
+def update_edge_distance(edge_distance, local_opt_tour, edge_n_used):
+    updated_edge_distance = np.copy(edge_distance)
+    n = len(local_opt_tour)
+    if n < 4:
+        return updated_edge_distance
+
+    u_idx = local_opt_tour
+    v_idx = np.roll(local_opt_tour, -1)
+    p_idx = np.roll(local_opt_tour, 1)
+    w_idx = np.roll(local_opt_tour, -2)
+
+    tour_edge_lengths = edge_distance[u_idx, v_idx]
+    usage = edge_n_used[u_idx, v_idx]
+
+    # k-nearest neighbor node scale and density via partition for efficiency
+    k = min(5, n - 1)
+    sorted_dists = np.partition(edge_distance, kth=k, axis=1)[:, 1:k+1]
+    node_scale = np.mean(sorted_dists, axis=1) + 1e-6
+    node_density = 1.0 / node_scale
+    node_density = node_density / (np.mean(node_density) + 1e-6)
+
+    # Local context: adjacent edges slack and geometric cluster scale
+    local_adj_mean = 0.5 * (edge_distance[p_idx, u_idx] + edge_distance[v_idx, w_idx]) + 1e-6
+    slack_ratio = np.clip(tour_edge_lengths / local_adj_mean, 0.5, 2.0)
+    cluster_scale = np.sqrt(node_scale[u_idx] * node_scale[v_idx])
+    bridging_factor = np.clip(tour_edge_lengths / cluster_scale, 0.5, 2.0)
+
+    # Global relative length modulated by smooth slack & bridging context
+    avg_tour_length = np.mean(tour_edge_lengths) + 1e-6
+    relative_length = tour_edge_lengths / avg_tour_length
+    modulated_rel_length = relative_length * np.sqrt(slack_ratio * bridging_factor)
+
+    # Sigmoid rank penalty using modulated relative length
+    rank_penalty = 1.0 / (1.0 + np.exp(-4.0 * (modulated_rel_length - 1.0)))
+
+    # Local penalty component balancing usage and combined node density
+    usage_factor = 1.0 / (1.0 + 0.3 * usage)
+    density_factor = 0.5 * (node_density[u_idx] + node_density[v_idx])
+    local_penalty = relative_length * usage_factor * density_factor
+
+    # Dynamic global vs local weighting based on search frequency
+    freq_mean = np.mean(usage)
+    w_global = 0.6 / (1.0 + 0.1 * freq_mean)
+    w_local = 1.0 - w_global
+    combined_penalty = w_global * rank_penalty + w_local * local_penalty
+
+    # Upper quartile boost
+    threshold = np.percentile(tour_edge_lengths, 75)
+    high_penalty_mask = tour_edge_lengths >= threshold
+    combined_penalty[high_penalty_mask] *= 1.5
+
+    np.add.at(updated_edge_distance, (u_idx, v_idx), combined_penalty)
+    np.add.at(updated_edge_distance, (v_idx, u_idx), combined_penalty)
+
+    return updated_edge_distance
+# ===== Eval Output =====
+[*] Running ...
+[*] mode=val, data=/home/ducanh/projects/EAs_project/MoH/problems/tsp_gls/data/val/val_instance_data_sol_200.pkl, seed=0, n_instances=8
+[*] instance_indices=[6, 9, 0, 2, 4, 3, 5, 1]
+[*] instance 6: obj=10.4462, gap=0.0031
+[*] instance 9: obj=10.6931, gap=0.2818
+[*] instance 0: obj=10.8879, gap=0.0201
+[*] instance 2: obj=10.9687, gap=0.1911
+[*] instance 4: obj=10.9109, gap=0.5878
+[*] instance 3: obj=10.6107, gap=0.0829
+[*] instance 5: obj=10.9212, gap=0.3463
+[*] instance 1: obj=11.0988, gap=0.6767
+[*] ave_gap on size 200: 0.27370818364195193
+0.27370818364195193

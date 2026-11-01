@@ -1,0 +1,51 @@
+# ===== Heuristic Code =====
+#{Dynamically scale k-NN density using sqrt(n) neighbors and penalize tour edges via continuous power-law scaling of normalized relative length modulated by inverse usage frequency.}#
+
+import numpy as np
+
+def update_edge_distance(edge_distance, local_opt_tour, edge_n_used):
+    updated_edge_distance = np.copy(edge_distance)
+    n = len(local_opt_tour)
+
+    # Dynamically scale k-NN horizon based on graph scale k ~ sqrt(n)
+    k = max(3, int(np.round(np.sqrt(n))))
+    sorted_dists = np.sort(edge_distance, axis=1)
+    k_nn_avg = np.mean(sorted_dists[:, 1:min(k + 1, n)], axis=1)
+    node_density = 1.0 / (k_nn_avg + 1e-6)
+    node_density = node_density / np.mean(node_density)
+
+    u_idx = local_opt_tour
+    v_idx = np.roll(local_opt_tour, -1)
+
+    tour_edge_lengths = edge_distance[u_idx, v_idx]
+    avg_tour_length = np.mean(tour_edge_lengths)
+    relative_length = tour_edge_lengths / (avg_tour_length + 1e-6)
+
+    # Continuous power-law penalty scaling without hard thresholds or cliff edges
+    edge_density = 0.5 * (node_density[u_idx] + node_density[v_idx])
+    usage = edge_n_used[u_idx, v_idx]
+    usage_attenuation = 1.0 / (1.0 + np.sqrt(usage + 1.0) - 1.0 + 0.25 * usage)
+
+    # Gamma power scaling sharply focuses on long edges smoothly
+    gamma = 1.5
+    penalty_base = np.power(relative_length, gamma) * edge_density
+    combined_penalty = penalty_base * usage_attenuation * (avg_tour_length * 0.1)
+
+    np.add.at(updated_edge_distance, (u_idx, v_idx), combined_penalty)
+    np.add.at(updated_edge_distance, (v_idx, u_idx), combined_penalty)
+
+    return updated_edge_distance
+# ===== Eval Output =====
+[*] Running ...
+[*] mode=val, data=/home/ducanh/projects/EAs_project/MoH/problems/tsp_gls/data/val/val_instance_data_sol_200.pkl, seed=0, n_instances=8
+[*] instance_indices=[6, 9, 0, 2, 4, 3, 5, 1]
+[*] instance 6: obj=10.6635, gap=2.0840
+[*] instance 9: obj=10.9820, gap=2.9911
+[*] instance 0: obj=11.4240, gap=4.9448
+[*] instance 2: obj=11.2240, gap=2.5227
+[*] instance 4: obj=11.1329, gap=2.6343
+[*] instance 3: obj=10.8628, gap=2.4615
+[*] instance 5: obj=11.2362, gap=3.2398
+[*] instance 1: obj=11.4393, gap=3.7651
+[*] ave_gap on size 200: 3.0804140382445278
+3.0804140382445278

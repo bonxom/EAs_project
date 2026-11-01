@@ -1,0 +1,82 @@
+# ===== Heuristic Code =====
+#{Replace the rigid median cutoff with an adaptive Pareto-tail quantile threshold modulated by tour coefficient of variation and frequency stagnation to selectively penalize dominant bottleneck edges, coupled with smooth continuous penalty scaling and incident candidate discounting.}
+
+import numpy as np
+
+def update_edge_distance(edge_distance, local_opt_tour, edge_n_used):
+    updated_edge_distance = np.copy(edge_distance)
+    n = len(local_opt_tour)
+    if n < 4:
+        return updated_edge_distance
+
+    u_idx = np.array(local_opt_tour, dtype=np.intp)
+    v_idx = np.roll(u_idx, -1)
+
+    costs = edge_distance[u_idx, v_idx].astype(np.float64)
+    used = edge_n_used[u_idx, v_idx].astype(np.float64)
+
+    mean_cost = np.mean(costs)
+    std_cost = np.std(costs)
+    cv_cost = std_cost / (mean_cost + 1e-12)
+
+    # Sigmoidal cost weight
+    z_scores = (costs - mean_cost) / (std_cost + 1e-12)
+    weights = 1.0 / (1.0 + np.exp(-np.clip(z_scores, -10.0, 10.0)))
+
+    # Utilities factoring cost prominence and edge saturation
+    utilities = (costs * (1.0 + weights)) / (1.0 + used)
+
+    # Adaptive Pareto-tail threshold: adapts based on utility distribution skewness and tour variance
+    # When variance is high, focus selectively on extreme tails (e.g. top 25%); when flat, broaden selection
+    u_mean = np.mean(utilities)
+    u_std = np.std(utilities)
+    stagnancy = np.mean(used) / (np.max(used) + 1.0)
+
+    quantile_target = np.clip(0.80 - 0.25 * np.tanh(cv_cost) + 0.10 * stagnancy, 0.50, 0.90)
+    threshold = np.quantile(utilities, quantile_target)
+
+    penalize_mask = utilities >= threshold
+    if not np.any(penalize_mask):
+        penalize_mask = utilities >= np.median(utilities)
+
+    p_u = u_idx[penalize_mask]
+    p_v = v_idx[penalize_mask]
+    p_costs = costs[penalize_mask]
+    p_used = used[penalize_mask]
+    p_utils = utilities[penalize_mask]
+
+    max_util = np.max(utilities) + 1e-12
+    # Continuous sublinear penalty scaled to edge length and relative utility prominence
+    relative_prominence = (p_utils - threshold) / (max_util - threshold + 1e-12)
+    penalties = (p_costs / (1.0 + np.sqrt(p_used + 1.0))) * (1.0 + np.clip(relative_prominence, 0.0, 1.0))
+
+    updated_edge_distance[p_u, p_v] += penalties
+    updated_edge_distance[p_v, p_u] += penalties
+
+    # Symmetrically discount untried incident connections from penalized vertices to open alternative paths
+    penalized_nodes = np.unique(np.concatenate((p_u, p_v)))
+    decay_ratio = np.clip(0.015 + 0.01 * stagnancy, 0.01, 0.035)
+
+    for u in penalized_nodes:
+        unused_mask = (edge_n_used[u] == 0)
+        unused_mask[u] = False
+        if np.any(unused_mask):
+            current_vals = updated_edge_distance[u, unused_mask]
+            updated_edge_distance[u, unused_mask] -= current_vals * decay_ratio
+            updated_edge_distance[unused_mask, u] = updated_edge_distance[u, unused_mask]
+
+    return updated_edge_distance
+# ===== Eval Output =====
+[*] Running ...
+[*] mode=val, data=/home/ducanh/projects/EAs_project/MoH/problems/tsp_gls/data/val/val_instance_data_sol_50.pkl, seed=0, n_instances=8
+[*] instance_indices=[6, 9, 0, 2, 4, 3, 5, 1]
+[*] instance 6: obj=5.7136, gap=0.5983
+[*] instance 9: obj=5.9639, gap=0.0000
+[*] instance 0: obj=5.7783, gap=0.0000
+[*] instance 2: obj=5.8071, gap=0.0000
+[*] instance 4: obj=5.3965, gap=0.0000
+[*] instance 3: obj=5.8123, gap=0.9633
+[*] instance 5: obj=5.6187, gap=0.0000
+[*] instance 1: obj=5.1651, gap=0.0000
+[*] ave_gap on size 50: 0.1952036921433975
+0.1952036921433975

@@ -1,0 +1,123 @@
+# ===== Heuristic Code =====
+#{This strategy preserves Guided Local Search penalties on bottleneck edges based on triplet geometric inefficiency and replaces 2-step shortcuts with multi-scale chordal shortcut discounting across 3-opt and 4-opt lookaheads violating the 4-point condition, selectively rewarding nearest geometric chords to bypassed interior nodes.}#
+
+import numpy as np
+
+def update_edge_distance(edge_distance, local_opt_tour, edge_n_used):
+    updated_edge_distance = np.copy(edge_distance)
+    num_nodes = len(local_opt_tour)
+    tour = np.asarray(local_opt_tour)
+
+    # Tour indices shifted for lookahead windows
+    u_idx = tour
+    v_idx = np.roll(tour, -1)
+    w_idx = np.roll(tour, -2)
+    x_idx = np.roll(tour, -3)
+    y_idx = np.roll(tour, -4)
+
+    # Memory decay
+    edge_n_used *= 0.96
+
+    # Triplet geometric inefficiency (detour ratio and cosine turn deficit)
+    d_uv = edge_distance[u_idx, v_idx]
+    d_vw = edge_distance[v_idx, w_idx]
+    d_uw = edge_distance[u_idx, w_idx]
+
+    detour_ratio = (d_uv + d_vw) / (d_uw + 1e-8)
+    denom = 2.0 * d_uv * d_vw + 1e-8
+    cos_turn = (d_uv**2 + d_vw**2 - d_uw**2) / denom
+    cos_turn = np.clip(cos_turn, -1.0, 1.0)
+    acute_deficit = 1.0 - cos_turn
+    geom_inefficiency = detour_ratio * (1.0 + 0.5 * acute_deficit)
+
+    # GLS Edge Penalization
+    base_dist = d_uv
+    base_freq = edge_n_used[u_idx, v_idx]
+    local_geom_factor = 0.5 * (geom_inefficiency + np.roll(geom_inefficiency, 1))
+    utilities = (base_dist / (1.0 + base_freq)) * (1.0 + 0.35 * local_geom_factor)
+
+    k = max(1, int(np.ceil(0.14 * num_nodes)))
+    top_k_indices = np.argsort(utilities)[-k:]
+    global_mean_dist = np.mean(edge_distance)
+    adaptive_lambda = 0.30 * global_mean_dist
+
+    for idx in top_k_indices:
+        u, v = u_idx[idx], v_idx[idx]
+        edge_n_used[u, v] += 1.0
+        edge_n_used[v, u] += 1.0
+        freq_penalty = 1.0 + np.log1p(edge_n_used[u, v])
+        geom_weight = 1.0 + 0.5 * local_geom_factor[idx]
+        penalty = adaptive_lambda * freq_penalty * geom_weight
+        updated_edge_distance[u, v] += penalty
+        updated_edge_distance[v, u] += penalty
+
+    # Multi-scale Chordal Shortcut Recreation
+    # Detect 2-opt, 3-opt (u -> x), and 4-opt (u -> y) candidate chords that violate 4-point tour bounds
+    d_wx = edge_distance[w_idx, x_idx]
+    d_xy = edge_distance[x_idx, y_idx]
+    d_ux = edge_distance[u_idx, x_idx]
+    d_uy = edge_distance[u_idx, y_idx]
+
+    # Chordal detour savings
+    detour_3opt = (d_uv + d_vw + d_wx) - d_ux
+    detour_4opt = (d_uv + d_vw + d_wx + d_xy) - d_uy
+
+    # Collect candidate shortcut chords violating metric path progression
+    shortcut_candidates = []
+
+    # Scale 1: Triplet shortcut (u, w)
+    top_triplets = np.argsort(detour_ratio)[-k:]
+    for idx in top_triplets:
+        shortcut_candidates.append((u_idx[idx], w_idx[idx], detour_ratio[idx], v_idx[idx]))
+
+    # Scale 2: 3-opt chord (u, x)
+    top_3opt = np.argsort(detour_3opt)[-k:]
+    for idx in top_3opt:
+        if detour_3opt[idx] > 0:
+            shortcut_candidates.append((u_idx[idx], x_idx[idx], detour_3opt[idx] / (d_ux[idx] + 1e-8), v_idx[idx]))
+
+    # Scale 3: 4-opt chord (u, y)
+    top_4opt = np.argsort(detour_4opt)[-k:]
+    for idx in top_4opt:
+        if detour_4opt[idx] > 0:
+            shortcut_candidates.append((u_idx[idx], y_idx[idx], detour_4opt[idx] / (d_uy[idx] + 1e-8), w_idx[idx]))
+
+    # Apply multi-scale chordal discounting and reward k-nearest geometric neighbors of bypassed nodes
+    reward_pool = {}
+    for (src, dst, strength, interior) in shortcut_candidates:
+        if src != dst:
+            edge_key = (min(src, dst), max(src, dst))
+            reward_pool[edge_key] = max(reward_pool.get(edge_key, 0.0), strength)
+
+            # Selective Delaunay/geometric nearest neighbor chord to interior bypassed node
+            interior_dists = edge_distance[interior]
+            nearest_nbrs = np.argsort(interior_dists)[1:4]
+            for nbr in nearest_nbrs:
+                nbr_key = (min(interior, nbr), max(interior, nbr))
+                reward_pool[nbr_key] = max(reward_pool.get(nbr_key, 0.0), strength * 0.5)
+
+    # Sort rewards to selectively apply discounts to the most promising chords
+    sorted_rewards = sorted(reward_pool.items(), key=lambda item: item[1], reverse=True)[:int(2.5 * k)]
+    for (node_a, node_b), str_val in sorted_rewards:
+        freq = edge_n_used[node_a, node_b]
+        if freq < 1.5:
+            discount = 0.08 * global_mean_dist * (1.0 / (1.0 + freq)) * min(2.0, 1.0 + 0.1 * str_val)
+            new_val = max(1e-6, updated_edge_distance[node_a, node_b] - discount)
+            updated_edge_distance[node_a, node_b] = new_val
+            updated_edge_distance[node_b, node_a] = new_val
+
+    return updated_edge_distance
+# ===== Eval Output =====
+[*] Running ...
+[*] mode=val, data=/home/ducanh/projects/EAs_project/MoH/problems/tsp_gls/data/val/val_instance_data_sol_100.pkl, seed=0, n_instances=8
+[*] instance_indices=[6, 9, 0, 2, 4, 3, 5, 1]
+[*] instance 6: obj=7.7599, gap=0.0039
+[*] instance 9: obj=8.0512, gap=0.0975
+[*] instance 0: obj=8.0001, gap=0.0000
+[*] instance 2: obj=8.0739, gap=0.0000
+[*] instance 4: obj=7.8131, gap=0.0000
+[*] instance 3: obj=7.3713, gap=0.0000
+[*] instance 5: obj=7.6365, gap=0.0000
+[*] instance 1: obj=7.5570, gap=0.0000
+[*] ave_gap on size 100: 0.01266915266635582
+0.01266915266635582

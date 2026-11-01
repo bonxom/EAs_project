@@ -1,0 +1,83 @@
+# ===== Heuristic Code =====
+#{A Pareto-guided ruin-and-recreate edge transformation that penalizes high-utility tour edges via soft rank-based Pareto front prioritization while targeting structural ruin by subsidizing the k-nearest unvisited candidate edges connected to the ruined nodes.}
+
+import numpy as np
+
+def update_edge_distance(edge_distance, local_opt_tour, edge_n_used):
+    updated_edge_distance = np.copy(edge_distance)
+    n = len(local_opt_tour)
+    if n < 4:
+        return updated_edge_distance
+
+    u_idx = np.array(local_opt_tour, dtype=np.intp)
+    v_idx = np.roll(u_idx, -1)
+
+    costs = edge_distance[u_idx, v_idx].astype(np.float64)
+    used = edge_n_used[u_idx, v_idx].astype(np.float64)
+
+    # Standard Guided Local Search Utility augmented with frequency-damping
+    cost_max = np.max(costs) + 1e-8
+    norm_costs = costs / cost_max
+    norm_used = used / (np.max(used) + 1.0)
+
+    # Pareto-rank inspired utility: edges that are both high in cost and low in usage frequency are prioritized
+    # Combined with an exploitation term for heavily recurrent edges
+    gls_utility = costs / (1.0 + used)
+    recurrent_penalty = norm_costs * (1.0 + norm_used)
+    composite_utility = gls_utility * (1.0 + recurrent_penalty)
+
+    # Ruin selection: adaptively select top-ranked edges exceeding the 60th percentile
+    p_cutoff = np.percentile(composite_utility, 60.0)
+    ruin_mask = composite_utility >= p_cutoff
+
+    # Ensure at least one edge is ruined
+    if not np.any(ruin_mask):
+        ruin_mask[np.argmax(composite_utility)] = True
+
+    ruin_u = u_idx[ruin_mask]
+    ruin_v = v_idx[ruin_mask]
+    ruin_costs = costs[ruin_mask]
+    ruin_used = used[ruin_mask]
+
+    # Penalize the ruined edges proportional to base cost damped by usage growth
+    penalty_magnitude = (ruin_costs * 0.35) / (1.0 + np.log1p(ruin_used))
+    updated_edge_distance[ruin_u, ruin_v] += penalty_magnitude
+    updated_edge_distance[ruin_v, ruin_u] += penalty_magnitude
+
+    # Structural Recreate: Focus perturbations on ruined node sets
+    ruined_nodes = np.unique(np.concatenate((ruin_u, ruin_v)))
+
+    # Target k-nearest unvisited alternative neighbors to incentivize structural reconstruction
+    k_cand = min(5, n - 1)
+    for node in ruined_nodes:
+        row_dist = edge_distance[node].copy()
+        row_dist[node] = np.inf  # avoid self-loop
+
+        # Sort potential neighbor candidates by base distance
+        nearest_candidates = np.argpartition(row_dist, k_cand)[:k_cand]
+
+        # Select unused candidates from the nearest neighbors
+        cand_used = edge_n_used[node, nearest_candidates]
+        valid_mask = cand_used == 0
+        target_neighbors = nearest_candidates[valid_mask]
+
+        if target_neighbors.size > 0:
+            incentive = updated_edge_distance[node, target_neighbors] * 0.05
+            updated_edge_distance[node, target_neighbors] -= incentive
+            updated_edge_distance[target_neighbors, node] -= incentive
+
+    return updated_edge_distance
+# ===== Eval Output =====
+[*] Running ...
+[*] mode=val, data=/home/ducanh/projects/EAs_project/MoH/problems/tsp_gls/data/val/val_instance_data_sol_50.pkl, seed=0, n_instances=8
+[*] instance_indices=[6, 9, 0, 2, 4, 3, 5, 1]
+[*] instance 6: obj=5.7136, gap=0.5983
+[*] instance 9: obj=6.0108, gap=0.7860
+[*] instance 0: obj=5.7783, gap=0.0000
+[*] instance 2: obj=5.8071, gap=0.0000
+[*] instance 4: obj=5.5821, gap=3.4387
+[*] instance 3: obj=5.8230, gap=1.1483
+[*] instance 5: obj=5.6187, gap=0.0000
+[*] instance 1: obj=5.3071, gap=2.7501
+[*] ave_gap on size 50: 1.0901709581444374
+1.0901709581444374

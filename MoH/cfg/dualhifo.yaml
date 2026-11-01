@@ -1,0 +1,21 @@
+# Train the existing moh-deployment MoH architecture with independently
+# configurable Inner/Outer HiFo. Does not use src/moh/ mini-Full-MoH.
+defaults:
+  - config
+  - _self_
+
+dual_hifo:
+  mode: dual_hifo_independent  # full_moh | inner_hifo | outer_hifo | dual_hifo_independent | dual_hifo_cross_level
+  stagnation_patience: 3
+  progress_patience: 2
+  duplicate_threshold: 0.5
+  diversity_window: 8
+  improvement_epsilon: 0.000000001
+  pool_size: 30
+  insight_top_k: 3
+  usage_weight: 0.1
+  recency_weight: 0.2
+  credit_ema: 0.3
+
+# Dual-HiFo runs must not clobber shared base solutions across experiments.
+isolate_base_solutions: true

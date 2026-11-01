@@ -1,0 +1,92 @@
+# ===== Heuristic Code =====
+#{Detect high-tension contiguous sub-chains within the local optimum using multi-edge structural stress scoring, apply non-linear compound penalties to identified chain bottlenecks, and dynamically discount metric k-nearest unvisited incident edges to induce topological shifts.}#
+
+import numpy as np
+
+def update_edge_distance(edge_distance, local_opt_tour, edge_n_used):
+    updated_edge_distance = np.copy(edge_distance)
+    n = len(local_opt_tour)
+    if n < 4:
+        return updated_edge_distance
+
+    u_idx = np.array(local_opt_tour, dtype=np.intp)
+    v_idx = np.roll(u_idx, -1)
+
+    # 1. Edge-level baseline features
+    costs = edge_distance[u_idx, v_idx].astype(np.float64)
+    used = edge_n_used[u_idx, v_idx].astype(np.float64)
+
+    # Baseline edge utility accounting for frequency damping
+    edge_util = costs / (1.0 + np.log1p(used))
+
+    # 2. Contextual Chain/Subpath Tension Analysis
+    # Evaluate 3-edge sliding tension windows to identify contiguous bottleneck segments
+    prev_util = np.roll(edge_util, 1)
+    next_util = np.roll(edge_util, -1)
+    chain_tension = edge_util + 0.5 * (prev_util + next_util)
+
+    # Compound metric combining direct edge utility and chain tension
+    mean_tension = np.mean(chain_tension)
+    std_tension = np.std(chain_tension) + 1e-12
+    norm_tension = (chain_tension - mean_tension) / std_tension
+
+    # Rank-based selection: target top 25% highest tension segments
+    k_penalize = max(1, int(np.ceil(0.25 * n)))
+    partition_idx = np.argpartition(norm_tension, -k_penalize)[-k_penalize:]
+    penalize_mask = np.zeros(n, dtype=bool)
+    penalize_mask[partition_idx] = True
+
+    # 3. Structural Compound Penalty application
+    p_u = u_idx[penalize_mask]
+    p_v = v_idx[penalize_mask]
+    p_costs = costs[penalize_mask]
+    p_used = used[penalize_mask]
+    p_tension = norm_tension[penalize_mask]
+
+    # Non-linear adaptive penalty scaled by chain tension severity and visitation history
+    severity = np.clip(p_tension, 0.0, None)
+    penalty_multipliers = 0.35 + 0.15 * (severity / (1.0 + severity))
+    penalties = (p_costs * penalty_multipliers) / np.sqrt(1.0 + p_used)
+
+    updated_edge_distance[p_u, p_v] += penalties
+    updated_edge_distance[p_v, p_u] += penalties
+
+    # 4. Topological Shift: Dynamically discount k-nearest unvisited incident edges
+    penalized_nodes = np.unique(np.concatenate((p_u, p_v)))
+    k_neighbors = min(4, max(1, n - 2))
+    discount_factor = 0.04
+
+    for u in penalized_nodes:
+        # Find unused incident edges
+        row_used = edge_n_used[u]
+        cand_mask = (row_used == 0)
+        cand_mask[u] = False
+
+        cand_indices = np.where(cand_mask)[0]
+        if cand_indices.size > 0:
+            cand_distances = updated_edge_distance[u, cand_indices]
+            # Identify metric nearest unvisited candidates
+            k_eff = min(k_neighbors, cand_indices.size)
+            nearest_local_idx = np.argpartition(cand_distances, k_eff - 1)[:k_eff]
+            target_neighbors = cand_indices[nearest_local_idx]
+
+            # Apply topological incentive discount
+            reductions = updated_edge_distance[u, target_neighbors] * discount_factor
+            updated_edge_distance[u, target_neighbors] -= reductions
+            updated_edge_distance[target_neighbors, u] -= reductions
+
+    return updated_edge_distance
+# ===== Eval Output =====
+[*] Running ...
+[*] mode=val, data=/home/ducanh/projects/EAs_project/MoH/problems/tsp_gls/data/val/val_instance_data_sol_50.pkl, seed=0, n_instances=8
+[*] instance_indices=[6, 9, 0, 2, 4, 3, 5, 1]
+[*] instance 6: obj=5.7136, gap=0.5983
+[*] instance 9: obj=6.0217, gap=0.9695
+[*] instance 0: obj=5.7783, gap=0.0000
+[*] instance 2: obj=5.8071, gap=0.0000
+[*] instance 4: obj=5.3965, gap=0.0000
+[*] instance 3: obj=5.8224, gap=1.1392
+[*] instance 5: obj=5.6187, gap=0.0000
+[*] instance 1: obj=5.3071, gap=2.7501
+[*] ave_gap on size 50: 0.6821334458833761
+0.6821334458833761

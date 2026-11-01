@@ -1,0 +1,60 @@
+# ===== Heuristic Code =====
+#{This heuristic calculates a continuous Guided Local Search utility scaled by node density and usage discount, converts it into a standardized z-score relative to the tour's distribution, and applies smooth, dimensionally-consistent softplus penalties proportional to tour edge length standard deviation.}#
+
+import numpy as np
+
+def update_edge_distance(edge_distance, local_opt_tour, edge_n_used):
+    updated_edge_distance = np.copy(edge_distance)
+    n = len(local_opt_tour)
+
+    # Adaptive local density using k-nearest neighbors
+    k = min(6, n - 1) if n > 1 else 1
+    sorted_dists = np.partition(edge_distance, kth=k, axis=1)
+    k_nn_avg = np.mean(sorted_dists[:, 1:k+1], axis=1)
+    node_density = 1.0 / (k_nn_avg + 1e-6)
+    node_density = node_density / (np.mean(node_density) + 1e-6)
+
+    # Extract current tour edge pairs and properties
+    u_idx = local_opt_tour
+    v_idx = np.roll(local_opt_tour, -1)
+    tour_edge_lengths = edge_distance[u_idx, v_idx]
+
+    # Dimensional scale derived from tour edge variation
+    mean_len = np.mean(tour_edge_lengths)
+    std_len = np.std(tour_edge_lengths)
+    scale = std_len if std_len > 1e-6 else (0.1 * mean_len + 1e-6)
+
+    # Guided Local Search utility: length penalized by usage, amplified by local density
+    density_factor = 0.5 * (node_density[u_idx] + node_density[v_idx])
+    usage_factor = 1.0 / (1.0 + edge_n_used[u_idx, v_idx])
+    raw_utility = tour_edge_lengths * usage_factor * density_factor
+
+    # Normalized z-score of utility to dynamically identify bottleneck edges
+    util_mean = np.mean(raw_utility)
+    util_std = np.std(raw_utility)
+    z_scores = (raw_utility - util_mean) / (util_std + 1e-6)
+
+    # Smooth softplus scaling without hard cutoffs, calibrated dimensionally by scale
+    # softplus(z) = log(1 + exp(z)), numerically stable formulation
+    softplus_weights = np.where(z_scores > 20.0, z_scores, np.log1p(np.exp(np.clip(z_scores, -20.0, 20.0))))
+    penalties = scale * softplus_weights
+
+    # Symmetric additive penalty update
+    np.add.at(updated_edge_distance, (u_idx, v_idx), penalties)
+    np.add.at(updated_edge_distance, (v_idx, u_idx), penalties)
+
+    return updated_edge_distance
+# ===== Eval Output =====
+[*] Running ...
+[*] mode=val, data=/home/ducanh/projects/EAs_project/MoH/problems/tsp_gls/data/val/val_instance_data_sol_200.pkl, seed=0, n_instances=8
+[*] instance_indices=[6, 9, 0, 2, 4, 3, 5, 1]
+[*] instance 6: obj=10.6065, gap=1.5386
+[*] instance 9: obj=10.9273, gap=2.4780
+[*] instance 0: obj=10.8937, gap=0.0732
+[*] instance 2: obj=11.1299, gap=1.6639
+[*] instance 4: obj=10.8853, gap=0.3517
+[*] instance 3: obj=10.6637, gap=0.5827
+[*] instance 5: obj=11.0639, gap=1.6572
+[*] instance 1: obj=11.1882, gap=1.4873
+[*] ave_gap on size 200: 1.229071605907492
+1.229071605907492

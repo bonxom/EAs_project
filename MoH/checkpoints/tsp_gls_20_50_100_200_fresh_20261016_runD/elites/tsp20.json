@@ -1,0 +1,25 @@
+{
+  "elites": [
+    {
+      "code": "import numpy as np\ndef update_edge_distance(edge_distance, local_opt_tour, edge_n_used):\n    updated_edge_distance = np.copy(edge_distance)\n    u_idx = local_opt_tour\n    v_idx = np.roll(local_opt_tour, -1)\n    tour_lengths = edge_distance[u_idx, v_idx]\n    tour_counts = edge_n_used[u_idx, v_idx]\n    utilities = tour_lengths / (1.0 + tour_counts)\n    max_utility = np.max(utilities)\n    avg_edge = np.mean(tour_lengths)\n    penalty = 0.3 * avg_edge\n    threshold = 0.99 * max_utility\n    selected_mask = utilities >= threshold\n    sel_u = u_idx[selected_mask]\n    sel_v = v_idx[selected_mask]\n    updated_edge_distance[sel_u, sel_v] += penalty\n    updated_edge_distance[sel_v, sel_u] += penalty\n    return updated_edge_distance",
+      "code_sha256": "977de4be08a20c49bdb4ab68ad9c6d87ef5da250342c9fa1ec9d481bcd5979e5",
+      "idea": "Key idea: Vectorize the Guided Local Search penalty calculation and symmetric matrix update using NumPy advanced indexing, penalizing the maximal utility edges proportionally to the tour's average edge length without Python loop overhead.",
+      "source_size": 20,
+      "training_utility": 1.2218318606871392e-06
+    },
+    {
+      "code": "import numpy as np\ndef update_edge_distance(edge_distance, local_opt_tour, edge_n_used):\n    updated_edge_distance = np.copy(edge_distance)\n    n = len(local_opt_tour)\n    tour_edges = [(local_opt_tour[i], local_opt_tour[(i + 1) % n]) for i in range(n)]\n    edge_costs = [edge_distance[u, v] for u, v in tour_edges]\n    avg_tour_cost = np.mean(edge_costs)\n    for u, v in tour_edges:\n        cost = edge_distance[u, v]\n        if cost > avg_tour_cost:\n            penalty = cost / (1.0 + edge_n_used[u, v])\n            updated_edge_distance[u, v] += penalty\n            updated_edge_distance[v, u] += penalty\n    return updated_edge_distance",
+      "code_sha256": "0b12ffe8675d3967922e8a3612b226beff88a85f741ba8121f690f3bea0d1375",
+      "idea": "Identify edges in the current local optimal tour that exceed the tour's average edge length and penalize them symmetrically by adding a penalty proportional to their edge distance and inversely proportional to one plus their past utilization frequency.",
+      "source_size": 20,
+      "training_utility": 1.2218318634626968e-06
+    },
+    {
+      "code": "import numpy as np\ndef update_edge_distance(edge_distance, local_opt_tour, edge_n_used):\n    updated_edge_distance = np.copy(edge_distance)\n    n = edge_distance.shape[0]\n    decay_factor = 0.95\n    tour_edges = [(local_opt_tour[i], local_opt_tour[(i + 1) % n]) for i in range(n)]\n    tour_lengths = [edge_distance[u, v] for u, v in tour_edges]\n    avg_tour_edge = np.mean(tour_lengths) if len(tour_lengths) > 0 else 1.0\n    utilities = [edge_distance[u, v] / (1.0 + edge_n_used[u, v]) for u, v in tour_edges]\n    max_utility = max(utilities) if utilities else 0.0\n    mask = edge_n_used > 0\n    penalty_scale = 0.25 * avg_tour_edge\n    updated_edge_distance[mask] = edge_distance[mask] * decay_factor + (1.0 - decay_factor) * edge_distance[mask]\n    for (u, v), util in zip(tour_edges, utilities):\n        if util >= 0.85 * max_utility:\n            add_penalty = penalty_scale / (1.0 + edge_n_used[u, v])\n            updated_edge_distance[u, v] += add_penalty\n            updated_edge_distance[v, u] += add_penalty\n    return updated_edge_distance",
+      "code_sha256": "5ac8b5415631440fb3ae4f5d83f33b0323f6957d5b23beb6879330d98b089aba",
+      "idea": "This heuristic penalizes edges in the current local optimum using a utility-based penalty scaled by edge length and usage count, while simultaneously applying an adaptive decay factor to prior edge penalties to maintain metric fidelity and escape local optima.",
+      "source_size": 20,
+      "training_utility": 0.5927419337956985
+    }
+  ]
+}

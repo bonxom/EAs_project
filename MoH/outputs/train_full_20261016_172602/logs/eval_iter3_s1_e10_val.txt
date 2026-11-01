@@ -1,0 +1,80 @@
+# ===== Heuristic Code =====
+#{Diversification-driven Guided Local Search with topological bottleneck-aware edge utility scaling and selective deterministic dual-neighborhood incentive reward to escape deep local basins.}#
+
+import numpy as np
+
+def update_edge_distance(edge_distance, local_opt_tour, edge_n_used):
+    # Step 1: Copy edge distance matrix to preserve original data
+    updated_edge_distance = np.copy(edge_distance)
+    n = len(local_opt_tour)
+    if n <= 1:
+        return updated_edge_distance
+
+    # Step 2: Extract current tour edges and associated features
+    u_idx = np.array(local_opt_tour, dtype=np.intp)
+    v_idx = np.roll(u_idx, -1)
+
+    costs = edge_distance[u_idx, v_idx].astype(np.float64)
+    used = edge_n_used[u_idx, v_idx].astype(np.float64)
+
+    # Step 3: Compute robust multi-scale utilities with rank and topological dispersion
+    mean_cost = np.mean(costs)
+    std_cost = np.std(costs) + 1e-8
+    z_scores = (costs - mean_cost) / std_cost
+    sigmoid_weights = 1.0 / (1.0 + np.exp(-z_scores))
+
+    # Identify localized bottlenecks via incident cost ratios
+    incident_costs = (np.roll(costs, 1) + np.roll(costs, -1)) * 0.5 + 1e-8
+    bottleneck_factor = costs / incident_costs
+    bottleneck_weights = np.clip(bottleneck_factor, 0.5, 2.0)
+
+    # Utility combines length, frequency, bottleneck degree, and relative dispersion
+    utilities = (costs * (1.0 + sigmoid_weights) * bottleneck_weights) / (1.0 + np.sqrt(used + 1.0))
+
+    threshold = np.median(utilities)
+    max_util = np.max(utilities) + 1e-8
+    penalize_mask = utilities >= threshold
+
+    p_u = u_idx[penalize_mask]
+    p_v = v_idx[penalize_mask]
+    p_costs = costs[penalize_mask]
+    p_used = used[penalize_mask]
+    p_utils = utilities[penalize_mask]
+
+    # Non-monotonic dynamic penalty scaling
+    penalties = (p_costs / (1.0 + np.sqrt(p_used + 1.0))) * (1.0 + p_utils / max_util)
+
+    # Step 4: Apply penalties symmetrically
+    updated_edge_distance[p_u, p_v] += penalties
+    updated_edge_distance[p_v, p_u] += penalties
+
+    # Step 5: Ruin and recreate neighborhood exploration via orthogonal incentive rewarding
+    # Deterministically reward unvisited/infrequently explored orthogonal shortcuts from penalized nodes
+    penalized_nodes = np.unique(np.concatenate((p_u, p_v)))
+    decay_ratio = 0.03
+
+    for u in penalized_nodes:
+        row_used = edge_n_used[u]
+        unused_mask = (row_used == 0)
+        unused_mask[u] = False
+
+        if np.any(unused_mask):
+            current_vals = updated_edge_distance[u, unused_mask]
+            updated_edge_distance[u, unused_mask] -= current_vals * decay_ratio
+            updated_edge_distance[unused_mask, u] = updated_edge_distance[u, unused_mask]
+
+    return updated_edge_distance
+# ===== Eval Output =====
+[*] Running ...
+[*] mode=val, data=/home/ducanh/projects/EAs_project/MoH/problems/tsp_gls/data/val/val_instance_data_sol_50.pkl, seed=0, n_instances=8
+[*] instance_indices=[6, 9, 0, 2, 4, 3, 5, 1]
+[*] instance 6: obj=5.6796, gap=0.0000
+[*] instance 9: obj=5.9639, gap=0.0000
+[*] instance 0: obj=5.7783, gap=0.0000
+[*] instance 2: obj=5.8071, gap=0.0000
+[*] instance 4: obj=5.5821, gap=3.4387
+[*] instance 3: obj=5.8123, gap=0.9633
+[*] instance 5: obj=5.6187, gap=0.0000
+[*] instance 1: obj=5.1651, gap=0.0000
+[*] ave_gap on size 50: 0.550259747017498
+0.550259747017498

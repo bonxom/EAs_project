@@ -1,0 +1,58 @@
+# ===== Heuristic Code =====
+#{A vectorized Guided Local Search operator that identifies prominent edges using an extended utility window (0.90 of maximum) and applies an inverse-frequency scaled penalty modulated by mean tour edge length, while softly decaying accumulated penalties on heavily traversed edges to preserve critical topological bridges.}
+
+import numpy as np
+
+def update_edge_distance(edge_distance, local_opt_tour, edge_n_used):
+    updated_edge_distance = np.copy(edge_distance)
+
+    u_idx = local_opt_tour
+    v_idx = np.roll(local_opt_tour, -1)
+
+    tour_lengths = edge_distance[u_idx, v_idx]
+    tour_counts = edge_n_used[u_idx, v_idx]
+
+    # Calculate edge utility based on standard GLS formulation
+    utilities = tour_lengths / (1.0 + tour_counts)
+    max_utility = np.max(utilities)
+    avg_edge = np.mean(tour_lengths)
+
+    # Broadened threshold window to encourage multi-edge diversification
+    threshold = 0.90 * max_utility
+    selected_mask = utilities >= threshold
+
+    sel_u = u_idx[selected_mask]
+    sel_v = v_idx[selected_mask]
+    sel_counts = tour_counts[selected_mask]
+
+    # Scale penalty by average tour cost and inverse penalty count for balanced perturbation
+    penalties = (0.3 * avg_edge) / (1.0 + 0.1 * sel_counts)
+
+    updated_edge_distance[sel_u, sel_v] += penalties
+    updated_edge_distance[sel_v, sel_u] += penalties
+
+    # Controlled memory fading: softly decay edges with high penalty accumulation to prevent permanent exclusion
+    heavy_mask = tour_counts > 3
+    if np.any(heavy_mask):
+        h_u = u_idx[heavy_mask]
+        h_v = v_idx[heavy_mask]
+        decay_factor = 0.05 * (tour_lengths[heavy_mask] - avg_edge)
+        decay = np.maximum(0.0, decay_factor)
+        updated_edge_distance[h_u, h_v] -= decay
+        updated_edge_distance[h_v, h_u] -= decay
+
+    return updated_edge_distance
+# ===== Eval Output =====
+[*] Running ...
+[*] mode=val, data=/home/ducanh/projects/EAs_project/MoH/problems/tsp_gls/data/val/val_instance_data_sol_20.pkl, seed=0, n_instances=8
+[*] instance_indices=[6, 9, 0, 2, 4, 3, 5, 1]
+[*] instance 6: obj=3.7045, gap=0.0000
+[*] instance 9: obj=4.1442, gap=0.0000
+[*] instance 0: obj=3.6827, gap=0.0000
+[*] instance 2: obj=3.8184, gap=0.0000
+[*] instance 4: obj=3.8385, gap=0.0000
+[*] instance 3: obj=3.6971, gap=0.0000
+[*] instance 5: obj=3.4281, gap=0.0000
+[*] instance 1: obj=3.6958, gap=0.0000
+[*] ave_gap on size 20: 1.2218318606871392e-06
+1.2218318606871392e-06

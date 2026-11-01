@@ -1,0 +1,78 @@
+# ===== Heuristic Code =====
+#{This heuristic computes relative regret for edges in the local optimum against each endpoint's k-nearest candidate pool, prioritizes edges with poor topological efficiency weighted inversely by prior usage, and applies a sub-additive square-root penalty to escape local optima without over-distorting the metric space.}
+
+import numpy as np
+
+def update_edge_distance(edge_distance, local_opt_tour, edge_n_used):
+    updated_edge_distance = np.copy(edge_distance)
+    num_nodes = len(local_opt_tour)
+    if num_nodes < 4:
+        return updated_edge_distance
+
+    u_idx = np.asarray(local_opt_tour)
+    v_idx = np.roll(u_idx, -1)
+
+    # Decay prior usage memory slightly to allow re-visitation over long horizons
+    edge_n_used *= 0.95
+
+    # Determine candidate neighborhood size for relative regret benchmark
+    k_nn = min(max(5, int(np.log2(num_nodes) * 2)), num_nodes - 1)
+
+    # Compute the k-th nearest neighbor baseline cost for each node
+    # Use partition for fast O(N * k_nn) deterministic nearest neighbor search
+    partitioned = np.partition(edge_distance, k_nn, axis=1)
+    k_th_costs = partitioned[:, k_nn]
+
+    # Relative regret: how much worse an edge (u, v) is compared to the baseline options of u and v
+    tour_dist = edge_distance[u_idx, v_idx]
+    regret_u = np.maximum(0.0, tour_dist - k_th_costs[u_idx])
+    regret_v = np.maximum(0.0, tour_dist - k_th_costs[v_idx])
+    relative_regret = 0.5 * (regret_u + regret_v)
+
+    # Combined utility emphasizing poor topological fit relative to candidate pool
+    tour_used = edge_n_used[u_idx, v_idx]
+    # Balance raw distance and relative regret against usage frequency
+    effective_cost = tour_dist + 1.5 * relative_regret
+    utilities = effective_cost / (1.0 + tour_used)
+
+    # Select candidate edges with worst trade-offs
+    penalty_ratio = 0.15
+    k_penalize = max(1, int(np.ceil(penalty_ratio * num_nodes)))
+    top_indices = np.argsort(utilities)[-k_penalize:]
+
+    # Increment usage counter deterministically for selected edges
+    for idx in top_indices:
+        u, v = u_idx[idx], v_idx[idx]
+        edge_n_used[u, v] += 1.0
+        edge_n_used[v, u] += 1.0
+
+    # Scale base penalty relative to average tour edge length and graph scale
+    avg_tour_dist = np.mean(tour_dist)
+    base_lambda = 0.30 * avg_tour_dist
+
+    # Sub-additive penalty scaling using sqrt(usage) to prevent metric space destruction
+    for idx in top_indices:
+        u, v = u_idx[idx], v_idx[idx]
+        usage = edge_n_used[u, v]
+        # Sub-additive growth prevents runaway distortions on frequently cut edges
+        subadditive_factor = np.sqrt(usage)
+        penalty = base_lambda * subadditive_factor * (1.0 + relative_regret[idx] / (avg_tour_dist + 1e-12))
+
+        updated_edge_distance[u, v] += penalty
+        updated_edge_distance[v, u] += penalty
+
+    return updated_edge_distance
+# ===== Eval Output =====
+[*] Running ...
+[*] mode=val, data=/home/ducanh/projects/EAs_project/MoH/problems/tsp_gls/data/val/val_instance_data_sol_100.pkl, seed=0, n_instances=8
+[*] instance_indices=[6, 9, 0, 2, 4, 3, 5, 1]
+[*] instance 6: obj=7.8516, gap=1.1852
+[*] instance 9: obj=8.1138, gap=0.8765
+[*] instance 0: obj=8.1650, gap=2.0616
+[*] instance 2: obj=8.2544, gap=2.2362
+[*] instance 4: obj=7.9295, gap=1.4902
+[*] instance 3: obj=7.4868, gap=1.5658
+[*] instance 5: obj=7.6670, gap=0.3984
+[*] instance 1: obj=7.7273, gap=2.2533
+[*] ave_gap on size 100: 1.5084163255301208
+1.5084163255301208

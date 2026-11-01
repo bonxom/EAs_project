@@ -1,0 +1,76 @@
+# ===== Heuristic Code =====
+#{This algorithm applies adaptive memory dissipation across the distance matrix via global penalty decay and imposes a transient tabu prohibition spike on critical bottleneck tour edges with high cost-to-usage utility to force immediate escape into disjoint topological basins.}
+
+import numpy as np
+
+def update_edge_distance(edge_distance, local_opt_tour, edge_n_used):
+    updated_edge_distance = np.copy(edge_distance)
+    n = len(local_opt_tour)
+    if n < 3:
+        return updated_edge_distance
+
+    u_idx = np.array(local_opt_tour, dtype=np.intp)
+    v_idx = np.roll(u_idx, -1)
+
+    costs = edge_distance[u_idx, v_idx].astype(np.float64)
+    used = edge_n_used[u_idx, v_idx].astype(np.float64)
+
+    # 1. Pheromone-evaporation inspired dissipation on edges that have accumulated usage
+    # Dissipate edge distance expansions toward a baseline proportional to edge usage
+    dissipation_rate = 0.05
+    active_edge_mask = edge_n_used > 0
+    updated_edge_distance[active_edge_mask] -= (
+        dissipation_rate * (updated_edge_distance[active_edge_mask] / (1.0 + edge_n_used[active_edge_mask]))
+    )
+
+    # 2. Guided Local Search utility calculation
+    utilities = costs / (1.0 + used)
+    max_util = np.max(utilities)
+    threshold = np.percentile(utilities, 75)
+
+    # 3. Standard GLS penalty application for above-threshold edges
+    penalize_mask = utilities >= threshold
+    p_u = u_idx[penalize_mask]
+    p_v = v_idx[penalize_mask]
+    p_costs = costs[penalize_mask]
+    p_used = used[penalize_mask]
+
+    mean_cost = np.mean(costs)
+    lambda_param = 0.3 * mean_cost
+    penalties = lambda_param * (p_costs / (1.0 + p_used))
+
+    updated_edge_distance[p_u, p_v] += penalties
+    updated_edge_distance[p_v, p_u] += penalties
+
+    # 4. Transient Tabu prohibition spike: severely penalize top bottleneck edge(s)
+    # Identifying the worst bottleneck edge(s) matching maximum utility
+    tabu_candidates = np.where(utilities >= (max_util - 1e-12))[0]
+    # In case of ties, take the first deterministically
+    tabu_idx = tabu_candidates[0]
+    t_u = u_idx[tabu_idx]
+    t_v = v_idx[tabu_idx]
+
+    # Spike edge cost drastically to strictly prohibit its immediate re-selection
+    prohibition_spike = 10.0 * mean_cost + 2.0 * costs[tabu_idx]
+    updated_edge_distance[t_u, t_v] += prohibition_spike
+    updated_edge_distance[t_v, t_u] += prohibition_spike
+
+    # Ensure zero diagonal and symmetric integrity
+    np.fill_diagonal(updated_edge_distance, 0.0)
+    updated_edge_distance = 0.5 * (updated_edge_distance + updated_edge_distance.T)
+
+    return updated_edge_distance
+# ===== Eval Output =====
+[*] Running ...
+[*] mode=val, data=/home/ducanh/projects/EAs_project/MoH/problems/tsp_gls/data/val/val_instance_data_sol_50.pkl, seed=0, n_instances=8
+[*] instance_indices=[6, 9, 0, 2, 4, 3, 5, 1]
+[*] instance 6: obj=5.7136, gap=0.5983
+[*] instance 9: obj=6.0217, gap=0.9695
+[*] instance 0: obj=5.7783, gap=0.0000
+[*] instance 2: obj=5.8071, gap=0.0000
+[*] instance 4: obj=5.3965, gap=0.0000
+[*] instance 3: obj=5.8975, gap=2.4424
+[*] instance 5: obj=5.6187, gap=0.0000
+[*] instance 1: obj=5.3071, gap=2.7501
+[*] ave_gap on size 50: 0.8450437346534778
+0.8450437346534778

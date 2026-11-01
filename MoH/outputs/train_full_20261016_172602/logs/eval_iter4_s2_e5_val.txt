@@ -1,0 +1,100 @@
+# ===== Heuristic Code =====
+#{Replaces consecutive 3-node detour metrics with a vectorized 4-node 2-opt chordal gain and crossing proxy that quantifies exchange potentials against candidate non-adjacent edges to selectively penalize blocking tour edges and reward high-gain reconnecting chords.}#
+
+import numpy as np
+
+def update_edge_distance(edge_distance, local_opt_tour, edge_n_used):
+    updated_edge_distance = np.copy(edge_distance)
+    num_nodes = len(local_opt_tour)
+    tour = np.asarray(local_opt_tour, dtype=np.intp)
+
+    # Decoupled frequency memory geometric decay
+    edge_n_used *= 0.96
+
+    u_idx = tour
+    v_idx = np.roll(tour, -1)
+
+    # Current tour edge lengths
+    d_uv = edge_distance[u_idx, v_idx]
+
+    # 4-node 2-opt chordal gain proxy:
+    # Evaluate potential 2-opt moves between (u_i, v_i) and (u_j, v_j)
+    # Consider structured non-adjacent forward offsets: 2, 3, ..., min(num_nodes // 2, 8)
+    max_offset = min(num_nodes // 2, 8)
+    blocking_potential = np.zeros(num_nodes, dtype=np.float64)
+    best_shortcut_gain = np.zeros(num_nodes, dtype=np.float64)
+    best_partner = np.zeros(num_nodes, dtype=np.intp)
+
+    if max_offset >= 2:
+        for offset in range(2, max_offset + 1):
+            u_j = np.roll(u_idx, -offset)
+            v_j = np.roll(v_idx, -offset)
+
+            # 2-opt reconnection cost: connect u_i to u_j and v_i to v_j
+            d_ui_uj = edge_distance[u_idx, u_j]
+            d_vi_vj = edge_distance[v_idx, v_j]
+            d_uj_vj = edge_distance[u_j, v_j]
+
+            # Gain = (original cost) - (reconnected cost)
+            gain = (d_uv + d_uj_vj) - (d_ui_uj + d_vi_vj)
+
+            # Accumulate positive uncrossing tension onto the participating edges
+            pos_gain = np.maximum(0.0, gain)
+            blocking_potential += pos_gain
+
+            # Track best shortcut edge for dual-action incentive
+            mask = gain > best_shortcut_gain
+            best_shortcut_gain[mask] = gain[mask]
+            best_partner[mask] = u_j[mask]
+
+    # Global distance normalization
+    global_mean_dist = float(np.mean(edge_distance))
+    scale_norm = global_mean_dist + 1e-8
+
+    normalized_block = blocking_potential / scale_norm
+    base_freq = edge_n_used[u_idx, v_idx]
+
+    # Guided utility: long edges with high blocking tension and low historical penalty
+    utilities = (d_uv / (1.0 + base_freq)) * (1.0 + 0.40 * normalized_block)
+
+    k = max(1, int(np.ceil(0.14 * num_nodes)))
+    top_k_indices = np.argsort(utilities)[-k:]
+    adaptive_lambda = 0.30 * global_mean_dist
+
+    for idx in top_k_indices:
+        u, v = u_idx[idx], v_idx[idx]
+        edge_n_used[u, v] += 1.0
+        edge_n_used[v, u] += 1.0
+        freq_penalty = 1.0 + np.log1p(edge_n_used[u, v])
+        geom_weight = 1.0 + 0.5 * min(3.0, normalized_block[idx])
+        penalty = adaptive_lambda * freq_penalty * geom_weight
+        updated_edge_distance[u, v] += penalty
+        updated_edge_distance[v, u] += penalty
+
+    # Dual-action reward for high-gain shortcut/cross edges
+    high_gain_indices = np.argsort(best_shortcut_gain)[-k:]
+    for idx in high_gain_indices:
+        if best_shortcut_gain[idx] > 0.0:
+            u = u_idx[idx]
+            w = best_partner[idx]
+            freq = edge_n_used[u, w]
+            if freq < 1.0:
+                discount = 0.10 * global_mean_dist * (1.0 / (1.0 + freq))
+                updated_edge_distance[u, w] = max(1e-6, updated_edge_distance[u, w] - discount)
+                updated_edge_distance[w, u] = updated_edge_distance[u, w]
+
+    return updated_edge_distance
+# ===== Eval Output =====
+[*] Running ...
+[*] mode=val, data=/home/ducanh/projects/EAs_project/MoH/problems/tsp_gls/data/val/val_instance_data_sol_100.pkl, seed=0, n_instances=8
+[*] instance_indices=[6, 9, 0, 2, 4, 3, 5, 1]
+[*] instance 6: obj=7.7599, gap=0.0039
+[*] instance 9: obj=8.0699, gap=0.3302
+[*] instance 0: obj=8.0001, gap=0.0000
+[*] instance 2: obj=8.1145, gap=0.5035
+[*] instance 4: obj=7.8131, gap=0.0000
+[*] instance 3: obj=7.3713, gap=0.0000
+[*] instance 5: obj=7.6365, gap=0.0000
+[*] instance 1: obj=7.5570, gap=0.0000
+[*] ave_gap on size 100: 0.10469832159905323
+0.10469832159905323

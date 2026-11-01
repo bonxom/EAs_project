@@ -1,0 +1,66 @@
+# ===== Heuristic Code =====
+#{Replaces the heuristic sigmoid weighting with theoretical Guided Local Search utility indicators U(e) = c(e) / (1 + p(e)), modulated by incident k-NN node densities and concentrated on upper-quartile outliers via an adaptive temperature soft-argmax allocation to drive deterministic escape from local optima.}#
+
+import numpy as np
+
+def update_edge_distance(edge_distance, local_opt_tour, edge_n_used):
+    updated_edge_distance = np.copy(edge_distance)
+    n = len(local_opt_tour)
+    if n < 2:
+        return updated_edge_distance
+
+    u_idx = local_opt_tour
+    v_idx = np.roll(local_opt_tour, -1)
+
+    tour_edge_lengths = edge_distance[u_idx, v_idx]
+    edge_counts = edge_n_used[u_idx, v_idx]
+
+    # Compute local topological density using nearest neighbors
+    sorted_dists = np.sort(edge_distance, axis=1)
+    k_nn = min(6, n)
+    k_nn_avg = np.mean(sorted_dists[:, 1:k_nn], axis=1)
+    node_density = 1.0 / (k_nn_avg + 1e-6)
+    node_density = node_density / np.mean(node_density)
+    density_factor = 0.5 * (node_density[u_idx] + node_density[v_idx])
+
+    # Exact Guided Local Search (GLS) utility: U(e) = c(e) / (1 + p(e))
+    gls_utility = (tour_edge_lengths / (1.0 + edge_counts)) * density_factor
+
+    # Soft-argmax tournament distribution over tour utilities
+    max_util = np.max(gls_utility)
+    min_util = np.min(gls_utility)
+    spread = max_util - min_util
+    tau = spread / np.log(float(n) + 1.0) if spread > 1e-9 else 1.0
+
+    centered_util = (gls_utility - max_util) / tau
+    exp_util = np.exp(centered_util)
+    soft_argmax_weights = exp_util / np.sum(exp_util)
+
+    # Base penalty proportional to average tour length and theoretical utility indicator
+    avg_tour_length = np.mean(tour_edge_lengths)
+    base_penalty = avg_tour_length * soft_argmax_weights * float(n)
+
+    # Focus heavier penalization on upper-quartile structural outliers
+    threshold = np.percentile(tour_edge_lengths, 75)
+    high_penalty_mask = tour_edge_lengths >= threshold
+    base_penalty[high_penalty_mask] *= 1.5
+
+    # Symmetrically update distances for penalized tour edges
+    np.add.at(updated_edge_distance, (u_idx, v_idx), base_penalty)
+    np.add.at(updated_edge_distance, (v_idx, u_idx), base_penalty)
+
+    return updated_edge_distance
+# ===== Eval Output =====
+[*] Running ...
+[*] mode=val, data=/home/ducanh/projects/EAs_project/MoH/problems/tsp_gls/data/val/val_instance_data_sol_200.pkl, seed=0, n_instances=8
+[*] instance_indices=[6, 9, 0, 2, 4, 3, 5, 1]
+[*] instance 6: obj=10.5147, gap=0.6594
+[*] instance 9: obj=10.7840, gap=1.1343
+[*] instance 0: obj=10.8879, gap=0.0201
+[*] instance 2: obj=10.9612, gap=0.1223
+[*] instance 4: obj=10.8752, gap=0.2585
+[*] instance 3: obj=10.6436, gap=0.3934
+[*] instance 5: obj=10.9285, gap=0.4126
+[*] instance 1: obj=11.1294, gap=0.9539
+[*] ave_gap on size 200: 0.49431250940324967
+0.49431250940324967

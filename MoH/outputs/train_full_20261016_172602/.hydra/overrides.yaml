@@ -1,0 +1,5 @@
+- llm_client@heu=local
+- llm_client@meta=local
+- heu.base_url=http://172.25.16.1:20128/v1
+- meta.base_url=http://172.25.16.1:20128/v1
+- optimizer_timeout=7200

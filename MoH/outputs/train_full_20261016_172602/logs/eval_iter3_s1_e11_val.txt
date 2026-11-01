@@ -1,0 +1,87 @@
+# ===== Heuristic Code =====
+#{This algorithm hybridizes non-linear z-score utility edge penalization with path-bottleneck scoring and selectively discounts candidate cross-connections between severed endpoints to direct escape moves.}#
+
+import numpy as np
+
+def update_edge_distance(edge_distance, local_opt_tour, edge_n_used):
+    updated_edge_distance = np.copy(edge_distance)
+    n = len(local_opt_tour)
+    if n < 4:
+        return updated_edge_distance
+
+    u_idx = np.array(local_opt_tour, dtype=np.intp)
+    v_idx = np.roll(u_idx, -1)
+
+    costs = edge_distance[u_idx, v_idx].astype(np.float64)
+    used = edge_n_used[u_idx, v_idx].astype(np.float64)
+
+    mean_cost = np.mean(costs)
+    std_cost = np.std(costs) + 1e-8
+    z_scores = (costs - mean_cost) / std_cost
+    weights = 1.0 / (1.0 + np.exp(-z_scores))
+
+    # Path bottleneck component: sum of adjacent edge costs to penalize tight path bottlenecks
+    prev_costs = np.roll(costs, 1)
+    next_costs = np.roll(costs, -1)
+    bottleneck_score = costs / (0.5 * (prev_costs + next_costs) + 1e-8)
+
+    utilities = (costs * (1.0 + weights) * (0.8 + 0.2 * np.minimum(bottleneck_score, 2.0))) / (1.0 + used)
+
+    threshold = np.median(utilities)
+    max_util = np.max(utilities) + 1e-8
+    penalize_mask = utilities >= threshold
+
+    p_u = u_idx[penalize_mask]
+    p_v = v_idx[penalize_mask]
+    p_costs = costs[penalize_mask]
+    p_used = used[penalize_mask]
+    p_utils = utilities[penalize_mask]
+
+    penalties = (p_costs / (1.0 + np.sqrt(p_used + 1.0))) * (1.0 + p_utils / max_util)
+    updated_edge_distance[p_u, p_v] += penalties
+    updated_edge_distance[p_v, p_u] += penalties
+
+    # Reward cross-connections between severed endpoints to promote productive 2-opt/3-opt moves
+    if len(p_u) >= 2:
+        k_cross = min(len(p_u), 12)
+        top_cut_indices = np.argsort(p_utils)[-k_cross:]
+        active_u = p_u[top_cut_indices]
+        active_v = p_v[top_cut_indices]
+        endpoints = np.unique(np.concatenate((active_u, active_v)))
+
+        # Discount non-tour, low-usage cross connections among severed endpoints
+        cross_dist = updated_edge_distance[np.ix_(endpoints, endpoints)]
+        cross_used = edge_n_used[np.ix_(endpoints, endpoints)]
+
+        valid_cross = (cross_used == 0)
+        np.fill_diagonal(valid_cross, False)
+
+        discount_factor = 0.03
+        updated_edge_distance[np.ix_(endpoints, endpoints)] -= cross_dist * (discount_factor * valid_cross)
+
+    # Controlled decay for unused edges incident to penalized nodes
+    penalized_nodes = np.unique(np.concatenate((p_u, p_v)))
+    decay_ratio = 0.015
+    for u in penalized_nodes:
+        unused_mask = (edge_n_used[u] == 0)
+        unused_mask[u] = False
+        if np.any(unused_mask):
+            current_vals = updated_edge_distance[u, unused_mask]
+            updated_edge_distance[u, unused_mask] -= current_vals * decay_ratio
+            updated_edge_distance[unused_mask, u] = updated_edge_distance[u, unused_mask]
+
+    return updated_edge_distance
+# ===== Eval Output =====
+[*] Running ...
+[*] mode=val, data=/home/ducanh/projects/EAs_project/MoH/problems/tsp_gls/data/val/val_instance_data_sol_50.pkl, seed=0, n_instances=8
+[*] instance_indices=[6, 9, 0, 2, 4, 3, 5, 1]
+[*] instance 6: obj=5.7136, gap=0.5983
+[*] instance 9: obj=5.9639, gap=0.0000
+[*] instance 0: obj=5.7783, gap=0.0000
+[*] instance 2: obj=5.8071, gap=0.0000
+[*] instance 4: obj=5.3965, gap=0.0000
+[*] instance 3: obj=5.8224, gap=1.1392
+[*] instance 5: obj=5.6492, gap=0.5441
+[*] instance 1: obj=5.1651, gap=0.0000
+[*] ave_gap on size 50: 0.285189540513453
+0.285189540513453

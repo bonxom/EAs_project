@@ -1,0 +1,52 @@
+# ===== Heuristic Code =====
+#{This algorithm penalizes all tour edges exceeding an adaptive near-maximal utility threshold while combining dual-space node centrality and entropy gating to diversify escape from local optima.}#
+
+import numpy as np
+
+def update_edge_distance(edge_distance, local_opt_tour, edge_n_used):
+    updated_edge_distance = np.copy(edge_distance)
+    num_nodes = len(local_opt_tour)
+
+    tour_edges = [(local_opt_tour[i], local_opt_tour[(i + 1) % num_nodes]) for i in range(num_nodes)]
+    utilities = np.array([edge_distance[u, v] / (1.0 + edge_n_used[u, v]) for u, v in tour_edges])
+
+    max_util = np.max(utilities)
+    threshold = 0.92 * max_util
+
+    for idx, (u, v) in enumerate(tour_edges):
+        if utilities[idx] >= threshold:
+            edge_n_used[u, v] += 1
+            edge_n_used[v, u] += 1
+
+    node_centrality = np.sum(edge_n_used, axis=1)
+    max_centrality = np.max(node_centrality) + 1e-12
+    norm_centrality = node_centrality / max_centrality
+    centrality_field = norm_centrality[:, None] + norm_centrality[None, :]
+
+    total_node_usage = np.sum(edge_n_used, axis=1, keepdims=True) + 1e-12
+    usage_probs = edge_n_used / total_node_usage
+    node_entropy = -np.sum(usage_probs * np.log(usage_probs + 1e-12), axis=1)
+    max_entropy = np.log(num_nodes) + 1e-12
+    entropy_gate = 1.0 - (node_entropy / max_entropy)
+    gate_matrix = entropy_gate[:, None] + entropy_gate[None, :]
+
+    avg_dist = np.mean(edge_distance)
+    lambda_param = 0.25 * avg_dist
+    penalty_matrix = lambda_param * edge_n_used * (1.0 + centrality_field + gate_matrix)
+
+    updated_edge_distance += penalty_matrix
+    return updated_edge_distance
+# ===== Eval Output =====
+[*] Running ...
+[*] mode=val, data=/home/ducanh/projects/EAs_project/MoH/problems/tsp_gls/data/val/val_instance_data_sol_100.pkl, seed=0, n_instances=8
+[*] instance_indices=[6, 9, 0, 2, 4, 3, 5, 1]
+[*] instance 6: obj=7.7855, gap=0.3330
+[*] instance 9: obj=8.0672, gap=0.2969
+[*] instance 0: obj=8.0505, gap=0.6298
+[*] instance 2: obj=8.1245, gap=0.6273
+[*] instance 4: obj=7.8175, gap=0.0560
+[*] instance 3: obj=7.3713, gap=0.0000
+[*] instance 5: obj=7.6365, gap=0.0000
+[*] instance 1: obj=7.5570, gap=0.0000
+[*] ave_gap on size 100: 0.24287269837959535
+0.24287269837959535

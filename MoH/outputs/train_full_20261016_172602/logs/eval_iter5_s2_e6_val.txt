@@ -1,0 +1,89 @@
+# ===== Heuristic Code =====
+#{This algorithm calculates 4-node quad-slack inefficiencies and crossing potentials along the tour to penalize high-utility edges while multiplicatively dampening low-regret 2-opt alternative shortcut edges.}#
+
+import numpy as np
+
+def update_edge_distance(edge_distance, local_opt_tour, edge_n_used):
+    updated_edge_distance = np.copy(edge_distance)
+    num_nodes = len(local_opt_tour)
+    tour = np.asarray(local_opt_tour)
+
+    # Decay edge usage history
+    edge_n_used *= 0.95
+
+    # 4-node quad indices: (t, u, v, w)
+    t_idx = np.roll(tour, 1)
+    u_idx = tour
+    v_idx = np.roll(tour, -1)
+    w_idx = np.roll(tour, -2)
+
+    # Edge distances along tour
+    d_tu = edge_distance[t_idx, u_idx]
+    d_uv = edge_distance[u_idx, v_idx]
+    d_vw = edge_distance[v_idx, w_idx]
+
+    # Diagonal and crossing distances for 4-node segments
+    d_tv = edge_distance[t_idx, v_idx]
+    d_uw = edge_distance[u_idx, w_idx]
+    d_tw = edge_distance[t_idx, w_idx]
+
+    # Quad-slack: compare perimeter edges against cross-cutting 2-opt alternatives
+    slack_tv = (d_tu + d_uv) - d_tv
+    slack_uw = (d_uv + d_vw) - d_uw
+    slack_cross = (d_tu + d_vw) - (d_tv + d_uw)
+
+    # Structural trapezoid/crossing distortion measure
+    quad_distortion = np.maximum(0.0, slack_tv) + np.maximum(0.0, slack_uw) + np.maximum(0.0, -slack_cross)
+    mean_segment = (d_tu + d_uv + d_vw) / 3.0 + 1e-8
+    normalized_distortion = quad_distortion / mean_segment
+
+    # Standard GLS utility augmented with 4-node quad inefficiency
+    freq_uv = edge_n_used[u_idx, v_idx]
+    utilities = (d_uv / (1.0 + freq_uv)) * (1.0 + 0.40 * normalized_distortion)
+
+    # Select top edges to penalize
+    k_penalize = max(1, int(np.ceil(0.12 * num_nodes)))
+    top_penalize_idx = np.argsort(utilities)[-k_penalize:]
+
+    global_mean = np.mean(edge_distance)
+    base_penalty = 0.32 * global_mean
+
+    for idx in top_penalize_idx:
+        u, v = u_idx[idx], v_idx[idx]
+        edge_n_used[u, v] += 1.0
+        edge_n_used[v, u] += 1.0
+
+        freq_factor = 1.0 + np.log1p(edge_n_used[u, v])
+        penalty = base_penalty * freq_factor * (1.0 + 0.30 * normalized_distortion[idx])
+        updated_edge_distance[u, v] += penalty
+        updated_edge_distance[v, u] += penalty
+
+    # Multiplicative dampening on low-regret alternative shortcut edges
+    # Evaluate prospective 2-opt shortcut pairs (u, w) where slack is high
+    k_reward = max(1, int(np.ceil(0.10 * num_nodes)))
+    best_shortcuts = np.argsort(slack_uw)[-k_reward:]
+
+    for idx in best_shortcuts:
+        u, w = u_idx[idx], w_idx[idx]
+        if edge_n_used[u, w] < 1.0:
+            # Multiplicative dampening scaled by slack quality
+            regret_ratio = slack_uw[idx] / (d_uv[idx] + d_vw[idx] + 1e-8)
+            damp_factor = np.clip(1.0 - 0.25 * regret_ratio, 0.70, 0.98)
+            updated_edge_distance[u, w] *= damp_factor
+            updated_edge_distance[w, u] = updated_edge_distance[u, w]
+
+    return updated_edge_distance
+# ===== Eval Output =====
+[*] Running ...
+[*] mode=val, data=/home/ducanh/projects/EAs_project/MoH/problems/tsp_gls/data/val/val_instance_data_sol_100.pkl, seed=0, n_instances=8
+[*] instance_indices=[6, 9, 0, 2, 4, 3, 5, 1]
+[*] instance 6: obj=7.7596, gap=0.0000
+[*] instance 9: obj=8.0501, gap=0.0846
+[*] instance 0: obj=8.0001, gap=0.0000
+[*] instance 2: obj=8.0907, gap=0.2088
+[*] instance 4: obj=7.8131, gap=0.0000
+[*] instance 3: obj=7.3713, gap=0.0000
+[*] instance 5: obj=7.6365, gap=0.0000
+[*] instance 1: obj=7.5570, gap=0.0000
+[*] ave_gap on size 100: 0.03667955966215053
+0.03667955966215053

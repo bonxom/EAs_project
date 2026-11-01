@@ -1,0 +1,90 @@
+# ===== Heuristic Code =====
+#{This algorithm enhances geometric detour and angle-deficit guided penalization and chord discounting by replacing static scaling with dynamic stagnation-aware tanh modulation and spatial centrality pressure to escape dense local optima.}#
+
+import numpy as np
+
+def update_edge_distance(edge_distance, local_opt_tour, edge_n_used):
+    updated_edge_distance = np.copy(edge_distance)
+    num_nodes = len(local_opt_tour)
+    tour = np.asarray(local_opt_tour)
+    u_idx = tour
+    v_idx = np.roll(tour, -1)
+    w_idx = np.roll(tour, -2)
+
+    # Evaporate edge usage memory
+    edge_n_used *= 0.96
+
+    # Geometric detour and cosine turn calculation
+    d_uv = edge_distance[u_idx, v_idx]
+    d_vw = edge_distance[v_idx, w_idx]
+    d_uw = edge_distance[u_idx, w_idx]
+
+    detour_ratio = (d_uv + d_vw) / (d_uw + 1e-8)
+    denom = 2.0 * d_uv * d_vw + 1e-8
+    cos_turn = np.clip((d_uv**2 + d_vw**2 - d_uw**2) / denom, -1.0, 1.0)
+    acute_deficit = 1.0 - cos_turn
+    geom_inefficiency = detour_ratio * (1.0 + 0.5 * acute_deficit)
+
+    base_dist = d_uv
+    base_freq = edge_n_used[u_idx, v_idx]
+    local_geom_factor = 0.5 * (geom_inefficiency + np.roll(geom_inefficiency, 1))
+    utilities = (base_dist / (1.0 + base_freq)) * (1.0 + 0.35 * local_geom_factor)
+
+    k = max(1, int(np.ceil(0.14 * num_nodes)))
+    top_k_indices = np.argsort(utilities)[-k:]
+
+    # Compute global spatial metrics and node centralities
+    node_mean_dist = np.mean(edge_distance, axis=1)
+    global_mean_dist = np.mean(node_mean_dist)
+    spatial_centrality = global_mean_dist / (node_mean_dist + 1e-12)
+    norm_spatial_centrality = spatial_centrality / (np.max(spatial_centrality) + 1e-12)
+
+    # Stagnation factor based on tour usage overlap
+    tour_usage = base_freq
+    overlap_ratio = np.mean(tour_usage > 1.0)
+    max_used = np.max(edge_n_used) + 1e-12
+    avg_tour_usage = np.mean(tour_usage)
+    stagnation_factor = 1.0 + 1.5 * overlap_ratio + (avg_tour_usage / max_used)
+
+    # Dynamic stagnation-aware lambda
+    adaptive_lambda = (0.20 + 0.20 * np.tanh(stagnation_factor)) * global_mean_dist
+
+    # Apply penalties to top inefficient edges modulated by spatial centrality
+    for idx in top_k_indices:
+        u, v = u_idx[idx], v_idx[idx]
+        edge_n_used[u, v] += 1.0
+        edge_n_used[v, u] += 1.0
+        freq_penalty = 1.0 + np.log1p(edge_n_used[u, v])
+        geom_weight = 1.0 + 0.5 * local_geom_factor[idx]
+        centrality_mod = 1.0 + 0.35 * (norm_spatial_centrality[u] + norm_spatial_centrality[v])
+        penalty = adaptive_lambda * freq_penalty * geom_weight * centrality_mod
+        updated_edge_distance[u, v] += penalty
+        updated_edge_distance[v, u] += penalty
+
+    # Proactively discount high-detour shortcut chords with low historical usage
+    high_detour_indices = np.argsort(detour_ratio)[-k:]
+    discount_strength = (0.08 + 0.07 * np.tanh(stagnation_factor)) * global_mean_dist
+    for idx in high_detour_indices:
+        u, w = u_idx[idx], w_idx[idx]
+        freq = edge_n_used[u, w]
+        if freq < 1.0:
+            discount = discount_strength * (1.0 / (1.0 + freq))
+            new_val = max(1e-6, updated_edge_distance[u, w] - discount)
+            updated_edge_distance[u, w] = new_val
+            updated_edge_distance[w, u] = new_val
+
+    return updated_edge_distance
+# ===== Eval Output =====
+[*] Running ...
+[*] mode=val, data=/home/ducanh/projects/EAs_project/MoH/problems/tsp_gls/data/val/val_instance_data_sol_100.pkl, seed=0, n_instances=8
+[*] instance_indices=[6, 9, 0, 2, 4, 3, 5, 1]
+[*] instance 6: obj=7.7630, gap=0.0438
+[*] instance 9: obj=8.0433, gap=0.0000
+[*] instance 0: obj=8.0001, gap=0.0000
+[*] instance 2: obj=8.0739, gap=0.0000
+[*] instance 4: obj=7.8131, gap=0.0000
+[*] instance 3: obj=7.3713, gap=0.0000
+[*] instance 5: obj=7.6365, gap=0.0000
+[*] instance 1: obj=7.5570, gap=0.0000
+[*] ave_gap on size 100: 0.00547952373734506
+0.00547952373734506

@@ -1,0 +1,54 @@
+# ===== Heuristic Code =====
+#{Decouple structural instance metrics from accumulated penalties by estimating base edge distances, normalizing them using robust tour dispersion, and calculating penalized utilities to guide targeted updates.}
+
+import numpy as np
+
+def update_edge_distance(edge_distance, local_opt_tour, edge_n_used):
+    updated_edge_distance = np.copy(edge_distance)
+
+    u_idx = local_opt_tour
+    v_idx = np.roll(local_opt_tour, -1)
+
+    current_edge_dists = edge_distance[u_idx, v_idx]
+    tour_counts = edge_n_used[u_idx, v_idx]
+
+    # Reconstruct structural base metric by removing prior penalty distortions
+    mean_current_dist = np.mean(current_edge_dists)
+    base_penalty_unit = 0.3 * mean_current_dist
+    estimated_base_lengths = np.maximum(1e-6, current_edge_dists - (tour_counts * base_penalty_unit))
+
+    # Robust dispersion normalization (mean absolute deviation from median)
+    median_length = np.median(estimated_base_lengths)
+    dispersion = np.mean(np.abs(estimated_base_lengths - median_length)) + 1e-8
+    normalized_lengths = (estimated_base_lengths - median_length) / dispersion
+
+    # Decoupled utility calculation using structural topology relative to usage frequency
+    structural_weights = np.exp(np.clip(normalized_lengths, -4.0, 4.0))
+    utilities = structural_weights / (1.0 + tour_counts)
+
+    max_utility = np.max(utilities)
+    threshold = 0.99 * max_utility
+    selected_mask = utilities >= threshold
+
+    penalty = 0.3 * np.mean(estimated_base_lengths)
+    sel_u = u_idx[selected_mask]
+    sel_v = v_idx[selected_mask]
+
+    updated_edge_distance[sel_u, sel_v] += penalty
+    updated_edge_distance[sel_v, sel_u] += penalty
+
+    return updated_edge_distance
+# ===== Eval Output =====
+[*] Running ...
+[*] mode=val, data=/home/ducanh/projects/EAs_project/MoH/problems/tsp_gls/data/val/val_instance_data_sol_20.pkl, seed=0, n_instances=8
+[*] instance_indices=[6, 9, 0, 2, 4, 3, 5, 1]
+[*] instance 6: obj=3.7045, gap=0.0000
+[*] instance 9: obj=4.1442, gap=0.0000
+[*] instance 0: obj=3.6827, gap=0.0000
+[*] instance 2: obj=3.8184, gap=0.0000
+[*] instance 4: obj=4.0206, gap=4.7419
+[*] instance 3: obj=3.7244, gap=0.7405
+[*] instance 5: obj=3.4281, gap=0.0000
+[*] instance 1: obj=3.6958, gap=0.0000
+[*] ave_gap on size 20: 0.6853071478150424
+0.6853071478150424

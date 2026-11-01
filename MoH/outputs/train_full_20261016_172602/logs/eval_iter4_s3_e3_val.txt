@@ -1,0 +1,64 @@
+# ===== Heuristic Code =====
+# {Replaces the global usage-frequency weighting with a topology-aware composite penalty combining local tour neighbor slack ratios, cluster-bridging scales, and inverse usage decay to symmetrically penalize bottleneck edges.}
+
+import numpy as np
+
+def update_edge_distance(edge_distance, local_opt_tour, edge_n_used):
+    updated_edge_distance = np.copy(edge_distance)
+    n = len(local_opt_tour)
+
+    # 1. Topology-aware neighborhood scale estimation
+    k = min(6, n - 1)
+    sorted_dists = np.sort(edge_distance, axis=1)
+    k_nn_avg = np.mean(sorted_dists[:, 1:k+1], axis=1)
+
+    # 2. Tour sequence indexing: predecessor, current edge endpoints (u, v), successor
+    u_idx = local_opt_tour
+    v_idx = np.roll(local_opt_tour, -1)
+    p_idx = np.roll(local_opt_tour, 1)
+    w_idx = np.roll(local_opt_tour, -2)
+
+    # 3. Edge lengths and adjacent contextual edges
+    e_uv = edge_distance[u_idx, v_idx]
+    e_pu = edge_distance[p_idx, u_idx]
+    e_vw = edge_distance[v_idx, w_idx]
+
+    # 4. Local tour slack ratio: how disproportionate (u, v) is compared to its adjacent path segments
+    neighbor_avg = 0.5 * (e_pu + e_vw) + 1e-6
+    slack_ratio = e_uv / neighbor_avg
+
+    # 5. Cluster bridging ratio: measuring if edge (u, v) bridges distant local clusters
+    geom_scale = np.sqrt(k_nn_avg[u_idx] * k_nn_avg[v_idx]) + 1e-6
+    bridge_ratio = e_uv / geom_scale
+
+    # 6. Usage decay counter
+    usage_factor = 1.0 / (1.0 + 0.3 * edge_n_used[u_idx, v_idx])
+
+    # 7. Topology-aware composite penalty
+    # Edge penalty combines local outlier slack, bridging intensity, and usage decay
+    composite_penalty = (0.5 * slack_ratio + 0.5 * bridge_ratio) * usage_factor
+
+    # Amplify top quartile inefficient bridging edges
+    threshold = np.percentile(e_uv, 75)
+    high_penalty_mask = e_uv >= threshold
+    composite_penalty[high_penalty_mask] *= 1.5
+
+    # 8. Symmetric in-place distance penalty accumulation
+    np.add.at(updated_edge_distance, (u_idx, v_idx), composite_penalty)
+    np.add.at(updated_edge_distance, (v_idx, u_idx), composite_penalty)
+
+    return updated_edge_distance
+# ===== Eval Output =====
+[*] Running ...
+[*] mode=val, data=/home/ducanh/projects/EAs_project/MoH/problems/tsp_gls/data/val/val_instance_data_sol_200.pkl, seed=0, n_instances=8
+[*] instance_indices=[6, 9, 0, 2, 4, 3, 5, 1]
+[*] instance 6: obj=10.4547, gap=0.0849
+[*] instance 9: obj=10.7070, gap=0.4124
+[*] instance 0: obj=10.8857, gap=0.0000
+[*] instance 2: obj=10.9710, gap=0.2118
+[*] instance 4: obj=10.8914, gap=0.4079
+[*] instance 3: obj=10.6132, gap=0.1070
+[*] instance 5: obj=10.9078, gap=0.2226
+[*] instance 1: obj=11.1765, gap=1.3813
+[*] ave_gap on size 200: 0.3534907601297682
+0.3534907601297682

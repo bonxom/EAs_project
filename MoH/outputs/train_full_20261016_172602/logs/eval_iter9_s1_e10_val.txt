@@ -1,0 +1,82 @@
+# ===== Heuristic Code =====
+#{This algorithm penalizes long, frequently used tour edges using a utility-guided scheme and recreationally injects targeted savings-proportional discounts onto the top k-nearest unselected candidate neighbors incident to penalized endpoints to guide the search toward promising shortcuts.}
+
+import numpy as np
+
+def update_edge_distance(edge_distance, local_opt_tour, edge_n_used):
+    updated_edge_distance = np.copy(edge_distance)
+    n = len(local_opt_tour)
+    if n < 4:
+        return updated_edge_distance
+
+    u_idx = np.array(local_opt_tour, dtype=np.intp)
+    v_idx = np.roll(u_idx, -1)
+
+    costs = edge_distance[u_idx, v_idx].astype(np.float64)
+    used = edge_n_used[u_idx, v_idx].astype(np.float64)
+
+    mean_cost = np.mean(costs)
+    std_cost = np.std(costs) + 1e-8
+    z_scores = (costs - mean_cost) / std_cost
+    weights = 1.0 / (1.0 + np.exp(-z_scores))
+    utilities = (costs * (1.0 + weights)) / (1.0 + used)
+
+    threshold = np.median(utilities)
+    max_util = np.max(utilities) + 1e-8
+    penalize_mask = utilities >= threshold
+
+    p_u = u_idx[penalize_mask]
+    p_v = v_idx[penalize_mask]
+    p_costs = costs[penalize_mask]
+    p_used = used[penalize_mask]
+    p_utils = utilities[penalize_mask]
+
+    penalties = (p_costs / (1.0 + np.sqrt(p_used + 1.0))) * (1.0 + p_utils / max_util)
+    updated_edge_distance[p_u, p_v] += penalties
+    updated_edge_distance[p_v, p_u] += penalties
+
+    tour_adj = set()
+    for u, v in zip(u_idx, v_idx):
+        tour_adj.add((u, v))
+        tour_adj.add((v, u))
+
+    penalized_nodes = np.unique(np.concatenate((p_u, p_v)))
+    k_neighbors = min(4, n - 2)
+
+    for u in penalized_nodes:
+        orig_row = edge_distance[u].astype(np.float64)
+        cands = np.argsort(orig_row)
+        valid_cands = []
+        for c in cands:
+            if c != u and (u, c) not in tour_adj:
+                valid_cands.append(c)
+                if len(valid_cands) == k_neighbors:
+                    break
+
+        if valid_cands:
+            cand_arr = np.array(valid_cands, dtype=np.intp)
+            cand_costs = orig_row[cand_arr]
+            cand_used = edge_n_used[u, cand_arr].astype(np.float64)
+
+            savings = np.maximum(0.0, mean_cost - cand_costs)
+            discounts = (0.05 * cand_costs + 0.1 * savings) / (1.0 + cand_used)
+
+            new_vals = np.maximum(0.01 * cand_costs, updated_edge_distance[u, cand_arr] - discounts)
+            updated_edge_distance[u, cand_arr] = new_vals
+            updated_edge_distance[cand_arr, u] = new_vals
+
+    return updated_edge_distance
+# ===== Eval Output =====
+[*] Running ...
+[*] mode=val, data=/home/ducanh/projects/EAs_project/MoH/problems/tsp_gls/data/val/val_instance_data_sol_50.pkl, seed=0, n_instances=8
+[*] instance_indices=[6, 9, 0, 2, 4, 3, 5, 1]
+[*] instance 6: obj=5.7136, gap=0.5983
+[*] instance 9: obj=5.9639, gap=0.0000
+[*] instance 0: obj=5.7783, gap=0.0000
+[*] instance 2: obj=5.8071, gap=0.0000
+[*] instance 4: obj=5.3965, gap=0.0000
+[*] instance 3: obj=5.8584, gap=1.7635
+[*] instance 5: obj=5.6187, gap=0.0000
+[*] instance 1: obj=5.3071, gap=2.7501
+[*] ave_gap on size 50: 0.6389841206911967
+0.6389841206911967

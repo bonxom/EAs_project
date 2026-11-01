@@ -1,0 +1,61 @@
+# ===== Heuristic Code =====
+# {Applies classical Guided Local Search edge utility evaluation directly to tour edges, penalizing the maximal utility subset with an adaptive scale while completely eliminating redundant full-matrix distance sorting.}
+
+import numpy as np
+
+def update_edge_distance(edge_distance, local_opt_tour, edge_n_used):
+    # Create a copy of the edge distance matrix to avoid direct mutation
+    updated_edge_distance = np.copy(edge_distance)
+
+    n = len(local_opt_tour)
+    if n <= 1:
+        return updated_edge_distance
+
+    # Extract consecutive edges in the local optimum tour
+    u_idx = np.asarray(local_opt_tour, dtype=np.intp)
+    v_idx = np.roll(u_idx, -1)
+
+    # Retrieve current edge distances and historical penalty/usage counters
+    tour_dists = edge_distance[u_idx, v_idx]
+    penalties = edge_n_used[u_idx, v_idx]
+
+    # Compute classical GLS utility: util(u, v) = c(u, v) / (1 + p(u, v))
+    utilities = tour_dists / (1.0 + penalties)
+
+    # Identify maximum utility and select edges achieving or near the peak utility
+    max_util = np.max(utilities)
+    if max_util <= 0.0:
+        return updated_edge_distance
+
+    # Select edges within the top utility tier (e.g., matching or within 95% of max utility)
+    target_mask = utilities >= (0.95 * max_util)
+
+    # Calculate an adaptive penalty increment proportional to mean tour edge cost
+    mean_tour_cost = np.mean(tour_dists)
+    penalty_magnitude = 0.3 * mean_tour_cost
+
+    # Apply scaled penalty selectively to the identified subset
+    applied_penalties = penalty_magnitude * (utilities[target_mask] / max_util)
+
+    target_u = u_idx[target_mask]
+    target_v = v_idx[target_mask]
+
+    # Symmetrically apply penalties to distance matrix
+    np.add.at(updated_edge_distance, (target_u, target_v), applied_penalties)
+    np.add.at(updated_edge_distance, (target_v, target_u), applied_penalties)
+
+    return updated_edge_distance
+# ===== Eval Output =====
+[*] Running ...
+[*] mode=val, data=/home/ducanh/projects/EAs_project/MoH/problems/tsp_gls/data/val/val_instance_data_sol_200.pkl, seed=0, n_instances=8
+[*] instance_indices=[6, 9, 0, 2, 4, 3, 5, 1]
+[*] instance 6: obj=10.6573, gap=2.0244
+[*] instance 9: obj=10.9016, gap=2.2370
+[*] instance 0: obj=11.2991, gap=3.7972
+[*] instance 2: obj=11.2182, gap=2.4702
+[*] instance 4: obj=10.9938, gap=1.3521
+[*] instance 3: obj=10.7784, gap=1.6649
+[*] instance 5: obj=11.1770, gap=2.6967
+[*] instance 1: obj=11.3226, gap=2.7070
+[*] ave_gap on size 200: 2.368681618397159
+2.368681618397159

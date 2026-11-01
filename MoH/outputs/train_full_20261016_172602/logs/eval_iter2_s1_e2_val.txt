@@ -1,0 +1,77 @@
+# ===== Heuristic Code =====
+#{We compute utilities using z-score sigmoid soft-gated costs dampened by edge usage, measure the utility concentration via the Gini coefficient to adaptively set a dynamic penalty percentile threshold between top-15% and top-50%, and apply dual-action landscape shaping with targeted edge penalties and incident unused edge discounting.}#
+
+import numpy as np
+
+def update_edge_distance(edge_distance, local_opt_tour, edge_n_used):
+    updated_edge_distance = np.copy(edge_distance)
+    n = len(local_opt_tour)
+
+    u_idx = np.array(local_opt_tour, dtype=np.intp)
+    v_idx = np.roll(u_idx, -1)
+
+    costs = edge_distance[u_idx, v_idx].astype(np.float64)
+    used = edge_n_used[u_idx, v_idx].astype(np.float64)
+
+    mean_cost = np.mean(costs)
+    std_cost = np.std(costs) + 1e-8
+    z_scores = (costs - mean_cost) / std_cost
+    weights = 1.0 / (1.0 + np.exp(-z_scores))
+    utilities = (costs * (1.0 + weights)) / (1.0 + used)
+
+    # Calculate Gini coefficient of utilities to detect bottleneck concentration
+    sorted_utils = np.sort(utilities)
+    index = np.arange(1, n + 1, dtype=np.float64)
+    sum_utils = np.sum(sorted_utils)
+    if sum_utils > 1e-12:
+        gini = (2.0 * np.sum(index * sorted_utils) - (n + 1.0) * sum_utils) / (n * sum_utils)
+        gini = np.clip(gini, 0.0, 1.0)
+    else:
+        gini = 0.0
+
+    # Adapt percentile threshold: high Gini (concentrated bottleneck) -> top-15% (85th percentile),
+    # low Gini (uniform utilities) -> top-50% (50th percentile)
+    threshold_percentile = 50.0 + 35.0 * gini
+    threshold = np.percentile(utilities, threshold_percentile)
+
+    penalize_mask = utilities >= threshold
+    if not np.any(penalize_mask):
+        penalize_mask[np.argmax(utilities)] = True
+
+    p_u = u_idx[penalize_mask]
+    p_v = v_idx[penalize_mask]
+    p_costs = costs[penalize_mask]
+    p_used = used[penalize_mask]
+    p_utils = utilities[penalize_mask]
+
+    max_util = np.max(utilities) + 1e-8
+    penalties = (p_costs / (1.0 + np.sqrt(p_used + 1.0))) * (1.0 + p_utils / max_util)
+
+    updated_edge_distance[p_u, p_v] += penalties
+    updated_edge_distance[p_v, p_u] += penalties
+
+    penalized_nodes = np.unique(np.concatenate((p_u, p_v)))
+    decay_ratio = 0.02
+    for u in penalized_nodes:
+        unused_mask = (edge_n_used[u] == 0)
+        unused_mask[u] = False
+        if np.any(unused_mask):
+            current_vals = updated_edge_distance[u, unused_mask]
+            updated_edge_distance[u, unused_mask] -= current_vals * decay_ratio
+            updated_edge_distance[unused_mask, u] = updated_edge_distance[u, unused_mask]
+
+    return updated_edge_distance
+# ===== Eval Output =====
+[*] Running ...
+[*] mode=val, data=/home/ducanh/projects/EAs_project/MoH/problems/tsp_gls/data/val/val_instance_data_sol_50.pkl, seed=0, n_instances=8
+[*] instance_indices=[6, 9, 0, 2, 4, 3, 5, 1]
+[*] instance 6: obj=5.7136, gap=0.5983
+[*] instance 9: obj=5.9639, gap=0.0000
+[*] instance 0: obj=5.8546, gap=1.3193
+[*] instance 2: obj=5.8071, gap=0.0000
+[*] instance 4: obj=5.3965, gap=0.0000
+[*] instance 3: obj=5.8224, gap=1.1392
+[*] instance 5: obj=5.6187, gap=0.0000
+[*] instance 1: obj=5.1651, gap=0.0000
+[*] ave_gap on size 50: 0.3820975699100504
+0.3820975699100504

@@ -1,0 +1,17 @@
+{
+  "id": 61,
+  "timestamp": "2026-10-16T17:37:46.212908+00:00",
+  "model": "ag/gemini-3.8-flash-low",
+  "temperature": 0.7,
+  "messages": [
+    {
+      "role": "system",
+      "content": "You are an expert in the domain of designing meta optimization strategy and combinatorial optimization problems. Your task is to design heuristics that can effectively solve optimization problems."
+    },
+    {
+      "role": "user",
+      "content": "Current best heuristic for task 'tsp_gls-20':\nCode: import numpy as np\ndef update_edge_distance(edge_distance, local_opt_tour, edge_n_used):\n    updated_edge_distance = np.copy(edge_distance)\n    n = edge_distance.shape[0]\n    decay_factor = 0.95\n    tour_edges = [(local_opt_tour[i], local_opt_tour[(i + 1) % n]) for i in range(n)]\n    tour_lengths = [edge_distance[u, v] for u, v in tour_edges]\n    avg_tour_edge = np.mean(tour_lengths) if len(tour_lengths) > 0 else 1.0\n    utilities = [edge_distance[u, v] / (1.0 + edge_n_used[u, v]) for u, v in tour_edges]\n    max_utility = max(utilities) if utilities else 0.0\n    mask = edge_n_used > 0\n    penalty_scale = 0.25 * avg_tour_edge\n    updated_edge_distance[mask] = edge_distance[mask] * decay_factor + (1.0 - decay_factor) * edge_distance[mask]\n    for (u, v), util in zip(tour_edges, utilities):\n        if util >= 0.85 * max_utility:\n            add_penalty = penalty_scale / (1.0 + edge_n_used[u, v])\n            updated_edge_distance[u, v] += add_penalty\n            updated_edge_distance[v, u] += add_penalty\n    return updated_edge_distance\nIdea: This heuristic penalizes edges in the current local optimum using a utility-based penalty scaled by edge length and usage count, while simultaneously applying an adaptive decay factor to prior edge penalties to maintain metric fidelity and escape local optima.\nCurrent utility score: 0.5927419337956985 (lower is better).\nPropose 3 distinct, high-impact algorithmic refinements or structural perturbations that address potential bottlenecks, balance exploration vs exploitation, and reduce utility score.\nYour response must be formatted strictly as a json structure:\n```json\n{\"insights\": [\"refinement 1\", \"refinement 2\", \"refinement 3\"]}\n```"
+    }
+  ],
+  "response": "```json\n{\"insights\": [\"Correct a subtle bug in penalty decay: the current line `edge_distance[mask] * decay_factor + (1.0 - decay_factor) * edge_distance[mask]` evaluates identically to `edge_distance[mask]`, completely neutralizing the intended penalty decay across iterations; genuine decay requires tracking baseline distances or attenuating accumulated penalties relative to initial edge costs.\", \"Introduce a dynamic utility threshold that scales with search progression or stagnation: rather than fixing the candidate edge selection to `util >= 0.85 * max_utility`, adapt the cutoff based on search stagnation or penalize strictly the single maximum utility edge (or top-k long edges) to avoid over-disrupting high-quality tour subpaths.\", \"Normalize edge utility against local vertex neighborhoods: instead of raw length `edge_distance[u, v]`, divide the edge cost by the average or minimum incident edge weights of nodes `u` and `v`, preventing globally long edges that are structurally indispensable in sparse areas from receiving undue penalties.\"]}\n```"
+}

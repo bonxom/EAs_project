@@ -1,0 +1,65 @@
+# ===== Heuristic Code =====
+#{An adaptive dual-scale neighborhood sparseness representation blends micro (k=3) and macro (k=12) k-NN dispersion normalized by global median distance to compute robust topological density for memory-guided GLS edge penalties.}#
+
+import numpy as np
+
+def update_edge_distance(edge_distance, local_opt_tour, edge_n_used):
+    updated_edge_distance = np.copy(edge_distance)
+    n = len(local_opt_tour)
+
+    # Dual-scale neighborhood topological representation
+    k_micro = min(4, n)
+    k_macro = min(13, n)
+
+    # Partial partition for efficient k-NN retrieval without full sort
+    partition_idx = min(k_macro, n - 1)
+    part_dists = np.partition(edge_distance, partition_idx, axis=1)
+    sorted_part = np.sort(part_dists[:, 1:partition_idx + 1], axis=1)
+
+    micro_dispersion = np.mean(sorted_part[:, :min(3, sorted_part.shape[1])], axis=1)
+    macro_dispersion = np.mean(sorted_part[:, :min(12, sorted_part.shape[1])], axis=1)
+
+    global_median = np.median(sorted_part[:, 0]) + 1e-6
+    blended_scale = (0.6 * micro_dispersion + 0.4 * macro_dispersion) / global_median
+
+    node_density = 1.0 / (blended_scale + 1e-6)
+    node_density = node_density / (np.mean(node_density) + 1e-6)
+
+    u_idx = local_opt_tour
+    v_idx = np.roll(local_opt_tour, -1)
+    tour_edge_lengths = edge_distance[u_idx, v_idx]
+    avg_tour_length = np.mean(tour_edge_lengths)
+    relative_length = tour_edge_lengths / (avg_tour_length + 1e-6)
+
+    rank_penalty = 1.0 / (1.0 + np.exp(-4.0 * (relative_length - 1.0)))
+    usage_factor = 1.0 / (1.0 + 0.3 * edge_n_used[u_idx, v_idx])
+    density_factor = 0.5 * (node_density[u_idx] + node_density[v_idx])
+    local_penalty = relative_length * usage_factor * density_factor
+
+    freq_mean = np.mean(edge_n_used[u_idx, v_idx])
+    w_global = 0.6 / (1.0 + 0.1 * freq_mean)
+    w_local = 1.0 - w_global
+
+    combined_penalty = w_global * rank_penalty + w_local * local_penalty
+    threshold = np.percentile(tour_edge_lengths, 75)
+    high_penalty_mask = tour_edge_lengths >= threshold
+    combined_penalty[high_penalty_mask] *= 1.5
+
+    np.add.at(updated_edge_distance, (u_idx, v_idx), combined_penalty)
+    np.add.at(updated_edge_distance, (v_idx, u_idx), combined_penalty)
+
+    return updated_edge_distance
+# ===== Eval Output =====
+[*] Running ...
+[*] mode=val, data=/home/ducanh/projects/EAs_project/MoH/problems/tsp_gls/data/val/val_instance_data_sol_200.pkl, seed=0, n_instances=8
+[*] instance_indices=[6, 9, 0, 2, 4, 3, 5, 1]
+[*] instance 6: obj=10.4546, gap=0.0836
+[*] instance 9: obj=10.7463, gap=0.7813
+[*] instance 0: obj=10.8935, gap=0.0714
+[*] instance 2: obj=10.9687, gap=0.1911
+[*] instance 4: obj=10.8893, gap=0.3886
+[*] instance 3: obj=10.6160, gap=0.1329
+[*] instance 5: obj=10.9296, gap=0.4231
+[*] instance 1: obj=11.0467, gap=0.2039
+[*] ave_gap on size 200: 0.2844945142547989
+0.2844945142547989

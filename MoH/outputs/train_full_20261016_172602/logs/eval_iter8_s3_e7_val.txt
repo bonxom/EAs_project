@@ -1,0 +1,71 @@
+# ===== Heuristic Code =====
+#{Guided local search edge penalization with adaptive exponential penalty evaporation and utility-based structural perturbation to avoid permanent metric distortion and enable escape from stagnation basins.}
+
+import numpy as np
+
+def update_edge_distance(edge_distance, local_opt_tour, edge_n_used):
+    # Step 1: Copy edge distance to prevent in-place mutation of input
+    updated_edge_distance = np.copy(edge_distance)
+    n = len(local_opt_tour)
+    if n < 3:
+        return updated_edge_distance
+
+    # Step 2: Extract current tour edges and edge lengths
+    u_idx = np.asarray(local_opt_tour, dtype=np.intp)
+    v_idx = np.roll(u_idx, -1)
+    tour_lengths = edge_distance[u_idx, v_idx]
+    max_edge = np.max(tour_lengths)
+    mean_edge = np.mean(tour_lengths)
+
+    # Step 3: Compute edge utilities following classic Guided Local Search (GLS) formulation
+    # Utility = length / (1 + count); penalize edges with the maximum utility
+    usage = edge_n_used[u_idx, v_idx]
+    utilities = tour_lengths / (1.0 + usage)
+    max_util = np.max(utilities)
+
+    # Step 4: Detect stagnation via frequency distribution of the tour's edges
+    mean_usage = np.mean(usage)
+    # Adaptive evaporation rate: decay accumulated penalties across historical edges when usage is high
+    gamma = 0.98 if mean_usage > 2.0 else 0.995
+
+    # Step 5: Apply exponential penalty evaporation over all previously penalized edges
+    # Reconstruct base metric: distance increases relative to unpenalized estimates are decayed
+    penalized_mask = edge_n_used > 0
+    if np.any(penalized_mask):
+        # Evaporate excess penalty over base distances proportionally
+        excess = updated_edge_distance - np.minimum(updated_edge_distance, edge_distance)
+        updated_edge_distance[penalized_mask] -= (1.0 - gamma) * excess[penalized_mask]
+
+    # Step 6: Identify candidate edges with top utilities (GLS principle) to penalize in current local optimum
+    util_threshold = max_util * 0.90
+    penalize_mask = utilities >= util_threshold
+
+    # Step 7: Formulate targeted increment Delta_P scaled to problem dimension and edge scale
+    penalty_scale = 0.15 * mean_edge / (1.0 + 0.05 * np.log1p(mean_usage))
+    delta_p = penalty_scale * (tour_lengths / (mean_edge + 1e-8))
+
+    # Apply penalties selectively to high-utility edges
+    u_pen = u_idx[penalize_mask]
+    v_pen = v_idx[penalize_mask]
+    p_vals = delta_p[penalize_mask]
+
+    # Step 8: Symmetric matrix update ensuring preservation of metric symmetry
+    np.add.at(updated_edge_distance, (u_pen, v_pen), p_vals)
+    np.add.at(updated_edge_distance, (v_pen, u_pen), p_vals)
+    np.fill_diagonal(updated_edge_distance, 0.0)
+
+    return updated_edge_distance
+# ===== Eval Output =====
+[*] Running ...
+[*] mode=val, data=/home/ducanh/projects/EAs_project/MoH/problems/tsp_gls/data/val/val_instance_data_sol_200.pkl, seed=0, n_instances=8
+[*] instance_indices=[6, 9, 0, 2, 4, 3, 5, 1]
+[*] instance 6: obj=10.6574, gap=2.0250
+[*] instance 9: obj=10.9442, gap=2.6367
+[*] instance 0: obj=11.4240, gap=4.9448
+[*] instance 2: obj=11.2240, gap=2.5227
+[*] instance 4: obj=11.0670, gap=2.0272
+[*] instance 3: obj=10.8628, gap=2.4615
+[*] instance 5: obj=11.1980, gap=2.8896
+[*] instance 1: obj=11.3698, gap=3.1346
+[*] ave_gap on size 200: 2.830256521448782
+2.830256521448782

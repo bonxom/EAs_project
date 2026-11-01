@@ -1,0 +1,88 @@
+# ===== Heuristic Code =====
+#{Dynamically scale GLS edge penalties and shortcut incentives using the tour-specific average edge length and the exact geometric replacement cost gain (d_uv + d_vw - d_uw) to guide targeted escape from local optima.}#
+
+import numpy as np
+
+def update_edge_distance(edge_distance, local_opt_tour, edge_n_used):
+    updated_edge_distance = np.copy(edge_distance)
+    num_nodes = len(local_opt_tour)
+    tour = np.asarray(local_opt_tour)
+
+    u_idx = tour
+    v_idx = np.roll(tour, -1)
+    w_idx = np.roll(tour, -2)
+
+    # Dynamic frequency decay calibrated to instance size
+    decay_rate = np.clip(1.0 - (1.0 / (0.5 * num_nodes + 10.0)), 0.90, 0.98)
+    edge_n_used *= decay_rate
+
+    d_uv = edge_distance[u_idx, v_idx]
+    d_vw = edge_distance[v_idx, w_idx]
+    d_uw = edge_distance[u_idx, w_idx]
+
+    # Tour-specific local average edge length
+    tour_mean_dist = np.mean(d_uv)
+
+    # Detour ratio and geometric angle inefficiency
+    detour_ratio = (d_uv + d_vw) / (d_uw + 1e-8)
+    denom = 2.0 * d_uv * d_vw + 1e-8
+    cos_turn = np.clip((d_uv**2 + d_vw**2 - d_uw**2) / denom, -1.0, 1.0)
+    acute_deficit = 1.0 - cos_turn
+    geom_inefficiency = detour_ratio * (1.0 + 0.5 * acute_deficit)
+
+    base_dist = d_uv
+    base_freq = edge_n_used[u_idx, v_idx]
+    local_geom_factor = 0.5 * (geom_inefficiency + np.roll(geom_inefficiency, 1))
+
+    # Guided Local Search edge utilities
+    utilities = (base_dist / (1.0 + base_freq)) * (1.0 + 0.35 * local_geom_factor)
+
+    # Adaptive selection budget
+    k = max(1, int(np.ceil(0.12 * num_nodes)))
+    top_k_indices = np.argsort(utilities)[-k:]
+
+    # Adaptive penalty scaled by tour mean distance
+    adaptive_lambda = 0.35 * tour_mean_dist
+    for idx in top_k_indices:
+        u, v = u_idx[idx], v_idx[idx]
+        edge_n_used[u, v] += 1.0
+        edge_n_used[v, u] += 1.0
+        freq_penalty = 1.0 + np.log1p(edge_n_used[u, v])
+        geom_weight = 1.0 + 0.5 * local_geom_factor[idx]
+        penalty = adaptive_lambda * freq_penalty * geom_weight
+        updated_edge_distance[u, v] += penalty
+        updated_edge_distance[v, u] += penalty
+
+    # Shortcut rewards proportional to replacement slack: (d_uv + d_vw - d_uw)
+    slack = (d_uv + d_vw) - d_uw
+    positive_slack_mask = slack > 0.0
+    relative_gain = np.where(positive_slack_mask, slack / (d_uw + 1e-8), 0.0)
+
+    top_shortcuts = np.argsort(relative_gain)[-k:]
+    for idx in top_shortcuts:
+        if relative_gain[idx] <= 0.0:
+            continue
+        u, w = u_idx[idx], w_idx[idx]
+        freq = edge_n_used[u, w]
+        if freq < 1.0:
+            gain_factor = np.clip(relative_gain[idx], 0.1, 2.0)
+            discount = 0.15 * tour_mean_dist * gain_factor / (1.0 + freq)
+            new_val = max(1e-6, updated_edge_distance[u, w] - discount)
+            updated_edge_distance[u, w] = new_val
+            updated_edge_distance[w, u] = new_val
+
+    return updated_edge_distance
+# ===== Eval Output =====
+[*] Running ...
+[*] mode=val, data=/home/ducanh/projects/EAs_project/MoH/problems/tsp_gls/data/val/val_instance_data_sol_100.pkl, seed=0, n_instances=8
+[*] instance_indices=[6, 9, 0, 2, 4, 3, 5, 1]
+[*] instance 6: obj=7.8248, gap=0.8404
+[*] instance 9: obj=8.1048, gap=0.7642
+[*] instance 0: obj=8.1650, gap=2.0616
+[*] instance 2: obj=8.1442, gap=0.8713
+[*] instance 4: obj=7.8131, gap=0.0000
+[*] instance 3: obj=7.4817, gap=1.4968
+[*] instance 5: obj=7.6670, gap=0.3984
+[*] instance 1: obj=7.6730, gap=1.5340
+[*] ave_gap on size 100: 0.9958393317761521
+0.9958393317761521

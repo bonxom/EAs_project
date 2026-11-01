@@ -1,0 +1,80 @@
+# ===== Heuristic Code =====
+#{Dynamically scale utility penalization thresholds via the tour cost coefficient of variation and apply multiplicative, scale-invariant penalties driven by empirical quantile ranks rather than raw z-scores.}
+
+import numpy as np
+
+def update_edge_distance(edge_distance, local_opt_tour, edge_n_used):
+    # Create an explicit copy to preserve the original distance matrix
+    updated_edge_distance = np.copy(edge_distance)
+    n = len(local_opt_tour)
+    if n < 3:
+        return updated_edge_distance
+
+    # Vectorized cyclic edge extraction along the local optimal tour
+    u_idx = np.array(local_opt_tour, dtype=np.intp)
+    v_idx = np.roll(u_idx, -1)
+
+    costs = edge_distance[u_idx, v_idx].astype(np.float64)
+    used = edge_n_used[u_idx, v_idx].astype(np.float64)
+
+    mean_cost = np.mean(costs)
+    std_cost = np.std(costs)
+    # Scale-invariant dispersion metric (coefficient of variation)
+    cv_cost = std_cost / (mean_cost + 1e-12)
+
+    # Compute empirical quantile ranks for edge costs [0, 1]
+    sorted_order = np.argsort(costs)
+    ranks = np.empty_like(sorted_order, dtype=np.float64)
+    ranks[sorted_order] = np.linspace(0.0, 1.0, n)
+
+    # Guided local search utility: trade-off cost rank and visitation frequency
+    utilities = (ranks + 1e-4) / (1.0 + used)
+
+    # Dynamically scale threshold percentile using cost variance:
+    # High variance focuses aggressively on the worst outliers (higher percentile),
+    # low variance broadens the candidate pool (lower percentile)
+    threshold_percentile = np.clip(75.0 - 25.0 * np.tanh(cv_cost * 2.0), 50.0, 85.0)
+    cutoff = np.percentile(utilities, threshold_percentile)
+
+    penalize_mask = utilities >= cutoff
+    if not np.any(penalize_mask):
+        penalize_mask = utilities >= np.max(utilities)
+
+    p_u = u_idx[penalize_mask]
+    p_v = v_idx[penalize_mask]
+    p_ranks = ranks[penalize_mask]
+    p_used = used[penalize_mask]
+
+    # Multiplicative, scale-invariant penalty factor derived from relative quantile gap
+    # and tempered by past edge visitations
+    multipliers = 1.0 + (0.15 * (1.0 + p_ranks)) / np.sqrt(1.0 + p_used)
+
+    # Apply symmetric multiplicative penalties
+    updated_edge_distance[p_u, p_v] *= multipliers
+    updated_edge_distance[p_v, p_u] = updated_edge_distance[p_u, p_v]
+
+    # Reward unexplored alternative connections incident to penalized nodes
+    penalized_nodes = np.unique(np.concatenate((p_u, p_v)))
+    decay_ratio = 0.015
+    for u in penalized_nodes:
+        unused_mask = (edge_n_used[u] == 0)
+        unused_mask[u] = False
+        if np.any(unused_mask):
+            updated_edge_distance[u, unused_mask] *= (1.0 - decay_ratio)
+            updated_edge_distance[unused_mask, u] = updated_edge_distance[u, unused_mask]
+
+    return updated_edge_distance
+# ===== Eval Output =====
+[*] Running ...
+[*] mode=val, data=/home/ducanh/projects/EAs_project/MoH/problems/tsp_gls/data/val/val_instance_data_sol_50.pkl, seed=0, n_instances=8
+[*] instance_indices=[6, 9, 0, 2, 4, 3, 5, 1]
+[*] instance 6: obj=5.7136, gap=0.5983
+[*] instance 9: obj=6.0217, gap=0.9695
+[*] instance 0: obj=5.8546, gap=1.3193
+[*] instance 2: obj=5.8071, gap=0.0000
+[*] instance 4: obj=5.5821, gap=3.4387
+[*] instance 3: obj=5.8806, gap=2.1487
+[*] instance 5: obj=5.6187, gap=0.0000
+[*] instance 1: obj=5.3071, gap=2.7501
+[*] ave_gap on size 50: 1.4030780809943966
+1.4030780809943966

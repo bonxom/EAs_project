@@ -1,0 +1,17 @@
+{
+  "id": 412,
+  "timestamp": "2026-10-16T18:43:54.355881+00:00",
+  "model": "ag/gemini-3.8-flash-low",
+  "temperature": 0.6,
+  "messages": [
+    {
+      "role": "system",
+      "content": "You are an expert in metaheuristics and combinatorial optimization. Your goal is to design highly competitive, novel, and robust optimization algorithms."
+    },
+    {
+      "role": "user",
+      "content": "Analyze the elite algorithmic architecture for the task 'tsp_gls-200':\nIdea: Penalty strategy combining percentile-based long edge selection, k-NN node density scaling, and frequency usage decay to dynamically update the distance matrix for local optimum escape.\nCode:\n```python\nimport numpy as np\ndef update_edge_distance(edge_distance, local_opt_tour, edge_n_used):\n    updated_edge_distance = np.copy(edge_distance)\n    n = len(local_opt_tour)\n    sorted_dists = np.sort(edge_distance, axis=1)\n    k_nn_avg = np.mean(sorted_dists[:, 1:min(6, n)], axis=1)\n    node_density = 1.0 / (k_nn_avg + 1e-6)\n    node_density = node_density / np.mean(node_density)\n    u_idx = local_opt_tour\n    v_idx = np.roll(local_opt_tour, -1)\n    tour_edge_lengths = edge_distance[u_idx, v_idx]\n    avg_tour_length = np.mean(tour_edge_lengths)\n    relative_length = tour_edge_lengths / (avg_tour_length + 1e-6)\n    rank_penalty = 1.0 / (1.0 + np.exp(-4.0 * (relative_length - 1.0)))\n    usage_factor = 1.0 / (1.0 + 0.3 * edge_n_used[u_idx, v_idx])\n    density_factor = 0.5 * (node_density[u_idx] + node_density[v_idx])\n    local_penalty = relative_length * usage_factor * density_factor\n    freq_mean = np.mean(edge_n_used[u_idx, v_idx])\n    w_global = 0.6 / (1.0 + 0.1 * freq_mean)\n    w_local = 1.0 - w_global\n    combined_penalty = w_global * rank_penalty + w_local * local_penalty\n    threshold = np.percentile(tour_edge_lengths, 75)\n    high_penalty_mask = tour_edge_lengths >= threshold\n    combined_penalty[high_penalty_mask] *= 1.5\n    np.add.at(updated_edge_distance, (u_idx, v_idx), combined_penalty)\n    np.add.at(updated_edge_distance, (v_idx, u_idx), combined_penalty)\n    return updated_edge_distance\n```\nCurrent Utility: 0.06588164793586149 (lower is better)\n\nDiagnose algorithmic bottlenecks to prepare a collaborative Ruin-and-Recreate portfolio.\nReturn your analysis strictly in JSON format:\n```json\n{\n  \"invariable_core\": \"<invariant algorithmic core that guarantees correctness and performance>\",\n  \"critical_weakness\": \"<primary performance bottleneck or premature convergence risk>\",\n  \"promising_mechanisms\": [\"<mechanism 1>\", \"<mechanism 2>\"]\n}\n```"
+    }
+  ],
+  "response": "```json\n{\n  \"invariable_core\": \"Symmetric, additive edge cost perturbation on current tour edges scaled by edge length relative to tour average and inversely weighted by historical edge penalty frequency.\",\n  \"critical_weakness\": \"Static percentile thresholding (75th percentile) and cumulative additive penalties without decay cause distance distortion drift and over-penalize structurally necessary bridge edges between clusters.\",\n  \"promising_mechanisms\": [\n    \"Adaptive utility-based penalty selection using normalized cost-to-usage ratio (penalizing only top argmax utility edges rather than arbitrary percentiles)\",\n    \"Penalty evaporation or memory decay factor applied to edge_distance to prevent distance matrix saturation and enable search intensification\"\n  ]\n}\n```"
+}

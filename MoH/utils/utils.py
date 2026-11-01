@@ -47,7 +47,7 @@ def find_braces(response):
 
 
 def extract_code(algorithm_str):
-    """Extract fenced code, or a complete raw Python/JSON response."""
+    """Extract fenced code, or raw Python/JSON; recover unfenced text truncated mid-statement."""
     if isinstance(algorithm_str, str):
         code = find_largest_code_block_line_by_line(algorithm_str)
         if code is None:
@@ -76,8 +76,6 @@ def find_largest_code_block_line_by_line(text):
             current.append(line)
     if blocks:
         return max(blocks, key=len)
-    if fence is not None:
-        return None
     raw = textwrap.dedent(text).strip()
     try:
         data = json.loads(raw)
@@ -86,12 +84,22 @@ def find_largest_code_block_line_by_line(text):
     else:
         if isinstance(data, (dict, list)):
             return raw
-    try:
-        tree = ast.parse(raw)
-    except (SyntaxError, ValueError):
-        return None
-    if any(isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)) for node in tree.body):
-        return raw
+    idea = re.search(r"\{(.*?)\}", raw, re.DOTALL)
+    if idea and idea.start() == 0:
+        span = "\n".join(f"# {line}" for line in idea.group(0).splitlines())
+        raw = span + raw[idea.end() :]
+    lines = raw.splitlines()
+    for trim in range(0, 6):
+        candidate = raw if trim == 0 else "\n".join(lines[: len(lines) - trim]).strip()
+        if not candidate:
+            break
+        try:
+            tree = ast.parse(candidate)
+        except (SyntaxError, ValueError):
+            continue
+        if any(isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)) for node in tree.body):
+            return candidate
+        break
     return None
 
 

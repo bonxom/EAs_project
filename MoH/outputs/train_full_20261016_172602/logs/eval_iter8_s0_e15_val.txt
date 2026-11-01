@@ -1,0 +1,77 @@
+# ===== Heuristic Code =====
+#{Identify peak-utility tour edges and apply a dual-node neighborhood ruin by penalizing targeted edges alongside fractional shadow penalties on their incident tour adjacencies and local metric neighbors to break deep local minima basins.}
+
+import numpy as np
+
+def update_edge_distance(edge_distance, local_opt_tour, edge_n_used):
+    updated_edge_distance = np.copy(edge_distance)
+
+    # 1. Vectorized computation of tour edges and utility metrics
+    u_idx = local_opt_tour
+    v_idx = np.roll(local_opt_tour, -1)
+    prev_u_idx = np.roll(local_opt_tour, 1)
+    next_v_idx = np.roll(local_opt_tour, -2)
+
+    tour_lengths = edge_distance[u_idx, v_idx]
+    tour_counts = edge_n_used[u_idx, v_idx]
+    utilities = tour_lengths / (1.0 + tour_counts)
+
+    max_utility = np.max(utilities)
+    avg_edge = np.mean(tour_lengths)
+    base_penalty = 0.35 * avg_edge
+
+    # Select candidate edges with utility near the global tour maximum
+    selected_mask = utilities >= (0.95 * max_utility)
+    sel_u = u_idx[selected_mask]
+    sel_v = v_idx[selected_mask]
+
+    # 2. Primary penalty on the critical tour edges
+    np.add.at(updated_edge_distance, (sel_u, sel_v), base_penalty)
+    np.add.at(updated_edge_distance, (sel_v, sel_u), base_penalty)
+
+    # 3. Dual-node incident tour edge shadow penalty propagation
+    # Penalize incident predecessor of u and successor of v in tour topology
+    prev_u = prev_u_idx[selected_mask]
+    next_v = next_v_idx[selected_mask]
+    tour_shadow_penalty = 0.4 * base_penalty
+
+    np.add.at(updated_edge_distance, (prev_u, sel_u), tour_shadow_penalty)
+    np.add.at(updated_edge_distance, (sel_u, prev_u), tour_shadow_penalty)
+    np.add.at(updated_edge_distance, (sel_v, next_v), tour_shadow_penalty)
+    np.add.at(updated_edge_distance, (next_v, sel_v), tour_shadow_penalty)
+
+    # 4. Metric space ruin: disperse fractional penalties across k-nearest spatial neighbors
+    # Disperses clustered basins around both endpoint nodes deterministically
+    n_nodes = edge_distance.shape[0]
+    k_neighbors = min(4, n_nodes - 1)
+    if k_neighbors > 1:
+        # Determine k closest neighbors for each endpoint node
+        u_knn = np.argpartition(edge_distance[sel_u], kth=k_neighbors, axis=1)[:, 1:k_neighbors]
+        v_knn = np.argpartition(edge_distance[sel_v], kth=k_neighbors, axis=1)[:, 1:k_neighbors]
+
+        spatial_shadow_penalty = 0.15 * base_penalty
+        u_rep = np.repeat(sel_u, k_neighbors - 1)
+        v_rep = np.repeat(sel_v, k_neighbors - 1)
+        u_flat_knn = u_knn.ravel()
+        v_flat_knn = v_knn.ravel()
+
+        np.add.at(updated_edge_distance, (u_rep, u_flat_knn), spatial_shadow_penalty)
+        np.add.at(updated_edge_distance, (u_flat_knn, u_rep), spatial_shadow_penalty)
+        np.add.at(updated_edge_distance, (v_rep, v_flat_knn), spatial_shadow_penalty)
+        np.add.at(updated_edge_distance, (v_flat_knn, v_rep), spatial_shadow_penalty)
+
+    return updated_edge_distance
+# ===== Eval Output =====
+[*] Running ...
+[*] mode=val, data=/home/ducanh/projects/EAs_project/MoH/problems/tsp_gls/data/val/val_instance_data_sol_20.pkl, seed=0, n_instances=8
+[*] instance_indices=[6, 9, 0, 2, 4, 3, 5, 1]
+[*] instance 6: obj=3.7045, gap=0.0000
+[*] instance 9: obj=4.1442, gap=0.0000
+[*] instance 0: obj=3.6827, gap=0.0000
+[*] instance 2: obj=3.8184, gap=0.0000
+[*] instance 4: obj=3.8385, gap=0.0000
+[*] instance 3: obj=3.6971, gap=0.0000
+[*] instance 5: obj=3.4281, gap=0.0000
+[*] instance 1: obj=3.6958, gap=0.0000
+[*] ave_gap on size 20: 1.2218318606871392e-06
+1.2218318606871392e-06

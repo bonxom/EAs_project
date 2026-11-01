@@ -1,0 +1,76 @@
+# ===== Heuristic Code =====
+#{A deterministic edge penalty heuristic using normalized Shannon entropy of tour edge frequencies to dynamically adapt the balance between structural exploratory penalties and targeted attractor-disrupting exploitation.}
+
+import numpy as np
+
+def update_edge_distance(edge_distance, local_opt_tour, edge_n_used):
+    updated_edge_distance = np.copy(edge_distance)
+    n = len(local_opt_tour)
+
+    # Calculate local spatial density of nodes using k-nearest neighbors
+    sorted_dists = np.sort(edge_distance, axis=1)
+    k_nn_avg = np.mean(sorted_dists[:, 1:min(6, n)], axis=1)
+    node_density = 1.0 / (k_nn_avg + 1e-6)
+    node_density = node_density / np.mean(node_density)
+
+    # Tour edge indices and geometric lengths
+    u_idx = local_opt_tour
+    v_idx = np.roll(local_opt_tour, -1)
+    tour_edge_lengths = edge_distance[u_idx, v_idx]
+    avg_tour_length = np.mean(tour_edge_lengths)
+    relative_length = tour_edge_lengths / (avg_tour_length + 1e-6)
+
+    # Base structural and usage terms
+    rank_penalty = 1.0 / (1.0 + np.exp(-4.0 * (relative_length - 1.0)))
+    usage_counts = edge_n_used[u_idx, v_idx]
+    usage_damping = 1.0 / (1.0 + 0.3 * usage_counts)
+    density_factor = 0.5 * (node_density[u_idx] + node_density[v_idx])
+
+    # Shannon entropy computation across tour edge visit distribution
+    total_usage = np.sum(usage_counts)
+    if total_usage > 0:
+        p = (usage_counts + 1e-12) / np.sum(usage_counts + 1e-12)
+        entropy = -np.sum(p * np.log(p))
+        max_entropy = np.log(float(n))
+        norm_entropy = entropy / (max_entropy + 1e-6)
+    else:
+        norm_entropy = 1.0
+
+    norm_entropy = np.clip(norm_entropy, 0.0, 1.0)
+
+    # Under high entropy (uniform exploration), emphasize rank/density exploration
+    # Under low entropy (skewed/chronic attractors), shift leverage to penalizing frequent edges
+    w_global = norm_entropy
+    w_local = 1.0 - norm_entropy
+
+    # Attractor weight targeting chronically repeated edges
+    attractor_factor = (usage_counts + 1.0) / (np.mean(usage_counts) + 1.0)
+    local_penalty = relative_length * density_factor * (0.5 * usage_damping + 0.5 * attractor_factor)
+
+    combined_penalty = w_global * rank_penalty + w_local * local_penalty
+
+    # Boost penalties on the longest quartile edges
+    threshold = np.percentile(tour_edge_lengths, 75)
+    combined_penalty[tour_edge_lengths >= threshold] *= 1.5
+
+    # Scale by mean tour edge length to keep distance modifications proportional
+    scaled_penalty = combined_penalty * (0.05 * avg_tour_length)
+
+    np.add.at(updated_edge_distance, (u_idx, v_idx), scaled_penalty)
+    np.add.at(updated_edge_distance, (v_idx, u_idx), scaled_penalty)
+
+    return updated_edge_distance
+# ===== Eval Output =====
+[*] Running ...
+[*] mode=val, data=/home/ducanh/projects/EAs_project/MoH/problems/tsp_gls/data/val/val_instance_data_sol_200.pkl, seed=0, n_instances=8
+[*] instance_indices=[6, 9, 0, 2, 4, 3, 5, 1]
+[*] instance 6: obj=10.6787, gap=2.2288
+[*] instance 9: obj=11.0360, gap=3.4977
+[*] instance 0: obj=11.3876, gap=4.6105
+[*] instance 2: obj=11.2272, gap=2.5526
+[*] instance 4: obj=11.3293, gap=4.4446
+[*] instance 3: obj=10.8764, gap=2.5895
+[*] instance 5: obj=11.3787, gap=4.5497
+[*] instance 1: obj=11.3711, gap=3.1463
+[*] ave_gap on size 200: 3.4524820839437336
+3.4524820839437336
