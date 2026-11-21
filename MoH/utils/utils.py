@@ -62,11 +62,14 @@ def find_largest_code_block_line_by_line(text):
     blocks = []
     fence = None
     current = []
-    for line in text.splitlines():
+    lines = text.splitlines()
+    for idx, line in enumerate(lines):
         marker = re.fullmatch(r"\s*(`{3,}|~{3,})([^`~]*)", line)
         if fence is None and marker:
-            fence = marker.group(1)
-            current = []
+            is_lone_trailing_fence = idx == len(lines) - 1 or all(not rem_line.strip() for rem_line in lines[idx + 1:])
+            if not is_lone_trailing_fence:
+                fence = marker.group(1)
+                current = []
         elif fence is not None and line.strip() == fence:
             block = textwrap.dedent("\n".join(current)).strip()
             if block:
@@ -79,6 +82,7 @@ def find_largest_code_block_line_by_line(text):
     if fence is not None:
         return None
     raw = textwrap.dedent(text).strip()
+    raw = re.sub(r"\n\s*(`{3,}|~{3,})\s*$", "", raw).strip()
     try:
         data = json.loads(raw)
     except (json.JSONDecodeError, ValueError):

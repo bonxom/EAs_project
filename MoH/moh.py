@@ -3,15 +3,20 @@ import logging
 import math
 import os
 import subprocess
+import sys
 import traceback
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 from omegaconf import DictConfig
 from tqdm import tqdm
 from utils.checkpoint import export_checkpoint, redacted_config
+from utils.diagnostics import TrajectoryCollector, generate_reflection_summary
+from utils.diagnostic_prompts import format_reflective_meta_prompt
 from utils.generated_improver import GeneratedImprover
 from utils.llm_client.base import BaseClient
+from utils.meta_population import MetaPopulation
 from utils.population import Pop
 from utils.run_logger import RunLogger
 from utils.utils import (
@@ -31,12 +36,15 @@ class MoH:
     """
     Meta-optimizer of Heuristics.
     """
+    rmoh_enabled: bool = False
+    rmoh_pop: MetaPopulation | None = None
+    _last_trajectory_diagnostics: Any = None
 
     def __init__(
         self,
-        cfg: DictConfig,           # Hydra config 
-        root_dir: str,             
-        heu_llm: BaseClient,       # base LLM client 
+        cfg: DictConfig,           # Hydra config
+        root_dir: str,
+        heu_llm: BaseClient,       # base LLM client
         meta_llm: BaseClient | None = None,  # separate LLM for meta-level
     ) -> None:
         self.cfg = cfg
@@ -66,11 +74,24 @@ class MoH:
         # Centralized I/O manager
         self.run_logger = RunLogger()
 
+        # R-MoH configuration
+        rmoh_cfg = getattr(cfg, "rmoh", None)
+        self.rmoh_enabled = bool(
+            getattr(rmoh_cfg, "enabled", False) if rmoh_cfg is not None else False
+        )
+        if self.rmoh_enabled:
+            alpha = float(getattr(rmoh_cfg, "alpha", 0.6))
+            c = float(getattr(rmoh_cfg, "c", 0.15))
+            self.rmoh_pop = MetaPopulation(size=cfg.pop_size, alpha=alpha, c=c)
+        else:
+            self.rmoh_pop = None
+        self._last_trajectory_diagnostics = None
+
         self.init_prompts()
         self.init_meta_improver()
 
     # =========================================================================
-    # Initialization 
+    # Initialization
     # =========================================================================
 
     def init_prompts(self):
@@ -116,7 +137,7 @@ class MoH:
             f.write("\n# ===== Eval Output =====\n")
             f.flush()
             process = subprocess.Popen(
-                ['python', '-u', eval_path, str(problem_size), self.root_dir, mode,
+                [sys.executable, '-u', eval_path, str(problem_size), self.root_dir, mode,
                  str(self.cfg.timeout), str(getattr(self.cfg, "seed", 0))],
                 stdout=f, stderr=f
             )
@@ -155,7 +176,7 @@ class MoH:
             return 1e6
 
         try:
-            process.communicate(timeout=self.cfg.timeout * 10)  
+            process.communicate(timeout=self.cfg.timeout * 10)
         except subprocess.TimeoutExpired:
             logger.warning(f"Evaluation timed out for {problem_type} mode={mode}")
             process.kill()
@@ -176,7 +197,7 @@ class MoH:
             return 1e6
 
     # =========================================================================
-    # Seed generation  
+    # Seed generation
     # =========================================================================
 
     def generate_directions(self, problem, size, cur_direction=None, seed=False, solution=None):
@@ -289,19 +310,25 @@ class MoH:
         return base_algorithm
 
     # =========================================================================
-    # Meta-level evaluation 
+    # Meta-level evaluation
     # =========================================================================
 
-    def _make_subtask_utility(self, subtask):
+    def _make_subtask_utility(self, subtask, collector: TrajectoryCollector | None = None):
         def utility(algorithm_str, idea=None, problem_type=None):
             problem_type = problem_type or subtask
-            return self.evaluate_heuristic(algorithm_str, problem_type, mode="val")
+            score = self.evaluate_heuristic(algorithm_str, problem_type, mode="val")
+            if collector is not None:
+                is_valid = score < 1e5
+                error = None if is_valid else ("Timeout or invalid execution" if score >= 1e6 else None)
+                collector.record_evaluation(algorithm_str, score, is_valid, error=error, idea=idea or "")
+            return score
         return utility
 
     def get_improver(self, improve_str, subtask_str, subtask):
+        collector = TrajectoryCollector() if getattr(self, "rmoh_enabled", False) else None
         try:
             subtask_pop_copy = copy.deepcopy(self.subtask_pop)
-            utility = self._make_subtask_utility(subtask)
+            utility = self._make_subtask_utility(subtask, collector=collector)
             improver = GeneratedImprover(improve_str, self._optimizer_timeout(), getattr(self.cfg, "seed", 0))
             evaluations_before = self._total_eval_calls
             new_idea, improved_algorithm_str, utility_val = improver(
@@ -311,6 +338,27 @@ class MoH:
             logger.info("Optimizer on %s: %d new heuristic evaluations", subtask, evaluation_count)
             if evaluation_count == 0:
                 logger.warning("Optimizer on %s returned without evaluating a new heuristic", subtask)
+
+            if collector is not None:
+                diag = collector.finalize()
+                rmoh_cfg = getattr(self.cfg, "rmoh", None)
+                if rmoh_cfg is None or getattr(rmoh_cfg, "reflection", True):
+                    best_h = [(r["idea"], r["code"], r["score"]) for r in collector.records if r["is_valid"]]
+                    best_h.sort(key=lambda x: x[2])
+                    worst_h = [
+                        (r["idea"], r["code"], r["score"])
+                        for r in collector.records
+                        if not r["is_valid"] or r["score"] >= 1e5
+                    ]
+                    diag.reflection_summary = generate_reflection_summary(
+                        self.meta_llm,
+                        improve_str,
+                        best_h,
+                        worst_h,
+                        max_words=int(getattr(rmoh_cfg, "summary_max_words", 60) if rmoh_cfg else 60),
+                    )
+                self._last_trajectory_diagnostics = diag
+
             return new_idea, improved_algorithm_str, utility_val
         except Exception as e:
             logger.warning(f"get_improver failed: {e}")
@@ -409,7 +457,7 @@ class MoH:
         return getattr(self.cfg, "optimizer_timeout", 3600)
 
     # =========================================================================
-    # Core optimization loop 
+    # Core optimization loop
     # =========================================================================
 
     def get_seed(self):
@@ -417,6 +465,15 @@ class MoH:
         idea = "seed optimizer"
         self.meta_utility_val = self.meta_utility(self.improver_str, idea)
         self.improver_pop.save_solution("meta-optimizer", idea, self.improver_str, self.meta_utility_val)
+        if getattr(self, "rmoh_enabled", False) and getattr(self, "rmoh_pop", None) is not None:
+            self.rmoh_pop.add_individual(
+                opt_id="opt_seed",
+                code=self.improver_str,
+                thought=idea,
+                raw_utility=self.meta_utility_val,
+                diagnostics=getattr(self, "_last_trajectory_diagnostics", None),
+                total_outer_steps=1,
+            )
         self.run_logger.save_improver_pop(self.improver_pop, "pre")
         self.run_logger.save_subtask_pop(self.subtask_pop, "pre")
 
@@ -424,19 +481,40 @@ class MoH:
         """← from version_iclr/meta_optimizer.py: try_improvement()"""
         improvement_successful = False
         new_algorithm_str = None
+        parent_id = None
         try:
             improver_pop_copy = copy.deepcopy(self.improver_pop)
+            rmoh_pop = getattr(self, "rmoh_pop", None)
+            if getattr(self, "rmoh_enabled", False) and rmoh_pop is not None and len(rmoh_pop) > 0:
+                parent = rmoh_pop.select_parent(total_outer_steps=max(self._cur_iter, 1))
+                parent_id = parent.opt_id
+                meta_prompt = format_reflective_meta_prompt(self.meta_prompts, parent)
+            else:
+                meta_prompt = self.meta_prompts
+
             new_idea, new_algorithm_str, new_utility = improve_algorithm_func(
                 improver_pop_copy,
                 self.meta_utility,
-                self.meta_llm,     
-                self.meta_prompts,
+                self.meta_llm,
+                meta_prompt,
                 "meta-optimizer",
             )
             if new_utility is None or not math.isfinite(new_utility) or new_utility < 0:
                 raise ValueError("Utility must be finite and nonnegative")
             if not new_algorithm_str:
                 raise ValueError("Candidate code is empty")
+
+            if getattr(self, "rmoh_enabled", False) and rmoh_pop is not None and parent_id is not None:
+                opt_id = f"opt_iter_{self._cur_iter}"
+                rmoh_pop.add_individual(
+                    opt_id=opt_id,
+                    code=new_algorithm_str,
+                    thought=new_idea,
+                    raw_utility=new_utility,
+                    diagnostics=getattr(self, "_last_trajectory_diagnostics", None),
+                    total_outer_steps=max(self._cur_iter, 1),
+                )
+                rmoh_pop.register_offspring(parent_id, new_utility)
             if clean_code(new_algorithm_str) == clean_code(self.improver_str):
                 logger.info("Optimizer unchanged; keeping previous optimizer")
                 return False, new_algorithm_str, previous_algo

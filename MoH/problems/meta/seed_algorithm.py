@@ -3,10 +3,10 @@ import json
 
 def improve_algorithm(population, utility, language_model, function_format, task):
     expertise = "You are an expert in the domain of designing meta optimization strategy and combinatorial optimization problems. Your task is to design heuristics that can effectively solve optimization problems."
-    
+
     # Step 1: Select a random solution from the population
     selected_solution = population.get_random_solution(task)
-    
+
     # Step 2: Generate directions for improvement
     direction_prompt = (
         f"Given the following heuristic for subtask: {selected_solution['best_sol']} with its idea: {selected_solution['idea']} and utility score: {selected_solution['utility']}, "

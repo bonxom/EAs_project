@@ -11,7 +11,7 @@ def improve_algorithm(population, utility, language_model, function_format, task
     # Parameter Initialization
     elite_count = 4
     diversity_count = 3
-    tabu_length = 5
+    _tabu_length = 5
     pheromone_levels = {}
 
     # Step 1: Select elite and diverse solutions
@@ -57,7 +57,7 @@ def improve_algorithm(population, utility, language_model, function_format, task
             "In addition, provide a summary of changes made."
         )
         message_batch.append(message)
-    
+
     # Step 5: Generate new solutions using the language model through batch prompts
     responses = language_model.prompt_batch(expertise, message_batch, temperature=0.9)
 

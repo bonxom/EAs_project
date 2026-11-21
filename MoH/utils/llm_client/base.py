@@ -9,9 +9,9 @@ from threading import Lock
 from uuid import uuid4
 
 logger = logging.getLogger(__name__)
-#   lm = hydra.utils.instantiate(cfg.llm_client)                                                                                      
-#   lm.prompt(expertise, message, temperature=0.7)                                                                             
-#   lm.prompt_batch(expertise, [msg1, msg2, msg3]) 
+#   lm = hydra.utils.instantiate(cfg.llm_client)
+#   lm.prompt(expertise, message, temperature=0.7)
+#   lm.prompt_batch(expertise, [msg1, msg2, msg3])
 
 class BaseClient:
     def __init__(self, model: str, temperature: float = 1.0, batch_size: int = 5,

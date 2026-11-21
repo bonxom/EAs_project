@@ -22,3 +22,12 @@ pop_size: 10                  # ← config["population_size"]
 timeout: 90                   # ← per-heuristic evaluation timeout (seconds)
 optimizer_timeout: 3600       # wall time limit for a generated optimizer (seconds)
 max_eval_calls: 1000           # per-subtask eval budget, total = this × N_subtasks. -1 for unlimited
+
+# R-MoH (Reflective & Uncertainty-Guided Meta-Optimization of Heuristics)
+rmoh:
+  enabled: false                 # Set true to enable R-MoH enhancements, false for original baseline MoH
+  alpha: 0.6                     # Exploitation weight between self utility and offspring quality in Meta-UIQ
+  c: 0.15                        # Exploration coefficient for UCB in Meta-UIQ
+  reflection: true               # Enable trajectory diagnostics and lightweight reflection
+  summary_max_words: 60          # Reflection summary word limit
+

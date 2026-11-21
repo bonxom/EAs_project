@@ -15,7 +15,7 @@ from utils.generated_improver import GeneratedImprover
 from utils.heuristic_evaluator import HeuristicEvaluator
 
 ROOT_DIR = Path(__file__).resolve().parent
-SUPPORTED_TARGET_SIZES = {500, 1000}
+SUPPORTED_TARGET_SIZES = {10, 20, 50, 100, 200, 500, 1000}
 logger = logging.getLogger(__name__)
 
 
@@ -85,10 +85,10 @@ def preflight_deployment(cfg, evaluator=None, checkpoint=None):
     return loaded_checkpoint, evaluator, targets
 
 
-def _execute_deployment(cfg, llm, checkpoint, evaluator, targets):
+def _execute_deployment(cfg, llm, checkpoint, evaluator, targets, output_dir=None):
     random.seed(cfg.seed)
     np.random.seed(cfg.seed)
-    output_dir = Path.cwd()
+    output_dir = Path(output_dir or Path.cwd())
     heuristic_format = (ROOT_DIR / "prompts" / "tsp_gls" / "desc.txt").read_text(
         encoding="utf-8"
     )
@@ -130,11 +130,11 @@ def _execute_deployment(cfg, llm, checkpoint, evaluator, targets):
     return rows
 
 
-def run_deployment(cfg, llm, evaluator=None, checkpoint=None) -> list[dict]:
+def run_deployment(cfg, llm, evaluator=None, checkpoint=None, output_dir=None) -> list[dict]:
     checkpoint, evaluator, targets = preflight_deployment(
         cfg, evaluator=evaluator, checkpoint=checkpoint
     )
-    return _execute_deployment(cfg, llm, checkpoint, evaluator, targets)
+    return _execute_deployment(cfg, llm, checkpoint, evaluator, targets, output_dir=output_dir)
 
 
 @hydra.main(version_base=None, config_path="cfg", config_name="deployment")

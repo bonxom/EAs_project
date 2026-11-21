@@ -3,3 +3,9 @@ members = ["MoH"]
 
 [dependency-groups]
 dev = ["pytest", "ruff"]
+
+[tool.ruff]
+target-version = "py312"
+lint.select = ["E", "F", "W"]
+lint.ignore = ["E501"]
+

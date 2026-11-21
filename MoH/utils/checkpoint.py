@@ -226,7 +226,7 @@ def export_checkpoint(
     )
     try:
         optimizer_path = temporary / "meta_optimizer.py"
-        optimizer_path.write_text(code, encoding="utf-8")
+        optimizer_path.write_bytes(code.encode("utf-8"))
         optimizer_digest = _sha256_file(optimizer_path)
         elites_dir = temporary / "elites"
         elites_dir.mkdir()

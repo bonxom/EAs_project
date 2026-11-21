@@ -15,7 +15,7 @@ def improve_algorithm(population,utility, language_model,function_format,subtask
         if solution not in utility_cache:
             utility_cache[solution] = utility(solution,idea,subtask)
         return utility_cache[solution]
-    
+
     for temp in temperature_values:
         message_batch=[]
         selected_solution=population.get_random_solution(subtask)
@@ -48,10 +48,10 @@ def improve_algorithm(population,utility, language_model,function_format,subtask
         # Evaluate and sort the generated solutions by their utility score
         scored_solutions = [(idea, sol, evaluate_solution(sol,idea)) for sol, idea in zip(generated_solutions, generated_ideas) if sol not in solutions_cache]
         scored_solutions.sort(key=lambda x: x[2], reverse=True)
-        
+
         # Keep only the top n_messages solutions
         top_solutions = scored_solutions[:n_messages]
-        
+
         for idea, sol, _ in top_solutions:
             new_ideas.append(idea)
             new_solutions.append(sol)

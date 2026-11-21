@@ -1,0 +1,147 @@
+[
+  {
+    "step": 0,
+    "candidates": [
+      {
+        "opt_id": "opt_seed",
+        "raw_gap": 15.2,
+        "norm_utility": 1.0,
+        "selection_count": 0,
+        "n_offspring": 0,
+        "meta_uiq": 1.1089,
+        "valid_rate": "80%",
+        "slope": 0.005
+      }
+    ]
+  },
+  {
+    "step": 1,
+    "candidates": [
+      {
+        "opt_id": "opt_seed",
+        "raw_gap": 15.2,
+        "norm_utility": 1.0,
+        "selection_count": 1,
+        "n_offspring": 1,
+        "meta_uiq": 0.7112,
+        "valid_rate": "80%",
+        "slope": 0.005
+      },
+      {
+        "opt_id": "opt_gen1",
+        "raw_gap": 16.5,
+        "norm_utility": 0.0,
+        "selection_count": 0,
+        "n_offspring": 0,
+        "meta_uiq": 0.2012,
+        "valid_rate": "55%",
+        "slope": 0.0
+      }
+    ]
+  },
+  {
+    "step": 2,
+    "candidates": [
+      {
+        "opt_id": "opt_seed",
+        "raw_gap": 15.2,
+        "norm_utility": 0.228,
+        "selection_count": 2,
+        "n_offspring": 2,
+        "meta_uiq": 0.4388,
+        "valid_rate": "80%",
+        "slope": 0.005
+      },
+      {
+        "opt_id": "opt_gen1",
+        "raw_gap": 16.5,
+        "norm_utility": 0.0,
+        "selection_count": 0,
+        "n_offspring": 0,
+        "meta_uiq": 0.2206,
+        "valid_rate": "55%",
+        "slope": 0.0
+      },
+      {
+        "opt_id": "opt_gen2",
+        "raw_gap": 10.8,
+        "norm_utility": 1.0,
+        "selection_count": 0,
+        "n_offspring": 0,
+        "meta_uiq": 1.1726,
+        "valid_rate": "95%",
+        "slope": 0.22
+      }
+    ]
+  },
+  {
+    "step": 3,
+    "candidates": [
+      {
+        "opt_id": "opt_seed",
+        "raw_gap": 15.2,
+        "norm_utility": 0.0,
+        "selection_count": 2,
+        "n_offspring": 2,
+        "meta_uiq": 0.3099,
+        "valid_rate": "80%",
+        "slope": 0.005
+      },
+      {
+        "opt_id": "opt_gen2",
+        "raw_gap": 10.8,
+        "norm_utility": 1.0,
+        "selection_count": 0,
+        "n_offspring": 0,
+        "meta_uiq": 1.1863,
+        "valid_rate": "95%",
+        "slope": 0.22
+      },
+      {
+        "opt_id": "opt_gen3",
+        "raw_gap": 11.2,
+        "norm_utility": 0.909,
+        "selection_count": 0,
+        "n_offspring": 0,
+        "meta_uiq": 1.0987,
+        "valid_rate": "90%",
+        "slope": 0.0001
+      }
+    ]
+  },
+  {
+    "step": 4,
+    "candidates": [
+      {
+        "opt_id": "opt_gen2",
+        "raw_gap": 10.8,
+        "norm_utility": 0.143,
+        "selection_count": 1,
+        "n_offspring": 1,
+        "meta_uiq": 0.6277,
+        "valid_rate": "95%",
+        "slope": 0.22
+      },
+      {
+        "opt_id": "opt_gen3",
+        "raw_gap": 11.2,
+        "norm_utility": 0.0,
+        "selection_count": 0,
+        "n_offspring": 0,
+        "meta_uiq": 0.2728,
+        "valid_rate": "90%",
+        "slope": 0.0001
+      },
+      {
+        "opt_id": "opt_gen4",
+        "raw_gap": 8.4,
+        "norm_utility": 1.0,
+        "selection_count": 0,
+        "n_offspring": 0,
+        "meta_uiq": 1.2008,
+        "valid_rate": "100%",
+        "slope": 0.35
+      }
+    ]
+  }
+]

@@ -1,5 +1,6 @@
 import hashlib
 import json
+import os
 import pickle
 import subprocess
 from pathlib import Path
@@ -182,14 +183,17 @@ def test_process_timeout_reaps_workers(tmp_path):
     ]
     with (
         patch("utils.heuristic_evaluator.subprocess.Popen", return_value=process),
-        patch("utils.heuristic_evaluator.os.killpg") as killpg,
+        patch("utils.heuristic_evaluator.os.killpg", create=True) as killpg,
     ):
         result = HeuristicEvaluator(
             root, tmp_path / "out", evaluation_timeout=0.1
         ).evaluate(HEURISTIC, 500, "val")
     assert result.status == "failed"
     assert "timed out" in result.error
-    killpg.assert_called()
+    if os.name == "posix":
+        killpg.assert_called()
+    else:
+        process.terminate.assert_called()
     assert process.communicate.call_count == 2
 
 

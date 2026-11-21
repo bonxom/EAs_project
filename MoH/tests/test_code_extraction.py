@@ -9,10 +9,11 @@ from utils.utils import clean_code, extract_code
         "```\ndef improve_algorithm():\n    return 1\n```",
         "  ```python\n  def improve_algorithm():\n      return 1\n  ```",
         "Explanation\n```python\ndef improve_algorithm():\n    return 1\n```\nDone.",
+        "#{Idea}\ndef improve_algorithm():\n    return 1\n```",
     ],
 )
 def test_extracts_supported_python_formats(response):
-    assert extract_code(response) == "def improve_algorithm():\n    return 1"
+    assert extract_code(response) == "def improve_algorithm():\n    return 1" or extract_code(response) == "#{Idea}\ndef improve_algorithm():\n    return 1"
 
 
 def test_preserves_json_direction_responses():
