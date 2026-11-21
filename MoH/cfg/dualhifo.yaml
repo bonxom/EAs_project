@@ -5,7 +5,9 @@ defaults:
   - _self_
 
 dual_hifo:
-  mode: dual_hifo_independent  # full_moh | inner_hifo | outer_hifo | dual_hifo_independent | dual_hifo_cross_level
+  # full_moh | inner_hifo | outer_hifo | dual_hifo_independent | dual_hifo_cross_level
+  # | dual_hifo_global_rule | dual_hifo_global_bandit
+  mode: dual_hifo_independent
   stagnation_patience: 3
   progress_patience: 2
   duplicate_threshold: 0.5
@@ -16,6 +18,18 @@ dual_hifo:
   usage_weight: 0.1
   recency_weight: 0.2
   credit_ema: 0.3
+  # Cross-level global controller (used only by dual_hifo_global_* modes).
+  global_controller:
+    inner_retry_limit: 2      # failed inner passes before escalating to outer search
+    patience: 3               # normalisation scale for stagnation features
+    progress_patience: 2      # outer progress streak that switches escalation to OUTER_EXPLOIT
+    window: 3                 # decisions used for recent-improvement features
+    ucb_alpha: 0.5            # LinUCB exploration width
+    ridge_lambda: 1.0         # LinUCB ridge prior
+    cost_scale: 100.0         # LLM calls mapped to cost feature 0.5
+    efficiency_scale: 0.001   # relative gain per LLM call mapped to reward 1
+    ema: 0.3                  # per-action cost/efficacy smoothing
+    warm_start_path: null     # global_controller_state.json from a previous run
 
 # Dual-HiFo runs must not clobber shared base solutions across experiments.
 isolate_base_solutions: true

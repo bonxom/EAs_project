@@ -19,18 +19,33 @@ import math
 from collections import deque
 from dataclasses import dataclass, field
 from pathlib import Path
+from threading import Lock
 from typing import Any
+
+from utils.global_controller import (
+    GlobalController,
+    GlobalControllerConfig,
+    NavigatorSignals,
+)
 
 logger = logging.getLogger(__name__)
 
 
+# mode -> (inner navigator, outer navigator, cross-level prompt evidence, global controller)
 MODES = {
-    "full_moh": (False, False, False),
-    "inner_hifo": (True, False, False),
-    "outer_hifo": (False, True, False),
-    "dual_hifo_independent": (True, True, False),
-    "dual_hifo_cross_level": (True, True, True),
+    "full_moh": (False, False, False, None),
+    "inner_hifo": (True, False, False, None),
+    "outer_hifo": (False, True, False, None),
+    "dual_hifo_independent": (True, True, False, None),
+    "dual_hifo_cross_level": (True, True, True, None),
+    "dual_hifo_global_rule": (True, True, False, "rule"),
+    "dual_hifo_global_bandit": (True, True, False, "bandit"),
 }
+REGIMES = ("EXPLORE", "EXPLOIT", "BALANCE")
+
+
+def _finite_or_none(value: Any) -> float | None:
+    return float(value) if type(value) in (int, float) and math.isfinite(value) else None
 
 
 @dataclass(frozen=True)
@@ -73,6 +88,10 @@ class HiFoConfig:
     @property
     def cross_level_enabled(self) -> bool:
         return MODES[self.mode][2]
+
+    @property
+    def global_controller(self) -> str | None:
+        return MODES[self.mode][3]
 
 
 def structure_hash(source: str) -> str:
@@ -154,11 +173,24 @@ class HiFoController:
     recent_hashes: deque[str] = field(default_factory=deque)
     selected_insight_ids: list[str] = field(default_factory=list)
     logical_prompt_requests: int = 0
+    regime_override: str | None = None
+    override_reason: str = ""
 
     def __post_init__(self):
         if self.level not in ("inner", "outer"):
             raise ValueError("level must be inner or outer")
         self.recent_hashes = deque(maxlen=self.config.diversity_window)
+
+    def set_override(self, regime: str, reason: str) -> None:
+        """Let a global controller force the prompt regime; local state tracking is unchanged."""
+        if regime not in REGIMES:
+            raise ValueError(f"regime must be one of {REGIMES}")
+        self.regime_override = regime
+        self.override_reason = str(reason)
+
+    def clear_override(self) -> None:
+        self.regime_override = None
+        self.override_reason = ""
 
     @property
     def exact_duplicate_rate(self) -> float:
@@ -240,10 +272,15 @@ class HiFoController:
             "EXPLOIT": "Refine and simplify proven mechanisms, tuning only relevant components while preserving correctness.",
             "BALANCE": "Balance novel mechanisms with reuse of validated, effective ideas.",
         }
+        regime = self.regime_override or self.regime
+        if self.regime_override:
+            reasons = f"GLOBAL_CONTROLLER:{self.override_reason}"
+        else:
+            reasons = ",".join(self.reasons) or "INITIAL"
         sections = [
             "[DUAL-HIFO RESEARCH GUIDANCE; existing task/output constraints still apply]",
-            f"Level: {self.level.upper()}; Regime: {self.regime}; Reasons: {','.join(self.reasons) or 'INITIAL'}.",
-            instructions[self.regime],
+            f"Level: {self.level.upper()}; Regime: {regime}; Reasons: {reasons}.",
+            instructions[regime],
             "Smaller validation utility is better; never use unverified or test-set scores for selection.",
         ]
         chosen = self._retrieve()
@@ -264,6 +301,7 @@ class HiFoController:
             "progress_count": self.progress_count,
             "stagnation_count": self.stagnation_count,
             "regime": self.regime,
+            "regime_override": self.regime_override,
             "reason_codes": list(self.reasons),
             "exact_duplicate_rate": self.exact_duplicate_rate,
             "semantic_diversity": None,  # do NOT conflate AST duplicates with semantic diversity
@@ -303,16 +341,122 @@ class GuidedLLM:
         return self.base.prompt_batch(expertise, new_messages, temperature=temperature)
 
 
+class LLMCallMeter:
+    """Transparent logical-prompt counter (prompt = 1, prompt_batch = len(batch)).
+
+    Forwards every other attribute (``budget``, ``batch_size``, ...) to the wrapped
+    client, so provider-budget checks and generated-optimizer services are unchanged.
+    """
+
+    def __init__(self, base: Any):
+        self.base = base
+        self.calls = 0
+        self._lock = Lock()
+
+    def __getattr__(self, name: str):
+        if name in ("base", "calls", "_lock"):
+            raise AttributeError(name)
+        return getattr(self.base, name)
+
+    def _count(self, n: int) -> None:
+        with self._lock:
+            self.calls += n
+
+    def prompt(self, expertise: str, message: str, temperature=None):
+        self._count(1)
+        if temperature is None:
+            return self.base.prompt(expertise, message)
+        return self.base.prompt(expertise, message, temperature=temperature)
+
+    def prompt_batch(self, expertise: str, message_batch: list[str], temperature=None):
+        self._count(len(message_batch))
+        if temperature is None:
+            return self.base.prompt_batch(expertise, message_batch)
+        return self.base.prompt_batch(expertise, message_batch, temperature=temperature)
+
+
 class DualHiFoMoHMixin:
     """Mix into the original MoH class, rather than porting the old mini-MoH."""
 
-    def init_dual_hifo(self, config: HiFoConfig):
+    def init_dual_hifo(
+        self,
+        config: HiFoConfig,
+        controller_config: GlobalControllerConfig | None = None,
+        seed: int = 0,
+    ):
         self.hifo_config = config
+        self._hifo_seed = int(seed)
         self.outer_hifo = HiFoController("outer", config) if config.outer_enabled else None
         self.inner_hifo = {
             task: HiFoController("inner", config) for task in self.subtask_list
         } if config.inner_enabled else {}
         self.hifo_inner_state_by_task: dict[str, dict[str, Any]] = {}
+        # full_moh keeps exact MoH parity: no meters, no telemetry.
+        self._hifo_meters: dict[str, LLMCallMeter] = {}
+        if config.mode != "full_moh":
+            self.heu_llm = LLMCallMeter(self.heu_llm)
+            self.meta_llm = LLMCallMeter(self.meta_llm)
+            self._hifo_meters = {"heu": self.heu_llm, "meta": self.meta_llm}
+        self.global_controller = None
+        if config.global_controller is not None:
+            self.global_controller = GlobalController(
+                config.global_controller, controller_config or GlobalControllerConfig(), seed=self._hifo_seed,
+            )
+
+    # ------------------------------------------------------------------
+    # Cross-level measurements (parent-side, no generated code executed)
+    # ------------------------------------------------------------------
+
+    def _llm_calls(self) -> int:
+        return sum(meter.calls for meter in self._hifo_meters.values())
+
+    def _elite_quality(self) -> float | None:
+        """Size-weighted mean of the best validated utility per training subtask."""
+        pop = getattr(self, "subtask_pop", None)
+        if pop is None:
+            return None
+        best = []
+        for task in self.subtask_list:
+            try:
+                entries = pop.get_population(task)
+            except (KeyError, AttributeError):
+                return None
+            valid = [e.get("utility") for e in entries if _finite_or_none(e.get("utility")) is not None]
+            valid = [u for u in valid if 0 <= u < 1e6]
+            if not valid:
+                return None
+            best.append(min(valid))
+        weights = getattr(self, "size_weights", None)
+        weights = [float(w) for w in weights] if weights is not None and len(weights) == len(best) else [1.0] * len(best)
+        if sum(weights) <= 0:
+            return None
+        return sum(w * v for w, v in zip(weights, best)) / sum(weights)
+
+    def _navigator_signals(self) -> NavigatorSignals:
+        inner = list(self.inner_hifo.values())
+        outer = self.outer_hifo
+        return NavigatorSignals(
+            inner_duplicate_rate=sum(c.exact_duplicate_rate for c in inner) / len(inner) if inner else 0.0,
+            outer_duplicate_rate=outer.exact_duplicate_rate if outer else 0.0,
+            outer_stagnation=outer.stagnation_count if outer else 0,
+            outer_progress=outer.progress_count if outer else 0,
+        )
+
+    def _hifo_progress(self, action: str) -> None:
+        if self.hifo_config.mode == "full_moh":
+            return
+        self._hifo_record("global", "all", {
+            "event": "progress",
+            "mode": self.hifo_config.mode,
+            "seed": self._hifo_seed,
+            "action": action,
+            "llm_calls": self._llm_calls(),
+            "heu_calls": self._hifo_meters["heu"].calls,
+            "meta_calls": self._hifo_meters["meta"].calls,
+            "eval_calls": int(getattr(self, "_total_eval_calls", 0)),
+            "elite_quality": self._elite_quality(),
+            "meta_utility": _finite_or_none(getattr(self, "meta_utility_val", None)),
+        })
 
     def _hifo_record(self, level: str, task: str, event: dict[str, Any]):
         output = getattr(getattr(self, "run_logger", None), "output_dir", None)
@@ -414,9 +558,11 @@ class DualHiFoMoHMixin:
         if self.outer_hifo is not None:
             snap = self.outer_hifo.observe(self.improver_str, self.meta_utility_val)
             self._hifo_record("outer", "meta-optimizer", {"event": "seed", "state": snap})
+        self._hifo_progress("SEED")
         return result
 
-    def try_improvement(self, improve_algorithm_func, previous_algo):
+    def _outer_step(self, improve_algorithm_func, previous_algo):
+        """Standard MoH outer step, guided by the outer navigator when enabled."""
         controller = self.outer_hifo
         if controller is None:
             return super().try_improvement(improve_algorithm_func, previous_algo)
@@ -429,4 +575,113 @@ class DualHiFoMoHMixin:
             self.meta_llm = original
         snap = controller.observe(candidate, self.meta_utility_val if accepted else None)
         self._hifo_record("outer", "meta-optimizer", {"event": "selection", "accepted": accepted, "candidate_sha256": structure_hash(candidate) if candidate else None, "state": snap})
+        return accepted, candidate, driver
+
+    def try_improvement(self, improve_algorithm_func, previous_algo):
+        if self.global_controller is None:
+            result = self._outer_step(improve_algorithm_func, previous_algo)
+            self._hifo_progress("OUTER_STEP")
+            return result
+        return self._global_step(improve_algorithm_func, previous_algo)
+
+    # ------------------------------------------------------------------
+    # Cross-level global controller
+    # ------------------------------------------------------------------
+
+    def _run_inner_pass(self, regime: str, reason: str) -> dict[str, Any]:
+        """Re-run the incumbent optimizer once per subtask (no meta generation, no validator).
+
+        The incumbent still runs in a GeneratedImprover child via ``get_improver``.
+        A failing subtask is logged and skipped; it never aborts the pass.
+        """
+        subtasks: dict[str, float | None] = {}
+        utilities: list[float] = []
+        for task in self.subtask_list:
+            navigator = self.inner_hifo.get(task)
+            if navigator is not None:
+                navigator.set_override(regime, reason)
+            try:
+                self.read_base_algorithm(task)
+                result = self.get_improver(self.improver_str, self.subtask_form, task)
+                if isinstance(result, Exception):
+                    raise result
+                idea, code, value = result
+                if not code:
+                    raise ValueError("incumbent optimizer returned an empty heuristic")
+                self.subtask_pop.save_solution(task, idea, code, value)
+                self.run_logger.log_utility(getattr(self, "_cur_iter", -1), task, value)
+                self.subtask_pop.save_subtask_to_file(task, self._solution_path(task))
+                subtasks[task] = _finite_or_none(value)
+                if subtasks[task] is not None:
+                    utilities.append(subtasks[task])
+            except Exception as exc:  # noqa: BLE001 — isolate generated-optimizer failure per subtask
+                logger.warning("Inner pass failed on %s (search continues): %s", task, exc)
+                subtasks[task] = None
+            finally:
+                if navigator is not None:
+                    navigator.clear_override()
+        remeasured = None
+        weights = [float(w) for w in getattr(self, "size_weights", [])]
+        if len(utilities) == len(self.subtask_list) and len(weights) == len(utilities) and sum(weights) > 0:
+            remeasured = sum(w * v for w, v in zip(weights, utilities)) / sum(weights)
+        return {"regime": regime, "subtasks": subtasks, "incumbent_remeasured_utility": remeasured}
+
+    def _save_controller_state(self) -> None:
+        output = getattr(getattr(self, "run_logger", None), "output_dir", None)
+        if not output:
+            return
+        try:
+            self.global_controller.save(Path(output) / "global_controller_state.json")
+        except (OSError, ValueError, TypeError) as exc:
+            logger.warning("Global controller state write failed (search continues): %s", exc)
+
+    def _global_step(self, improve_algorithm_func, previous_algo):
+        controller = self.global_controller
+        decision = controller.decide(self._navigator_signals())
+        logger.info("Global controller (%s) step %d: %s %s", controller.kind, decision.step,
+                    decision.action, ",".join(decision.reasons))
+        q_before = self._elite_quality()
+        meta_before = _finite_or_none(self.meta_utility_val)
+        calls_before = self._llm_calls()
+        evals_before = int(getattr(self, "_total_eval_calls", 0))
+        accepted, candidate, driver = False, None, previous_algo
+        inner_report = None
+        try:
+            if decision.level == "inner":
+                inner_report = self._run_inner_pass(decision.regime, decision.action)
+            else:
+                if self.outer_hifo is not None:
+                    self.outer_hifo.set_override(decision.regime, decision.action)
+                try:
+                    accepted, candidate, driver = self._outer_step(improve_algorithm_func, previous_algo)
+                finally:
+                    if self.outer_hifo is not None:
+                        self.outer_hifo.clear_override()
+        except Exception as exc:  # noqa: BLE001 — one failed action must not crash the experiment
+            logger.warning("Global action %s failed (search continues): %s", decision.action, exc)
+            accepted, candidate, driver = False, None, previous_algo
+        cost = self._llm_calls() - calls_before
+        q_after = self._elite_quality()
+        meta_after = _finite_or_none(self.meta_utility_val)
+        reward = controller.feedback(
+            decision, cost=cost, q_before=q_before, q_after=q_after, accepted=bool(accepted),
+            meta_before=meta_before, meta_after=meta_after,
+        )
+        self._hifo_record("global", "all", {
+            "event": "decision",
+            "mode": self.hifo_config.mode,
+            "controller": controller.kind,
+            **decision.to_dict(),
+            "cost_llm_calls": cost,
+            "cost_eval_calls": int(getattr(self, "_total_eval_calls", 0)) - evals_before,
+            "q_before": q_before,
+            "q_after": q_after,
+            "meta_before": meta_before,
+            "meta_after": meta_after,
+            "accepted": bool(accepted),
+            "reward": reward,
+            "inner_pass": inner_report,
+        })
+        self._save_controller_state()
+        self._hifo_progress(decision.action)
         return accepted, candidate, driver

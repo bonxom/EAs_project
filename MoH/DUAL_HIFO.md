@@ -28,6 +28,24 @@ The local 11-test controller/hook suite passed in a Python 3.13 environment. Ful
 - `outer_hifo`: only meta-optimizer prompts and observations.
 - `dual_hifo_independent`: both levels, no inner-to-outer history injection.
 - `dual_hifo_cross_level`: both levels active with synthesized inner evidence (top validated AST mechanisms across subtasks, multi-task stagnation/progress regimes, and cross-task reuse directives) injected into outer meta-optimizer prompts.
+- `dual_hifo_global_rule`: both navigators active; a rule-based cross-level global controller reads both levels' states and chooses per iteration between cheap inner passes (`INNER_EXPLORE`, `INNER_EXPLOIT`) and outer optimizer evolution (`OUTER_EXPLORE`, `OUTER_EXPLOIT`). No cross-level prompt text is injected, isolating the control decision.
+- `dual_hifo_global_bandit`: same coordinated action space as `dual_hifo_global_rule`, controlled by a disjoint LinUCB contextual bandit rewarded by cost-normalised elite-quality improvement per LLM call. Model state is persisted to `global_controller_state.json` and supports optional cross-run warm start (`dual_hifo.global_controller.warm_start_path`).
+
+## Cross-level global controller protocol
+
+Compare three arms under an **equal shared LLM-call budget** (`provider_budget.max_requests`) with high `n_iterations` so budget terminates every run (do not compare at fixed `n_iterations`, because inner passes cost ~10× fewer LLM calls than outer steps):
+
+1. `dual_hifo_independent` (reference: two independent navigators, every step is an outer step)
+2. `dual_hifo_global_rule` (hand-designed C1 local-optimum vs C2 weak-optimizer diagnosis)
+3. `dual_hifo_global_bandit` (online LinUCB learning from cost-normalised feedback)
+
+Run via `MoH/run_controller_experiment.sh` and aggregate `dual_hifo_events.jsonl` (`progress` and `decision` events) using:
+
+```sh
+cd MoH && uv run python -m tools.controller_report outputs/controller_exp/*/ --md-out report.md --json-out report.json
+```
+
+Reported metrics: calls-to-target (first cumulative LLM calls reaching the reference arm's final elite quality), anytime mean elite quality over the common call budget, and per-action cost/success rate (including post-stagnation success rate for C1 vs C2 diagnosis).
 
 ## Stage 1 local audit (2026-10-17)
 
@@ -46,6 +64,10 @@ Applied on the `dualhifo` branch after the patch was verified with offline tests
 - AST structural duplicates are **not** semantic diversity; semantic diversity is intentionally `null`.
 - Insight distillation is deterministic AST-based, with no auxiliary provider calls. Full LLM-based abstract distillation is separate future work; do not describe this v1 extractor as LLM insight distillation.
 - Inner feedback uses validation evaluation results and minimizes gap; failures with the sentinel 1e6 are not treated as improvements.
-- Logging: run-local `dual_hifo_events.jsonl` tracks inner evaluations and outer selections. Existing evaluator, population and checkpoint semantics are unchanged.
+- Logging: run-local `dual_hifo_events.jsonl` tracks inner evaluations, outer selections, per-iteration `progress` snapshots (with cumulative logical LLM calls and elite quality), and global controller `decision` events. Existing evaluator, population and checkpoint semantics are unchanged.
+- Global controller limitations:
+  - Bandit reward is myopic (immediate elite-quality gain per LLM call); delayed payoffs of a newly accepted optimizer are not backpropagated across steps.
+  - Meta-utility drift: as inner passes improve `subtask_pop`, later candidate optimizers are scored on stronger starting populations than earlier ones; incumbent re-measured utility is logged in `inner_pass.incumbent_remeasured_utility` for post-hoc audit while preserving MoH acceptance semantics.
+  - A single run performs ~10–40 global decisions, which is a small-sample regime for online contextual bandits; use multi-seed evaluation and optional `warm_start_path` when assessing learned policies.
 - CVRP is not integrated: `moh-deployment` currently has TSP-GLS tasks; add CVRP independently after verifying its evaluator and score direction.
 - The inherited MoH implementation's parent service, optimizer acceptance, and deployment semantics still require their own audit; these patches are not evidence of full MoH reproduction parity.

@@ -89,7 +89,7 @@ def test_inner_outer_hooks_do_not_replace_original_clients(tmp_path):
     assert "Completed inner-search evidence" not in original_meta.messages[0]
     assert h.inner_hifo["tsp_gls-50"].step == 0
     events = [json.loads(line) for line in (tmp_path / "dual_hifo_events.jsonl").read_text().splitlines()]
-    assert {e["level"] for e in events} == {"inner", "outer"}
+    assert {e["level"] for e in events if e.get("event") != "progress"} == {"inner", "outer"}
     assert any(e.get("accepted") is True for e in events)
 
 
