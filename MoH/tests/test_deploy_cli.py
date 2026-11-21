@@ -122,8 +122,14 @@ def test_two_target_run_exports_both_reports(tmp_path, monkeypatch):
         checkpoint=checkpoint,
     )
     assert [row["size"] for row in rows] == [500, 1000]
+    assert [row["status"] for row in rows] == ["ok", "ok"]
+    assert [row["val_n_instances"] for row in rows] == [8, 8]
+    assert [row["test_n_instances"] for row in rows] == [100, 100]
+    assert [row["test_gap_pct"] for row in rows] == [1.0, 1.0]
     assert (output / "heuristics" / "tsp500.py").is_file()
     assert (output / "heuristics" / "tsp1000.py").is_file()
+    assert (output / "report.json").is_file()
+    assert (output / "report.csv").is_file()
 
 
 def test_cli_config_can_request_128_without_silent_reduction(tmp_path, monkeypatch):

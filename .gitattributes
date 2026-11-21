@@ -1,0 +1,4 @@
+# Keep shell scripts LF in the repository. With core.autocrlf=true a Windows
+# style checkout would otherwise materialise CRLF and break bash (including
+# macOS /bin/bash 3.2) with "set: pipefail: invalid option name".
+*.sh text eol=lf

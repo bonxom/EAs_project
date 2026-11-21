@@ -47,6 +47,48 @@ cd MoH && uv run python -m tools.controller_report outputs/controller_exp/*/ --m
 
 Reported metrics: calls-to-target (first cumulative LLM calls reaching the reference arm's final elite quality), anytime mean elite quality over the common call budget, and per-action cost/success rate (including post-stagnation success rate for C1 vs C2 diagnosis).
 
+### Zero-shot deployment test on TSP-500/1000
+
+The same script can run the `moh-deployment` checkpoint-driven test for every
+trained arm. `--stage all` (default) trains and then deploys; `--stage train`
+or `--stage deploy` runs only one phase:
+
+```sh
+cd MoH
+bash run_controller_experiment.sh --stage all --seeds "0 1 2"
+```
+
+Both stages require `LOCAL_LLM_API_KEY` with the default local profile (or
+`OPENAI_API_KEY` with `--llm-profile openai`); the runner rejects a missing key
+before creating any run directory.
+
+For each `(mode, seed)` checkpoint under `<out-dir>/<mode>_seed<N>/checkpoint`,
+the deployment stage calls `deploy.py` with `target_sizes=[500,1000]`,
+`inference_iterations=10`, `val_n_instances=8`, `test_n_instances=100`,
+`workers=8`, `evaluate_test=true` and an output directory under
+`<out-dir>/deployment/<mode>_seed<N>/`. Completed deployments
+(`report.json`), incomplete directories and missing checkpoints are skipped
+with a message; the runner never deletes artifacts. Validation selects the
+frozen heuristic per target and test is evaluated exactly once, as in the
+`moh-deployment` flow.
+
+Per-run tables and the arm comparison are written to
+`<out-dir>/deployment/deployment_tables.tsv` and
+`<out-dir>/deployment/deployment_report.{md,json}`. To aggregate existing
+deployment directories manually:
+
+```sh
+cd MoH && uv run python -m tools.controller_deployment_report \
+  outputs/controller_exp/deployment/*/ \
+  --md-out deployment_report.md --json-out deployment_report.json
+```
+
+The report groups `report.json` rows into TSP-500, TSP-1000 and average test
+gaps (mean ± std across seeds). An average is only reported when both targets
+have a finite test result; invalid or partial runs are listed and never counted
+as complete. Deployment calls the configured external LLM and can incur
+provider cost.
+
 ## Stage 1 local audit (2026-10-17)
 
 Applied on the `dualhifo` branch after the patch was verified with offline tests:
